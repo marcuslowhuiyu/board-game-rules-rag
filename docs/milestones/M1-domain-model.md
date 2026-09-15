@@ -60,7 +60,7 @@ CDK:
 2. Integration tests hit real DynamoDB Local or an ephemeral CDK-deployed table.
 3. A user can, through the deployed dev environment, search a seeded game, view its editions and content, select an edition + expansions + promos, and start a session that returns a `sessionId` cookie.
 4. Session record appears in DynamoDB with a TTL attribute ~24h out.
-5. `docs/CURRENT_STATE.md` updated to reflect completion and any Milestone-1-only decisions (e.g. table design if not promoted to an ADR).
+5. `CURRENT_STATE.md` updated to reflect completion and any Milestone-1-only decisions (e.g. table design if not promoted to an ADR).
 
 ## Definition of Done
 
