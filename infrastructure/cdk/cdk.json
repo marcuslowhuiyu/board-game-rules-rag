@@ -11,6 +11,8 @@
     "@aws-cdk/aws-iam:standardizedServicePrincipals": true,
     "@aws-cdk/aws-cloudfront:defaultSecurityPolicyTLSv1.2_2021": true,
     "githubRepo": "marcuslowhuiyu/board-game-rules-rag",
-    "existingOidcProviderArn": "arn:aws:iam::<AWS_ACCOUNT_ID>:oidc-provider/token.actions.githubusercontent.com"
+    "useExistingOidcProvider": true,
+    "githubOwnerId": "76680105",
+    "githubRepoId": "1371453238"
   }
 }

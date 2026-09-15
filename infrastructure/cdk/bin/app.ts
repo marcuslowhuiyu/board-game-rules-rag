@@ -21,12 +21,16 @@ const githubRepo =
 
 const existingOidcProviderArn = app.node.tryGetContext('existingOidcProviderArn') as
   string | undefined;
+const githubOwnerId = app.node.tryGetContext('githubOwnerId') as string | undefined;
+const githubRepoId = app.node.tryGetContext('githubRepoId') as string | undefined;
 
 new GithubOidcStack(app, 'BgrGithubOidcStack', {
   env: { account, region },
   githubRepo,
   environmentName: 'dev',
   ...(existingOidcProviderArn ? { existingOidcProviderArn } : {}),
+  ...(githubOwnerId ? { githubOwnerId } : {}),
+  ...(githubRepoId ? { githubRepoId } : {}),
 });
 
 new DevStack(app, 'BgrDevStack', {

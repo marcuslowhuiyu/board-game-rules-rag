@@ -24,6 +24,17 @@ export interface GithubOidcStackProps extends StackProps {
    * pass this to avoid `EntityAlreadyExistsException`.
    */
   existingOidcProviderArn?: string;
+  /**
+   * Numeric GitHub owner (user or org) id. When set together with `githubRepoId`,
+   * the trust policy also accepts GitHub's immutable-id `sub` claim format
+   * (`repo:<owner>@<ownerId>/<repo>@<repoId>:*`). This claim shape is emitted
+   * when the user or org has enabled "Include enterprise slug / immutable IDs
+   * in OIDC subject claims", and mutable-name-only trust policies fail to
+   * assume the role for those users. Get the ids from
+   * `gh api /repos/<owner>/<repo> --jq '{ownerId:.owner.id,repoId:.id}'`.
+   */
+  githubOwnerId?: string;
+  githubRepoId?: string;
 }
 
 /**
@@ -56,6 +67,10 @@ export class GithubOidcStack extends Stack {
     // the meaningful boundary is "only workflows in THIS repo can assume this
     // role". Tightened per-environment (`environment:prod`) in Milestone 9.
     const subjectPatterns = [`repo:${props.githubRepo}:*`];
+    if (props.githubOwnerId && props.githubRepoId) {
+      const [owner, repo] = props.githubRepo.split('/');
+      subjectPatterns.push(`repo:${owner}@${props.githubOwnerId}/${repo}@${props.githubRepoId}:*`);
+    }
 
     const principal = new OpenIdConnectPrincipal(provider, {
       StringEquals: { 'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com' },
