@@ -17,6 +17,13 @@ export interface GithubOidcStackProps extends StackProps {
    */
   githubRepo: string;
   environmentName?: string;
+  /**
+   * When set, the stack reuses the existing account-wide GitHub OIDC provider
+   * at this ARN instead of creating a new one. The provider is a per-account
+   * singleton, so any account that already has one for another project must
+   * pass this to avoid `EntityAlreadyExistsException`.
+   */
+  existingOidcProviderArn?: string;
 }
 
 /**
@@ -33,10 +40,16 @@ export class GithubOidcStack extends Stack {
 
     const environmentName = props.environmentName ?? 'dev';
 
-    const provider = new OpenIdConnectProvider(this, 'GithubOidcProvider', {
-      url: 'https://token.actions.githubusercontent.com',
-      clientIds: ['sts.amazonaws.com'],
-    });
+    const provider = props.existingOidcProviderArn
+      ? OpenIdConnectProvider.fromOpenIdConnectProviderArn(
+          this,
+          'GithubOidcProvider',
+          props.existingOidcProviderArn,
+        )
+      : new OpenIdConnectProvider(this, 'GithubOidcProvider', {
+          url: 'https://token.actions.githubusercontent.com',
+          clientIds: ['sts.amazonaws.com'],
+        });
 
     const subjectPatterns = [
       `repo:${props.githubRepo}:environment:${environmentName}`,
@@ -80,6 +93,8 @@ export class GithubOidcStack extends Stack {
     this.deployRoleArn = role.roleArn;
 
     new CfnOutput(this, 'DeployRoleArn', { value: role.roleArn });
-    new CfnOutput(this, 'GithubOidcProviderArn', { value: provider.openIdConnectProviderArn });
+    new CfnOutput(this, 'GithubOidcProviderArn', {
+      value: provider.openIdConnectProviderArn,
+    });
   }
 }

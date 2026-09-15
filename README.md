@@ -55,7 +55,9 @@ There are no long-lived AWS credentials in GitHub. See [`docs/adr/0001-runtime-s
 1. `cdk bootstrap aws://<account>/ap-southeast-1`
 2. Deploy the OIDC stack once from a workstation with admin credentials:
    ```bash
-   pnpm -C infrastructure/cdk deploy:oidc -c githubRepo=<owner>/<repo>
+   pnpm -C infrastructure/cdk deploy:oidc \
+     -c githubRepo=<owner>/<repo> \
+     [-c existingOidcProviderArn=arn:aws:iam::<acct>:oidc-provider/token.actions.githubusercontent.com]
    ```
-   Copy the `DeployRoleArn` output into the GitHub repository secret `AWS_DEPLOY_ROLE_ARN`.
+   The optional `existingOidcProviderArn` reuses an account-wide GitHub OIDC provider that already exists (the provider is a per-account singleton). Copy the `DeployRoleArn` output into the GitHub repository secret `AWS_DEPLOY_ROLE_ARN`.
 3. Push to `main` — dev deploy runs automatically.

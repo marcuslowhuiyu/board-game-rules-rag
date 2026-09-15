@@ -10,6 +10,7 @@
     "@aws-cdk/core:target-partitions": ["aws", "aws-cn"],
     "@aws-cdk/aws-iam:standardizedServicePrincipals": true,
     "@aws-cdk/aws-cloudfront:defaultSecurityPolicyTLSv1.2_2021": true,
-    "githubRepo": "REPLACE_ME/board-game-rules-rag"
+    "githubRepo": "marcuslowhuiyu/board-game-rules-rag",
+    "existingOidcProviderArn": "arn:aws:iam::<AWS_ACCOUNT_ID>:oidc-provider/token.actions.githubusercontent.com"
   }
 }

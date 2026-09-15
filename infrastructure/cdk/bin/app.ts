@@ -19,10 +19,14 @@ const githubRepo =
         return 'example-owner/example-repo';
       })();
 
+const existingOidcProviderArn = app.node.tryGetContext('existingOidcProviderArn') as
+  string | undefined;
+
 new GithubOidcStack(app, 'BgrGithubOidcStack', {
   env: { account, region },
   githubRepo,
   environmentName: 'dev',
+  ...(existingOidcProviderArn ? { existingOidcProviderArn } : {}),
 });
 
 new DevStack(app, 'BgrDevStack', {

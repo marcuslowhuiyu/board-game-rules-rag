@@ -40,14 +40,14 @@ describe('DevStack', () => {
   });
 });
 
-describe('GithubOidcStack', () => {
+describe('GithubOidcStack (creates a new OIDC provider)', () => {
   const app = new App();
-  const stack = new GithubOidcStack(app, 'TestOidc', {
+  const stack = new GithubOidcStack(app, 'TestOidcNew', {
     githubRepo: 'example-owner/example-repo',
   });
   const template = Template.fromStack(stack);
 
-  it('creates a GitHub OIDC provider (via the CDK custom resource)', () => {
+  it('creates the GitHub OIDC provider via the CDK custom resource', () => {
     template.hasResourceProperties('Custom::AWSCDKOpenIdConnectProvider', {
       Url: 'https://token.actions.githubusercontent.com',
       ClientIDList: ['sts.amazonaws.com'],
@@ -55,6 +55,26 @@ describe('GithubOidcStack', () => {
   });
 
   it('creates a deployment role restricted to the given repository', () => {
+    template.hasResourceProperties('AWS::IAM::Role', {
+      RoleName: 'bgr-github-deploy-dev',
+    });
+  });
+});
+
+describe('GithubOidcStack (reuses an existing OIDC provider)', () => {
+  const app = new App();
+  const stack = new GithubOidcStack(app, 'TestOidcReuse', {
+    githubRepo: 'example-owner/example-repo',
+    existingOidcProviderArn:
+      'arn:aws:iam::111111111111:oidc-provider/token.actions.githubusercontent.com',
+  });
+  const template = Template.fromStack(stack);
+
+  it('does not create a new OIDC provider custom resource', () => {
+    template.resourceCountIs('Custom::AWSCDKOpenIdConnectProvider', 0);
+  });
+
+  it('still creates the deployment role', () => {
     template.hasResourceProperties('AWS::IAM::Role', {
       RoleName: 'bgr-github-deploy-dev',
     });
