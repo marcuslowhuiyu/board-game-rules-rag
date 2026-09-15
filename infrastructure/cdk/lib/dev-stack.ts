@@ -32,6 +32,7 @@ export class DevStack extends Stack {
       logGroup: healthLogGroup,
       environment: {
         NODE_OPTIONS: '--enable-source-maps',
+        GIT_COMMIT: process.env.GIT_COMMIT ?? 'unknown',
       },
       bundling: {
         format: OutputFormat.ESM,

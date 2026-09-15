@@ -10,52 +10,53 @@ Spec: `docs/milestones/M1-domain-model.md`.
 
 ## Completed work
 
-- **Milestone 0 — Repository & Engineering Foundation.** Repository skeleton is live locally; CI/CD workflows and CDK app are ready for the first AWS bootstrap (see "Requires operator action" below).
+- **Milestone 0 — Repository & Engineering Foundation.** Fully bootstrapped and deployed to AWS dev.
   - pnpm workspace at root; packages `apps/web`, `apps/api`, `packages/{domain,ai,retrieval,ingestion,persistence,shared}`, `infrastructure/cdk`, `evals`.
   - TypeScript strict everywhere, shared `tsconfig.base.json`, `.nvmrc = 22`, `packageManager: pnpm@10.34.5`.
-  - ESLint 9 flat config + Prettier 3 + Vitest 2, all wired into `pnpm lint`, `pnpm format:check`, `pnpm test`.
-  - `apps/api` `GET /health` Lambda handler with unit tests.
-  - `apps/web` React + Vite skeleton with one Testing-Library test.
-  - `packages/shared` exports a `createLogger` structured JSON logger (used by the health handler) with unit tests.
-  - `infrastructure/cdk`: `BgrGithubOidcStack` (OIDC provider + deploy role scoped to `owner/repo` context) and `BgrDevStack` (Node.js 22 Lambda behind API Gateway HTTP API, private S3 site bucket, CloudFront distribution with OAC, CloudWatch log group with 1-week retention). CDK unit tests over both stacks.
-  - GitHub Actions: `ci.yml` (format / lint / typecheck / test / cdk synth), `deploy-dev.yml` (OIDC-assumed role → CDK deploy → smoke test `/health` → frontend build + S3 sync + CloudFront invalidation), `security.yml` (CodeQL + pnpm audit weekly and on PR).
-  - Dependabot for npm + github-actions.
-  - Root `README.md` with local setup, deploy workflow, and one-time AWS bootstrap instructions.
-  - Documentation refresh: ADR-0001 now records the pinned Node/pnpm/TS/tooling versions; `docs/CONTRADICTIONS_AND_GAPS.md` moves G1/G2 to "Resolved".
+  - ESLint 9 flat config + Prettier 3 + Vitest 2 wired into `pnpm lint / format:check / typecheck / test`.
+  - `apps/api` `GET /health` handler returning `{status, commit, time}` with unit tests.
+  - `apps/web` React + Vite skeleton, one Testing-Library test.
+  - `packages/shared` structured JSON logger with unit tests.
+  - `infrastructure/cdk`: `BgrGithubOidcStack` (deploy role + optional import of existing OIDC provider, trust supports GitHub's immutable-id `sub` shape) and `BgrDevStack` (Node 22 Lambda behind API Gateway HTTP API, private S3 site bucket, CloudFront distribution with OAC, dedicated CloudWatch log group). 8 CDK unit tests.
+  - GitHub Actions: `ci.yml`, `deploy-dev.yml`, `security.yml`, `dependabot.yml`.
+  - Repository: `marcuslowhuiyu/board-game-rules-rag` (private). Pushed. CI green, Deploy dev green.
+  - Live endpoints:
+    - API: `https://81wk8wat3m.execute-api.ap-southeast-1.amazonaws.com/health` → `{"status":"ok",...}`
+    - Web: `https://d1wbjv971ead09.cloudfront.net/`
+  - AWS: account `<AWS_ACCOUNT_ID>`, region `ap-southeast-1`. CDK was already bootstrapped (BootstrapVersion 32).
+  - GitHub Environment `dev` created; `AWS_DEPLOY_ROLE_ARN` secret set to `arn:aws:iam::<AWS_ACCOUNT_ID>:role/bgr-github-deploy-dev`.
 
 ## Active decisions
 
 Load-bearing decisions from `docs/adr/`:
 
-- **ADR-0001** — TypeScript strict, Node 22 LTS, pnpm 10 workspaces, CDK v2 TypeScript. Vitest / ESLint 9 / Prettier 3 confirmed.
-- **ADR-0002** — S3 Vectors as the initial vector store, behind `RulesRetriever`.
-- **ADR-0003** — `RulesModel` interface, Bedrock Converse adapter default, Nova 2 Lite initial generator.
+- **ADR-0001** — TypeScript strict, Node 22 LTS, pnpm 10, CDK v2 TypeScript. Vitest / ESLint 9 / Prettier 3.
+- **ADR-0002** — S3 Vectors initial vector store behind `RulesRetriever`.
+- **ADR-0003** — `RulesModel` interface + Bedrock Converse adapter default.
 - **ADR-0004** — DynamoDB full log + rolling summary + recent turns, 24h TTL.
-- **ADR-0005** — Bounded loop over `WebSearchProvider`, AgentCore adapter.
+- **ADR-0005** — Bounded `WebSearchProvider` loop with AgentCore adapter.
 
-M0-only implementation choices worth remembering:
+M0-only implementation choices captured for future readers:
 
-- CDK opts out of `exactOptionalPropertyTypes` (see ADR-0001 Revisions) because `aws-cdk-lib`'s public types fight it.
-- OIDC deployment role uses `PowerUserAccess` + IAM passthrough as a starting point. Tightened per-service in Milestone 9.
-- The `AWS_DEPLOY_ROLE_ARN` GitHub secret must be populated with the `DeployRoleArn` output from `BgrGithubOidcStack` before `deploy-dev.yml` can run.
+- CDK opts out of `exactOptionalPropertyTypes` (ADR-0001 Revisions).
+- `BgrGithubOidcStack` imports the existing account-wide OIDC provider (the provider is a per-account IAM singleton).
+- Trust policy uses `repo:<owner>/<repo>:*` **and** `repo:<owner>@<ownerId>/<repo>@<repoId>:*` — the second pattern is required because GitHub emits the immutable-id `sub` shape for this user/org.
+- Deploy role currently holds `PowerUserAccess` + IAM passthrough as a starting point. Tightened per-service in Milestone 9.
 
 ## Known issues / open questions
 
 Full tracker: `docs/CONTRADICTIONS_AND_GAPS.md`.
 
-- **G3 (S3 Vectors) and G4 (AgentCore) regional availability** in `ap-southeast-1` are still unverified — they need a real AWS account to check. They are not blockers for M1 (no vector store or web research yet), but must be resolved before Milestone 3 (retrieval) and Milestone 6 (research), respectively.
-- **G7, G13, G14** all bite Milestone 1 (DynamoDB table design, cookie / CORS cross-origin choice, contentId ↔ slug mapping).
+- **G3 / G4 (S3 Vectors and AgentCore regional availability in `ap-southeast-1`).** Still not verified against the account — not blocking M1 (no vector store or web research yet). Verify before M3 / M6.
+- **G7, G13, G14** (DynamoDB single-table vs multi, cookie/CORS cross-origin, contentId ↔ slug mapping) are due in M1.
 
-## Requires operator action (before `deploy-dev.yml` will succeed)
+## Requires operator decision, if you want them
 
-None of these are things Claude Code can do — they require your AWS account and repository:
-
-1. `cdk bootstrap aws://<account>/ap-southeast-1` once, from a workstation with admin credentials.
-2. `pnpm -C infrastructure/cdk deploy:oidc -c githubRepo=<owner>/<repo>`, then copy the `DeployRoleArn` output into the GitHub repository secret `AWS_DEPLOY_ROLE_ARN`.
-3. Create a GitHub Environment named `dev` and protect it if desired.
-4. Push a real `githubRepo` value into `infrastructure/cdk/cdk.json` (currently `REPLACE_ME/board-game-rules-rag`) or rely on the `-c githubRepo=` override in the workflows (which pass `${{ github.repository }}` automatically).
-
-Once those are done, the first push to `main` runs `deploy-dev.yml` end-to-end.
+- **Branch protection on `main`.** GitHub free tier does not allow classic branch protection or rulesets on private repositories. Two options:
+  1. Upgrade the repo owner to GitHub Pro (or move to a paid org) and enable a ruleset requiring the "Lint / Typecheck / Test / Synth" check on `main`.
+  2. Make the repo public.
+  Until one of those happens, "main is protected" is honor-system only. Recorded in `docs/CONTRADICTIONS_AND_GAPS.md` under the resolved section with a caveat.
+- **`AWS_REGION` for a possible second region** for S3 Vectors or AgentCore — pending G3 / G4 verification.
 
 ## Next expected work
 
