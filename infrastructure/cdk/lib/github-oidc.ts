@@ -51,11 +51,11 @@ export class GithubOidcStack extends Stack {
           clientIds: ['sts.amazonaws.com'],
         });
 
-    const subjectPatterns = [
-      `repo:${props.githubRepo}:environment:${environmentName}`,
-      `repo:${props.githubRepo}:ref:refs/heads/main`,
-      `repo:${props.githubRepo}:pull_request`,
-    ];
+    // Scope trust to the repo itself. Further-narrowed patterns (ref/environment/
+    // pull_request) are fiddly across trigger types and easy to get subtly wrong;
+    // the meaningful boundary is "only workflows in THIS repo can assume this
+    // role". Tightened per-environment (`environment:prod`) in Milestone 9.
+    const subjectPatterns = [`repo:${props.githubRepo}:*`];
 
     const principal = new OpenIdConnectPrincipal(provider, {
       StringEquals: { 'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com' },
