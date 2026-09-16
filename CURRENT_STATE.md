@@ -4,15 +4,9 @@ _Last updated: 2026-09-16_
 
 ## Current milestone
 
-**Milestone 1 — Domain Model, Game Catalog & Sessions.**
-Implementation complete on branch `feature/m01-domain-model` (PR
-[#6](https://github.com/marcuslowhuiyu/board-game-rules-rag/pull/6)).
-**Deployment verification is pending.** M1 will not be marked complete —
-and M2 will not begin — until the merge commit has successfully deployed
-to dev and the M1 deployed acceptance flow (`deploy-dev.yml`) has
-passed end-to-end.
+**Milestone 2 — Document Ingestion** (not started).
 
-Spec: `docs/milestones/M1-domain-model.md`.
+Spec: `docs/milestones/M2-document-ingestion.md`.
 
 ## Completed work
 
@@ -29,61 +23,31 @@ Spec: `docs/milestones/M1-domain-model.md`.
   - AWS: account `<AWS_ACCOUNT_ID>`, region `ap-southeast-1`.
   - GitHub Environment `dev` created; `AWS_DEPLOY_ROLE_ARN` secret set to `arn:aws:iam::<AWS_ACCOUNT_ID>:role/bgr-github-deploy-dev`.
 
-## Milestone 1 — implementation ready, deployment pending
+- **Milestone 1 — Domain Model, Game Catalog & Sessions.** Complete. Merged to `main` as commit `6b50738` (PR [#6](https://github.com/marcuslowhuiyu/board-game-rules-rag/pull/6)); `Deploy dev` run `35078588409` succeeded end-to-end; the deployed dev environment passed every M1 acceptance check.
 
-Everything below has landed on `feature/m01-domain-model` and passes local
-CI (`pnpm format:check`, `pnpm lint`, `pnpm typecheck`, `pnpm test`,
-`pnpm synth`) plus PR CI. It has **not yet been deployed to dev** — that
-happens on merge, and the M1 deployed acceptance flow must pass before
-this section is promoted from "ready" to "shipped".
+  - **`packages/domain`**: Zod-backed schemas and branded id types for `Game`, `Edition`, `ContentPackage`, `SourceDocumentMetadata`, `Session`, `Message`. `configurationFingerprint(gameId, editionId, enabledContentIds)` returns a SHA-256 hex over the canonical `(g, e, sorted-unique-c)` triple; a `fast-check` property test confirms fingerprint invariance under reordering.
+  - **`packages/persistence`**: `GamesRepository`, `SessionsRepository`, `MessagesRepository` interfaces plus DynamoDB implementations (`@aws-sdk/lib-dynamodb`) and in-memory implementations for tests. `Clock` and `IdGenerator` seams.
+  - **`apps/api`**: single `apps/api/src/handlers/api.ts` Lambda handler with a small path-template router covering `GET /health`, `GET/POST /games`, `GET /games/{id}`, `GET /games/{id}/content`, `POST /sessions`, `GET /sessions/{id}`, `DELETE /sessions/{id}`. Zod validation at every write endpoint; correlation-id-tagged structured logs; the session cookie is `HttpOnly; Secure; SameSite=Lax` (first-party — see ADR-0007); `DELETE` returns an expired cookie. `POST /sessions` rejects any `enabledContentId` that does not belong to the selected edition or whose status is not `READY`.
+  - **`apps/web`**: three mobile-first screens (Game Search / Add Game / Game Configuration) with local `useState` navigation, calling the API through a typed client at `apps/web/src/api/client.ts`. The client defaults its base URL to `/api` (same-origin via CloudFront) and uses `credentials: 'same-origin'`. Styling is vanilla CSS in `apps/web/src/styles.css` (CSS variables, mobile-first widths, safe-area padding). No state library.
+  - **CDK — `BgrDevStack`**: four on-demand DynamoDB tables (`games`, `content`, `sessions` with TTL attribute `ttl`, `messages`); the API Lambda receives least-privilege `readWriteData` grants on each table. A single **CloudFront distribution** serves both the SPA (default behavior → S3) and the API (`/api/*` behavior → API Gateway HTTP API origin with a viewer-request **CloudFront Function** that strips the `/api` prefix). API Gateway carries **no CORS configuration**; every browser request is same-origin. CDK unit tests cover the Node 22 runtime, the four tables and their TTL, the `/api/*` behavior with the prefix-strip Function, and the stack outputs.
+  - **Deploy workflow**: builds the web bundle same-origin (`/api` default, no `VITE_API_URL`), idempotently seeds Twilight Imperium 4 plus `Prophecy of Kings` (EXPANSION) and `Codex Vol 1` (PROMO), exercises the full session-creation flow with both packages enabled, and verifies same-origin routing via `<cloudfront>/api/health`.
 
-- **`packages/domain`**: Zod-backed schemas and branded id types for
-  `Game`, `Edition`, `ContentPackage`, `SourceDocumentMetadata`,
-  `Session`, `Message`. `configurationFingerprint(gameId, editionId,
-  enabledContentIds)` returns a SHA-256 hex over the canonical
-  `(g, e, sorted-unique-c)` triple; a `fast-check` property test
-  confirms fingerprint invariance under reordering.
-- **`packages/persistence`**: `GamesRepository`, `SessionsRepository`,
-  `MessagesRepository` interfaces plus DynamoDB implementations
-  (`@aws-sdk/lib-dynamodb`) and in-memory implementations for tests.
-  `Clock` and `IdGenerator` seams.
-- **`apps/api`**: single `apps/api/src/handlers/api.ts` Lambda handler
-  with a small path-template router covering `GET /health`,
-  `GET/POST /games`, `GET /games/{id}`, `GET /games/{id}/content`,
-  `POST /sessions`, `GET /sessions/{id}`, `DELETE /sessions/{id}`. Zod
-  validation at every write endpoint; correlation-id-tagged structured
-  logs; the session cookie is `HttpOnly; Secure; SameSite=Lax` (first-party
-  — see ADR-0007); DELETE returns an expired cookie. `POST /sessions`
-  rejects any `enabledContentId` that does not belong to the selected
-  edition or whose status is not `READY`.
-- **`apps/web`**: three mobile-first screens (Game Search / Add Game /
-  Game Configuration) with local `useState` navigation, calling the API
-  through a typed client at `apps/web/src/api/client.ts`. The client
-  defaults its base URL to `/api` (same-origin via CloudFront) and uses
-  `credentials: 'same-origin'`. Styling is vanilla CSS in
-  `apps/web/src/styles.css` (CSS variables, mobile-first widths, safe-area
-  padding). No state library.
-- **CDK — `BgrDevStack`**: four on-demand DynamoDB tables (`games`,
-  `content`, `sessions` with TTL attribute `ttl`, `messages`); the API
-  Lambda receives least-privilege `readWriteData` grants on each table.
-  A single **CloudFront distribution** serves both the SPA (default
-  behavior → S3) and the API (`/api/*` behavior → API Gateway HTTP API
-  origin with a viewer-request **CloudFront Function** that strips the
-  `/api` prefix). API Gateway carries **no CORS configuration**; every
-  browser request is same-origin. CDK unit tests cover the Node 22
-  runtime, the four tables and their TTL, the `/api/*` behavior with the
-  prefix-strip Function, and the stack outputs (`ApiUrl`,
-  `CloudFrontApiUrl`, `DistributionDomain`, `WebBucketName`, table
-  names).
-- **Deploy workflow**: builds the web bundle with **no** `VITE_API_URL`
-  (same-origin `/api` default), idempotently seeds Twilight Imperium 4
-  plus a `Prophecy of Kings` (EXPANSION) and a `Codex Vol 1` (PROMO)
-  content package directly into the content table, then exercises the
-  full flow — fetches content, creates a session with both packages
-  enabled, asserts the returned `enabledContentIds` match, GETs the
-  session back, and asserts the server rejects an unknown content id.
-  A separate step then hits `<cloudfront>/api/health` to confirm the
-  same-origin routing is live.
+  **Live endpoints (dev):**
+  - API (direct): `https://81wk8wat3m.execute-api.ap-southeast-1.amazonaws.com`
+  - API (same-origin): `https://d1wbjv971ead09.cloudfront.net/api`
+  - Web app: `https://d1wbjv971ead09.cloudfront.net/`
+  - Seeded demo content in dev: `Twilight Imperium 4` / `4th Edition` with `Prophecy of Kings` (EXPANSION, id `c_pok`) and `Codex Vol 1` (PROMO, id `c_codex_vol1`).
+
+  **Post-merge acceptance results (all green, 2026-09-16):**
+  - `Deploy dev` run 35078588409 → success.
+  - `GET /health` returns commit `6b50738…`, matching the merge commit.
+  - `GET <cloudfront>/api/health` also returns the same commit — same-origin routing live.
+  - Frontend `GET <cloudfront>/` returns the SPA HTML with the built asset bundle.
+  - `GET /games?q=twilight` returns the seeded game with its edition embedded.
+  - `GET /games/{id}/content` returns both the EXPANSION and the PROMO under the seeded edition, both `status: READY`.
+  - `POST <cloudfront>/api/sessions` with both content ids enabled returns a session whose `enabledContentIds` round-trip; `GET /api/sessions/{id}` returns the same record; the browser is issued a `bgr_session` cookie carrying `HttpOnly; Secure; SameSite=Lax; Max-Age=86400` and the cookie is retained across requests.
+  - `DynamoDB GetItem` on the sessions table shows `gameId`, `editionId`, `enabledContentIds`, `configurationFingerprint` (matches locally-recomputed SHA-256) and `ttl` set to 86376 seconds in the future (≈ 24 h, within the expected window).
+  - `POST /sessions` with an unknown `enabledContentId` returns HTTP 400 with body `error.code = BAD_REQUEST`.
 
 ## Active decisions
 
@@ -116,10 +80,10 @@ M1-only implementation choices:
 
 Full tracker: `docs/CONTRADICTIONS_AND_GAPS.md`.
 
-- **G3 / G4 (S3 Vectors and AgentCore regional availability in `ap-southeast-1`).** Still not verified against the account — not blocking M1 (no vectors or web research yet). Verify before M3 / M6.
+- **G3 / G4 (S3 Vectors and AgentCore regional availability in `ap-southeast-1`).** Still not verified against the account — not blocking M2 (M2 is ingestion + parsing + chunking, no vectors yet). Verify before M3 / M6.
 - **CSRF on state-changing endpoints.** M1 accepts the exposure (no user accounts, private beta blast radius). M4 will add a double-submit CSRF token before `POST /sessions/{id}/messages` ships. Recorded in ADR-0007 Consequences.
 - **CloudFront edge latency on the API path.** Adding CloudFront in front of API Gateway costs a small amount of latency per API call; not measured yet. Revisit during M3 / M4 benchmarking (candidate: custom domain covering both hosts if latency becomes an issue).
-- **CodeQL check is red on PRs.** GitHub's Code Scanning is not enabled for this private repo — same underlying gap as branch protection below. Both `Lint / Typecheck / Test / Synth` and `pnpm audit` pass; the PR is `MERGEABLE`.
+- **CodeQL check is red on PRs.** GitHub's Code Scanning is not enabled for this private repo — same underlying gap as branch protection below. Both `Lint / Typecheck / Test / Synth` and `pnpm audit` pass; PRs merge as `MERGEABLE`.
 
 ## Requires operator decision, if you want them
 
@@ -132,6 +96,4 @@ Full tracker: `docs/CONTRADICTIONS_AND_GAPS.md`.
 
 ## Next expected work
 
-**Do not begin Milestone 2 until Milestone 1 is verified in dev.** Once
-PR #6 merges and `deploy-dev.yml` (including the CloudFront `/api/health`
-smoke) passes, promote M1 to "shipped" here and open the M2 branch.
+Milestone 2 — Document Ingestion. See `docs/milestones/M2-document-ingestion.md`.
