@@ -32,10 +32,10 @@ Each item names the section(s) of `MASTER_PLAN.md` that raised it, the impact, a
 - **Impact:** Nova/Claude/other Bedrock models vary in Converse structured-output support. Adapter needs a validated JSON-mode fallback.
 - **Resolution home:** M4 Bedrock adapter must handle both paths transparently. Called out in ADR-0003.
 
-### G7. DynamoDB single-table vs multi-table design
+### G7. DynamoDB single-table vs multi-table design (partially resolved)
 - **Where:** §10, §13, §28, §29, §45 — many entities, no data-model shape decided.
 - **Impact:** Query patterns and cost.
-- **Resolution home:** Decide during M1 (Games/Sessions/Messages) and again during M6 (Rulings, IngestionJobs). If load-bearing, promote to a new ADR; otherwise document in the milestone spec or `CURRENT_STATE.md`.
+- **Resolution home:** Decided for the M1 entity set (Games / Content / Sessions / Messages) in [ADR-0006](adr/0006-dynamodb-multi-table-catalog-sessions.md) — four separate on-demand tables. M6 entities (Rulings, IngestionJobs) are still open; revisit during that milestone.
 
 ### G8. Semantic index for cached rulings
 - **Where:** §28 requires "Create a semantic index of cached ruling questions" without specifying the store.
@@ -62,20 +62,11 @@ Each item names the section(s) of `MASTER_PLAN.md` that raised it, the impact, a
 - **Impact:** Between M8 and M10 the prod app is reachable — how is it restricted to the beta group? CloudFront basic auth, IP allowlist, Cognito with a whitelist, a shared invite token?
 - **Resolution home:** M9. Record in the M9 spec and, if load-bearing, an ADR.
 
-### G13. Session identity transport across origins
-- **Where:** §45 prefers cookie-based sessions.
-- **Impact:** CloudFront-hosted frontend and API Gateway may live at different origins → SameSite / CORS / credentials wiring needs an explicit decision.
-- **Resolution home:** M1. Either co-locate origins under one domain (CloudFront in front of API Gateway) or set explicit CORS + `credentials: 'include'` + `SameSite=None; Secure` cookies. Document the choice in the M1 spec.
+### G13. Session identity transport across origins — RESOLVED, see Resolved section below
 
-### G14. `enabledContent` identifier shape
-- **Where:** §6 defines `contentId`; §36 example uses slug strings like `base` and `prophecy-of-kings`.
-- **Impact:** Golden dataset authoring vs. runtime storage.
-- **Resolution home:** M1 domain model must define a canonical mapping between human-readable slugs (used in eval fixtures) and internal `ContentId`s (used in DynamoDB).
+### G14. `enabledContent` identifier shape — RESOLVED, see Resolved section below
 
-### G15. Frontend styling and state-management choices
-- **Where:** §10 names React + TypeScript + Vite; nothing about CSS / state.
-- **Impact:** Low — but ambient conventions across screens.
-- **Resolution home:** M1 or M8. Not ADR-worthy unless it constrains future work; document in `CURRENT_STATE.md`.
+### G15. Frontend styling and state-management choices — RESOLVED, see Resolved section below
 
 ---
 
@@ -86,3 +77,12 @@ Each item names the section(s) of `MASTER_PLAN.md` that raised it, the impact, a
 
 ### G2. Test framework, linter, formatter
 - **Resolved in Milestone 0.** Confirmed **Vitest 2.x + ESLint 9 flat config + Prettier 3**. Recorded in the same ADR-0001 Revisions block.
+
+### G13. Session identity transport across origins
+- **Resolved in Milestone 1.** CloudFront now fronts both the SPA (`/*`) and the API (`/api/*`, with a viewer-request CloudFront Function that strips the `/api` prefix before forwarding to API Gateway). The browser reaches everything on the same origin, so the session cookie is a first-party `HttpOnly; Secure; SameSite=Lax` cookie, `fetch` uses `credentials: 'same-origin'`, and API Gateway has no CORS configuration. Recorded in [ADR-0007](adr/0007-cross-origin-session-cookies.md).
+
+### G14. `enabledContent` identifier shape
+- **Resolved in Milestone 1.** Runtime uses an opaque, generated `ContentId` (branded string) as the storage key everywhere in DynamoDB and vector metadata. Every `ContentPackage` also carries a human-readable `slug` unique per `(gameId, editionId)`; golden fixtures reference content by that slug, and the domain layer performs the slug→id lookup. See `packages/domain/src/content.ts`.
+
+### G15. Frontend styling and state-management choices
+- **Resolved in Milestone 1.** Vanilla CSS (a single `src/styles.css` with CSS variables + mobile-first widths) and local component state (no state-management library). Documented in `CURRENT_STATE.md`. Not ADR-worthy.

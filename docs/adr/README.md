@@ -41,3 +41,5 @@ Do **not** write ADRs for routine implementation choices (variable names, file l
 | [0003](0003-model-interface.md) | Model interface and Bedrock Converse adapter | Accepted |
 | [0004](0004-session-memory.md) | Session memory: rolling summary + recent turns | Accepted |
 | [0005](0005-web-research.md) | Web research: bounded loop via AgentCore | Accepted |
+| [0006](0006-dynamodb-multi-table-catalog-sessions.md) | DynamoDB multi-table design for catalog, sessions & messages | Accepted |
+| [0007](0007-cross-origin-session-cookies.md) | Cross-origin session cookies (SameSite=None; Secure) | Accepted |

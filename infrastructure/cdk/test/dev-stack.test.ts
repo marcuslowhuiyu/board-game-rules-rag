@@ -1,6 +1,6 @@
 import { App } from 'aws-cdk-lib';
-import { Template } from 'aws-cdk-lib/assertions';
-import { describe, it } from 'vitest';
+import { Match, Template } from 'aws-cdk-lib/assertions';
+import { describe, expect, it } from 'vitest';
 import { DevStack } from '../lib/dev-stack.js';
 import { GithubOidcStack } from '../lib/github-oidc.js';
 
@@ -9,14 +9,43 @@ describe('DevStack', () => {
   const stack = new DevStack(app, 'TestDev');
   const template = Template.fromStack(stack);
 
-  it('provisions the health Lambda on Node.js 22', () => {
+  it('provisions the API Lambda on Node.js 22', () => {
     template.hasResourceProperties('AWS::Lambda::Function', {
       Runtime: 'nodejs22.x',
     });
   });
 
-  it('provisions an HTTP API', () => {
-    template.resourceCountIs('AWS::ApiGatewayV2::Api', 1);
+  it('injects the DynamoDB table names into the Lambda environment', () => {
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      Environment: {
+        Variables: Match.objectLike({
+          SESSION_TTL_SECONDS: '86400',
+          ALLOWED_ORIGIN: 'same-origin',
+        }),
+      },
+    });
+  });
+
+  it('provisions an HTTP API with no CORS (same-origin via CloudFront)', () => {
+    const apis = template.findResources('AWS::ApiGatewayV2::Api');
+    const apiIds = Object.keys(apis);
+    expect(apiIds).toHaveLength(1);
+    const first = apis[apiIds[0]!]!;
+    expect((first.Properties as Record<string, unknown>).CorsConfiguration).toBeUndefined();
+  });
+
+  it('provisions four DynamoDB tables on-demand', () => {
+    template.resourceCountIs('AWS::DynamoDB::Table', 4);
+    template.allResourcesProperties('AWS::DynamoDB::Table', {
+      BillingMode: 'PAY_PER_REQUEST',
+    });
+  });
+
+  it('wires TTL on the sessions table', () => {
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      KeySchema: [{ AttributeName: 'sessionId', KeyType: 'HASH' }],
+      TimeToLiveSpecification: { AttributeName: 'ttl', Enabled: true },
+    });
   });
 
   it('provisions a private S3 site bucket with SSL enforced', () => {
@@ -35,8 +64,40 @@ describe('DevStack', () => {
     });
   });
 
-  it('provisions a CloudFront distribution', () => {
+  it('provisions a CloudFront distribution with a /api/* behavior and a prefix-strip function', () => {
     template.resourceCountIs('AWS::CloudFront::Distribution', 1);
+    template.resourceCountIs('AWS::CloudFront::Function', 1);
+
+    // The distribution has at least two behaviors: the default (S3 origin)
+    // and an additional /api/* behavior forwarding to the API origin with a
+    // viewer-request function.
+    template.hasResourceProperties('AWS::CloudFront::Distribution', {
+      DistributionConfig: Match.objectLike({
+        CacheBehaviors: Match.arrayWith([
+          Match.objectLike({
+            PathPattern: '/api/*',
+            AllowedMethods: Match.arrayWith(['POST', 'DELETE']),
+            FunctionAssociations: Match.arrayWith([
+              Match.objectLike({ EventType: 'viewer-request' }),
+            ]),
+          }),
+        ]),
+      }),
+    });
+
+    template.hasResourceProperties('AWS::CloudFront::Function', {
+      FunctionConfig: { Runtime: 'cloudfront-js-1.0' },
+    });
+  });
+
+  it('emits API/table StackOutputs', () => {
+    template.hasOutput('ApiUrl', {});
+    template.hasOutput('CloudFrontApiUrl', {});
+    template.hasOutput('DistributionDomain', {});
+    template.hasOutput('GamesTableName', {});
+    template.hasOutput('ContentTableName', {});
+    template.hasOutput('SessionsTableName', {});
+    template.hasOutput('MessagesTableName', {});
   });
 });
 

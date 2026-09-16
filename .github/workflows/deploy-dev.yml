@@ -47,36 +47,155 @@ jobs:
         env:
           GIT_COMMIT: ${{ github.sha }}
 
-      - name: Resolve API URL
-        id: apiurl
-        run: |
-          URL=$(aws cloudformation describe-stacks \
-            --stack-name BgrDevStack \
-            --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue" \
-            --output text)
-          echo "url=$URL" >> "$GITHUB_OUTPUT"
-
-      - name: Smoke test /health
+      - name: Resolve stack outputs
+        id: outputs
         run: |
           set -euo pipefail
-          URL="${{ steps.apiurl.outputs.url }}/health"
+          get() {
+            aws cloudformation describe-stacks \
+              --stack-name BgrDevStack \
+              --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" \
+              --output text
+          }
+          {
+            echo "api_url=$(get ApiUrl)"
+            echo "cf_api_url=$(get CloudFrontApiUrl)"
+            echo "distribution_domain=$(get DistributionDomain)"
+            echo "distribution_id=$(get DistributionId)"
+            echo "web_bucket=$(get WebBucketName)"
+            echo "content_table=$(get ContentTableName)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test /health (direct API)
+        run: |
+          set -euo pipefail
+          URL="${{ steps.outputs.outputs.api_url }}/health"
           echo "Hitting $URL"
           curl -fsS "$URL" | tee /tmp/health.json
           test "$(jq -r '.status' < /tmp/health.json)" = "ok"
 
-      - name: Build frontend
+      - name: Seed demo game + expansion + promo
+        id: seed
+        env:
+          BASE: ${{ steps.outputs.outputs.api_url }}
+          CONTENT_TABLE: ${{ steps.outputs.outputs.content_table }}
+        run: |
+          set -euo pipefail
+
+          echo "Listing games…"
+          LIST=$(curl -fsS "$BASE/games?q=twilight-imperium-4")
+          COUNT=$(echo "$LIST" | jq '.items | length')
+
+          if [ "$COUNT" = "0" ]; then
+            echo "Seeding Twilight Imperium 4…"
+            curl -fsS -X POST "$BASE/games" \
+              -H "content-type: application/json" \
+              -d '{"name":"Twilight Imperium 4","publisher":"Fantasy Flight Games","initialEdition":{"name":"4th Edition","publisher":"FFG","releaseYear":2017}}' \
+              | tee /tmp/game.json > /dev/null
+          else
+            echo "$LIST" | jq '.items[0]' > /tmp/game.json
+          fi
+
+          GAME_ID=$(jq -r '.gameId' < /tmp/game.json)
+          EDITION_ID=$(jq -r '.editions[0].editionId' < /tmp/game.json)
+          echo "gameId=$GAME_ID editionId=$EDITION_ID"
+          echo "game_id=$GAME_ID" >> "$GITHUB_OUTPUT"
+          echo "edition_id=$EDITION_ID" >> "$GITHUB_OUTPUT"
+
+          # Seed representative optional content directly to DynamoDB.
+          # Idempotent: put-item overwrites so re-runs converge to the same
+          # rows. Content ids are deterministic per (gameId, contentType).
+          seed_content() {
+            local content_id="$1" slug="$2" name="$3" content_type="$4"
+            aws dynamodb put-item \
+              --table-name "$CONTENT_TABLE" \
+              --item "{
+                \"gameId\":       {\"S\": \"$GAME_ID\"},
+                \"contentId\":    {\"S\": \"$content_id\"},
+                \"editionId\":    {\"S\": \"$EDITION_ID\"},
+                \"slug\":         {\"S\": \"$slug\"},
+                \"name\":         {\"S\": \"$name\"},
+                \"contentType\":  {\"S\": \"$content_type\"},
+                \"dependencies\": {\"L\": []},
+                \"status\":       {\"S\": \"READY\"}
+              }"
+          }
+          seed_content "c_pok"        "prophecy-of-kings" "Prophecy of Kings" "EXPANSION"
+          seed_content "c_codex_vol1" "codex-vol-1"       "Codex Vol 1"       "PROMO"
+
+      - name: Exercise the M1 acceptance flow (with expansion + promo)
+        env:
+          BASE: ${{ steps.outputs.outputs.api_url }}
+          GAME_ID: ${{ steps.seed.outputs.game_id }}
+          EDITION_ID: ${{ steps.seed.outputs.edition_id }}
+        run: |
+          set -euo pipefail
+
+          # Content is visible through the API.
+          echo "Fetching content for game…"
+          curl -fsS "$BASE/games/$GAME_ID/content" | tee /tmp/content.json > /dev/null
+          test "$(jq '.items | length' < /tmp/content.json)" -ge 2
+          test "$(jq -r '.items[] | select(.contentType == "EXPANSION") | .contentId' < /tmp/content.json | head -1)" = "c_pok"
+          test "$(jq -r '.items[] | select(.contentType == "PROMO") | .contentId' < /tmp/content.json | head -1)" = "c_codex_vol1"
+
+          # Start a session with both packages enabled.
+          echo "Starting a session with expansion + promo…"
+          curl -fsS -X POST "$BASE/sessions" \
+            -H "content-type: application/json" \
+            -c /tmp/cookies.txt \
+            -d "{\"gameId\":\"$GAME_ID\",\"editionId\":\"$EDITION_ID\",\"enabledContentIds\":[\"c_pok\",\"c_codex_vol1\"]}" \
+            | tee /tmp/session.json > /dev/null
+
+          test "$(jq -r '.gameId' < /tmp/session.json)" = "$GAME_ID"
+          test "$(jq -r '.editionId' < /tmp/session.json)" = "$EDITION_ID"
+          test "$(jq -c '.enabledContentIds | sort' < /tmp/session.json)" = '["c_codex_vol1","c_pok"]'
+          grep -q bgr_session /tmp/cookies.txt
+
+          # And the same session round-trips through GET.
+          SESSION_ID=$(jq -r '.sessionId' < /tmp/session.json)
+          curl -fsS "$BASE/sessions/$SESSION_ID" | tee /tmp/session_get.json > /dev/null
+          test "$(jq -r '.sessionId' < /tmp/session_get.json)" = "$SESSION_ID"
+
+          # Rejects content from an unknown edition.
+          echo "Confirming server rejects content bound to a different edition…"
+          set +e
+          curl -sS -X POST "$BASE/sessions" \
+            -H "content-type: application/json" \
+            -d "{\"gameId\":\"$GAME_ID\",\"editionId\":\"$EDITION_ID\",\"enabledContentIds\":[\"c_bogus\"]}" \
+            -o /tmp/reject.json -w "%{http_code}" > /tmp/reject_code.txt
+          set -e
+          test "$(cat /tmp/reject_code.txt)" = "400"
+
+          echo "M1 acceptance flow: OK"
+
+      - name: Build frontend (same-origin /api)
+        # No VITE_API_URL — the SPA hits `/api/*` on CloudFront (ADR-0007).
         run: pnpm -C apps/web build
 
       - name: Upload frontend to S3 + invalidate CloudFront
+        env:
+          BUCKET: ${{ steps.outputs.outputs.web_bucket }}
+          DIST_ID: ${{ steps.outputs.outputs.distribution_id }}
         run: |
           set -euo pipefail
-          BUCKET=$(aws cloudformation describe-stacks \
-            --stack-name BgrDevStack \
-            --query "Stacks[0].Outputs[?OutputKey=='WebBucketName'].OutputValue" \
-            --output text)
-          DIST_ID=$(aws cloudformation describe-stacks \
-            --stack-name BgrDevStack \
-            --query "Stacks[0].Outputs[?OutputKey=='DistributionId'].OutputValue" \
-            --output text)
           aws s3 sync apps/web/dist "s3://$BUCKET" --delete
           aws cloudfront create-invalidation --distribution-id "$DIST_ID" --paths "/*"
+
+      - name: Same-origin smoke test via CloudFront /api/health
+        env:
+          CF_API_URL: ${{ steps.outputs.outputs.cf_api_url }}
+        run: |
+          set -euo pipefail
+          echo "Waiting for CloudFront to propagate /api/health (up to 5m)…"
+          URL="$CF_API_URL/health"
+          for attempt in $(seq 1 20); do
+            if curl -fsS "$URL" -o /tmp/cf-health.json 2>/dev/null; then
+              if [ "$(jq -r '.status' < /tmp/cf-health.json)" = "ok" ]; then
+                echo "CloudFront /api/* routing: OK (attempt $attempt)"
+                exit 0
+              fi
+            fi
+            sleep 15
+          done
+          echo "CloudFront /api/health did not respond OK after 5m"
+          exit 1
