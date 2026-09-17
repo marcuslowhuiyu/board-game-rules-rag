@@ -1,4 +1,4 @@
-import type { ContentPackage, Edition, Game, GameId } from '@bgr/domain';
+import type { ContentPackage, Edition, EditionId, Game, GameId } from '@bgr/domain';
 
 /** Result of a game search — total is best-effort ("at least this many"). */
 export interface GameSearchResult {
@@ -25,4 +25,10 @@ export interface GamesRepository {
   listContent(gameId: GameId): Promise<ContentPackage[]>;
   /** Insert a content package. */
   addContent(pkg: ContentPackage): Promise<void>;
+  /**
+   * Atomically bump the knowledgeRevision for a specific edition and return
+   * the new revision number. Fails if the edition is not present.
+   * See MASTER_PLAN §19 — called by the Finalize ingestion stage.
+   */
+  bumpKnowledgeRevision(gameId: GameId, editionId: EditionId, updatedAt: string): Promise<number>;
 }

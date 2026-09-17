@@ -64,6 +64,11 @@ jobs:
             echo "distribution_id=$(get DistributionId)"
             echo "web_bucket=$(get WebBucketName)"
             echo "content_table=$(get ContentTableName)"
+            echo "documents_table=$(get DocumentsTableName)"
+            echo "chunks_table=$(get ChunksTableName)"
+            echo "ingestion_jobs_table=$(get IngestionJobsTableName)"
+            echo "ingestion_bucket=$(get IngestionBucketName)"
+            echo "state_machine_arn=$(get IngestionStateMachineArn)"
           } >> "$GITHUB_OUTPUT"
 
       - name: Smoke test /health (direct API)
@@ -120,6 +125,7 @@ jobs:
                 \"status\":       {\"S\": \"READY\"}
               }"
           }
+          seed_content "c_base"       "base-game"         "Base Game"         "BASE"
           seed_content "c_pok"        "prophecy-of-kings" "Prophecy of Kings" "EXPANSION"
           seed_content "c_codex_vol1" "codex-vol-1"       "Codex Vol 1"       "PROMO"
 
@@ -167,6 +173,134 @@ jobs:
           test "$(cat /tmp/reject_code.txt)" = "400"
 
           echo "M1 acceptance flow: OK"
+
+      - name: Exercise the M2 ingestion flow (upload HTML fixture, poll job, verify chunks)
+        env:
+          BASE: ${{ steps.outputs.outputs.api_url }}
+          GAME_ID: ${{ steps.seed.outputs.game_id }}
+          EDITION_ID: ${{ steps.seed.outputs.edition_id }}
+          DOCUMENTS_TABLE: ${{ steps.outputs.outputs.documents_table }}
+          CHUNKS_TABLE: ${{ steps.outputs.outputs.chunks_table }}
+          INGESTION_JOBS_TABLE: ${{ steps.outputs.outputs.ingestion_jobs_table }}
+        run: |
+          set -euo pipefail
+
+          FIXTURE=evals/fixtures/ingestion/living-rules.html
+          BYTES=$(wc -c < "$FIXTURE" | tr -d ' ')
+          CT="text/html"
+
+          # 1) Presign
+          echo "Requesting presigned PUT for $FIXTURE ($BYTES bytes)"
+          PRESIGN=$(curl -fsS -X POST "$BASE/uploads/presign" \
+            -H "content-type: application/json" \
+            -d "{\"filename\":\"living-rules.html\",\"contentType\":\"$CT\",\"sizeBytes\":$BYTES}")
+          echo "$PRESIGN" > /tmp/presign.json
+          UPLOAD_URL=$(jq -r '.url' < /tmp/presign.json)
+          S3_KEY=$(jq -r '.key' < /tmp/presign.json)
+
+          # 2) PUT the file
+          echo "Uploading fixture to S3…"
+          curl -fsS -X PUT "$UPLOAD_URL" \
+            -H "content-type: $CT" \
+            --data-binary "@$FIXTURE"
+
+          # 3) Start ingestion
+          echo "Starting ingestion job (S3 source)…"
+          curl -fsS -X POST "$BASE/ingestion" \
+            -H "content-type: application/json" \
+            -d "{
+              \"gameId\":\"$GAME_ID\",
+              \"editionId\":\"$EDITION_ID\",
+              \"contentId\":\"c_base\",
+              \"title\":\"M2 smoke fixture\",
+              \"sourceType\":\"LIVING_RULES\",
+              \"authority\":\"OFFICIAL_RULES\",
+              \"source\":{\"kind\":\"S3\",\"s3Key\":\"$S3_KEY\",\"contentType\":\"$CT\",\"filename\":\"living-rules.html\"}
+            }" > /tmp/job.json
+          JOB_ID=$(jq -r '.jobId' < /tmp/job.json)
+          echo "Job: $JOB_ID"
+
+          # 4) Poll the job for up to 90 s
+          echo "Polling job status…"
+          for attempt in $(seq 1 30); do
+            curl -fsS "$BASE/ingestion/$JOB_ID" > /tmp/job.json
+            STATUS=$(jq -r '.status' < /tmp/job.json)
+            STAGE=$(jq -r '.stage' < /tmp/job.json)
+            echo "  attempt=$attempt status=$STATUS stage=$STAGE"
+            if [ "$STATUS" = "SUCCEEDED" ] || [ "$STATUS" = "FAILED" ]; then break; fi
+            sleep 3
+          done
+          test "$(jq -r '.status' < /tmp/job.json)" = "SUCCEEDED"
+          CHUNKS=$(jq -r '.chunkCount' < /tmp/job.json)
+          DOC_ID=$(jq -r '.documentId' < /tmp/job.json)
+          echo "Job succeeded — documentId=$DOC_ID chunkCount=$CHUNKS"
+          test "$CHUNKS" -ge 1
+
+          # 5) Fetch the source via the API
+          curl -fsS "$BASE/sources/$DOC_ID" > /tmp/source.json
+          test "$(jq -r '.status' < /tmp/source.json)" = "CURRENT"
+          test "$(jq -r '.sourceType' < /tmp/source.json)" = "LIVING_RULES"
+
+          # 6) Fetch chunks; each must have a heading path and page range
+          curl -fsS "$BASE/sources/$DOC_ID/chunks" > /tmp/chunks.json
+          test "$(jq '.items | length' < /tmp/chunks.json)" = "$CHUNKS"
+          test "$(jq '.items[0].headingPath | length' < /tmp/chunks.json)" -ge 1
+
+          # 7) Re-run the same upload → dedup, no new document, revision unchanged.
+          REV_BEFORE=$(aws dynamodb get-item --table-name "${{ steps.outputs.outputs.content_table }}" \
+            --key "{\"gameId\":{\"S\":\"$GAME_ID\"},\"contentId\":{\"S\":\"c_base\"}}" \
+            --query 'Item.editionId.S' --output text || true)
+          # A second upload creates a fresh S3 key + fresh job, but content hash matches.
+          PRESIGN2=$(curl -fsS -X POST "$BASE/uploads/presign" \
+            -H "content-type: application/json" \
+            -d "{\"filename\":\"living-rules.html\",\"contentType\":\"$CT\",\"sizeBytes\":$BYTES}")
+          UPLOAD_URL2=$(jq -r '.url' <<< "$PRESIGN2")
+          S3_KEY2=$(jq -r '.key' <<< "$PRESIGN2")
+          curl -fsS -X PUT "$UPLOAD_URL2" -H "content-type: $CT" --data-binary "@$FIXTURE"
+          curl -fsS -X POST "$BASE/ingestion" -H "content-type: application/json" \
+            -d "{
+              \"gameId\":\"$GAME_ID\",
+              \"editionId\":\"$EDITION_ID\",
+              \"contentId\":\"c_base\",
+              \"title\":\"M2 smoke fixture (again)\",
+              \"sourceType\":\"LIVING_RULES\",
+              \"authority\":\"OFFICIAL_RULES\",
+              \"source\":{\"kind\":\"S3\",\"s3Key\":\"$S3_KEY2\",\"contentType\":\"$CT\",\"filename\":\"living-rules.html\"}
+            }" > /tmp/job2.json
+          JOB2=$(jq -r '.jobId' < /tmp/job2.json)
+          for attempt in $(seq 1 30); do
+            curl -fsS "$BASE/ingestion/$JOB2" > /tmp/job2.json
+            STATUS=$(jq -r '.status' < /tmp/job2.json)
+            if [ "$STATUS" = "SUCCEEDED" ] || [ "$STATUS" = "FAILED" ]; then break; fi
+            sleep 3
+          done
+          test "$(jq -r '.status' < /tmp/job2.json)" = "SUCCEEDED"
+          test "$(jq -r '.documentId' < /tmp/job2.json)" = "$DOC_ID"
+          test "$(jq -r '.duplicateOf' < /tmp/job2.json)" = "$DOC_ID"
+          echo "Duplicate short-circuit: OK"
+
+          # 8) SSRF guard — a job that targets EC2 metadata must fail at FETCH.
+          curl -fsS -X POST "$BASE/ingestion" -H "content-type: application/json" \
+            -d "{
+              \"gameId\":\"$GAME_ID\",
+              \"editionId\":\"$EDITION_ID\",
+              \"contentId\":\"c_base\",
+              \"title\":\"SSRF probe\",
+              \"sourceType\":\"LIVING_RULES\",
+              \"authority\":\"OFFICIAL_RULES\",
+              \"source\":{\"kind\":\"URL\",\"url\":\"http://169.254.169.254/latest/meta-data/\"}
+            }" > /tmp/ssrf.json
+          SSRF_JOB=$(jq -r '.jobId' < /tmp/ssrf.json)
+          for attempt in $(seq 1 20); do
+            curl -fsS "$BASE/ingestion/$SSRF_JOB" > /tmp/ssrf.json
+            STATUS=$(jq -r '.status' < /tmp/ssrf.json)
+            if [ "$STATUS" = "SUCCEEDED" ] || [ "$STATUS" = "FAILED" ]; then break; fi
+            sleep 3
+          done
+          test "$(jq -r '.status' < /tmp/ssrf.json)" = "FAILED"
+          test "$(jq -r '.error.stage' < /tmp/ssrf.json)" = "FETCH"
+
+          echo "M2 ingestion flow: OK"
 
       - name: Build frontend (same-origin /api)
         # No VITE_API_URL — the SPA hits `/api/*` on CloudFront (ADR-0007).

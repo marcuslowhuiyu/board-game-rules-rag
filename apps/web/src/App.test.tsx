@@ -16,6 +16,7 @@ const seededGame: GameWithContent = {
       editionId: 'e_1',
       gameId: 'g_ti4',
       name: '4th Edition',
+      knowledgeRevision: 0,
       createdAt: now,
       updatedAt: now,
     },

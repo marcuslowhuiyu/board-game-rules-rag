@@ -34,10 +34,31 @@ describe('DevStack', () => {
     expect((first.Properties as Record<string, unknown>).CorsConfiguration).toBeUndefined();
   });
 
-  it('provisions four DynamoDB tables on-demand', () => {
-    template.resourceCountIs('AWS::DynamoDB::Table', 4);
+  it('provisions all M1+M2 DynamoDB tables on-demand', () => {
+    template.resourceCountIs('AWS::DynamoDB::Table', 7);
     template.allResourcesProperties('AWS::DynamoDB::Table', {
       BillingMode: 'PAY_PER_REQUEST',
+    });
+  });
+
+  it('provisions a chunks table keyed by (documentId, chunkId)', () => {
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      KeySchema: [
+        { AttributeName: 'documentId', KeyType: 'HASH' },
+        { AttributeName: 'chunkId', KeyType: 'RANGE' },
+      ],
+    });
+  });
+
+  it('provisions a documents table keyed by documentId', () => {
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      KeySchema: [{ AttributeName: 'documentId', KeyType: 'HASH' }],
+    });
+  });
+
+  it('provisions an ingestion jobs table keyed by jobId', () => {
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      KeySchema: [{ AttributeName: 'jobId', KeyType: 'HASH' }],
     });
   });
 
@@ -98,6 +119,77 @@ describe('DevStack', () => {
     template.hasOutput('ContentTableName', {});
     template.hasOutput('SessionsTableName', {});
     template.hasOutput('MessagesTableName', {});
+    template.hasOutput('DocumentsTableName', {});
+    template.hasOutput('ChunksTableName', {});
+    template.hasOutput('IngestionJobsTableName', {});
+    template.hasOutput('IngestionBucketName', {});
+    template.hasOutput('IngestionStateMachineArn', {});
+  });
+
+  it('provisions two S3 buckets (web site + ingestion) with SSL enforced', () => {
+    template.resourceCountIs('AWS::S3::Bucket', 2);
+  });
+
+  it('provisions an ingestion S3 bucket with a raw/ lifecycle rule and PUT CORS', () => {
+    template.hasResourceProperties('AWS::S3::Bucket', {
+      LifecycleConfiguration: Match.objectLike({
+        Rules: Match.arrayWith([
+          Match.objectLike({
+            Id: 'expire-raw-90d',
+            Status: 'Enabled',
+            Prefix: 'raw/',
+            ExpirationInDays: 90,
+          }),
+        ]),
+      }),
+      CorsConfiguration: Match.objectLike({
+        CorsRules: Match.arrayWith([
+          Match.objectLike({ AllowedMethods: Match.arrayWith(['PUT']) }),
+        ]),
+      }),
+    });
+  });
+
+  it('provisions a Step Functions state machine with the M2 stage tasks', () => {
+    template.resourceCountIs('AWS::StepFunctions::StateMachine', 1);
+    // DefinitionString is a Fn::Join at synth-time; fetch the raw resource
+    // and stringify the joined pieces to check the stages appear.
+    const machines = template.findResources('AWS::StepFunctions::StateMachine');
+    const first = Object.values(machines)[0] as {
+      Properties: { DefinitionString: { 'Fn::Join': [string, unknown[]] } };
+    };
+    const parts = first.Properties.DefinitionString['Fn::Join'][1];
+    const flat = JSON.stringify(parts);
+    for (const stage of [
+      'Stage_VALIDATE',
+      'Stage_FETCH',
+      'Stage_PARSE',
+      'Stage_CHUNK',
+      'Stage_FINALIZE',
+    ]) {
+      expect(flat).toContain(stage);
+    }
+  });
+
+  it('exposes M2 routes on the HTTP API', () => {
+    for (const rk of [
+      'POST /uploads/presign',
+      'POST /ingestion',
+      'GET /ingestion/{jobId}',
+      'GET /sources/{sourceId}',
+      'GET /sources/{sourceId}/chunks',
+    ]) {
+      template.hasResourceProperties('AWS::ApiGatewayV2::Route', { RouteKey: rk });
+    }
+  });
+
+  it('provisions a second Node 22 Lambda for the ingestion stage runner', () => {
+    // Two Node 22 Lambdas total: api-fn + stage-runner-fn. (Auto-delete
+    // custom resources use a different runtime.)
+    const fns = template.findResources('AWS::Lambda::Function', {
+      Properties: { Runtime: 'nodejs22.x' },
+    });
+    expect(Object.keys(fns).length).toBeGreaterThanOrEqual(2);
   });
 });
 

@@ -2,8 +2,10 @@ import {
   ConflictError,
   GameSchema,
   ContentPackageSchema,
+  NotFoundError,
   type ContentPackage,
   type Edition,
+  type EditionId,
   type Game,
   type GameId,
 } from '@bgr/domain';
@@ -130,5 +132,38 @@ export class DynamoGamesRepository implements GamesRepository {
       }
       throw err;
     }
+  }
+
+  async bumpKnowledgeRevision(
+    gameId: GameId,
+    editionId: EditionId,
+    updatedAt: string,
+  ): Promise<number> {
+    // Editions live embedded on the game row (ADR-0006). To bump the counter
+    // atomically we re-read the row, mutate the target edition, and write
+    // back with a conditional-put that fails if someone else already moved
+    // the row. Caller retries the ingestion Finalize stage on conflict.
+    const current = await this.getGame(gameId);
+    if (!current) throw new NotFoundError('game', gameId);
+    const idx = current.editions.findIndex((e) => e.editionId === editionId);
+    if (idx === -1) throw new NotFoundError('edition', editionId);
+    const edition = current.editions[idx]!;
+    const nextRevision = edition.knowledgeRevision + 1;
+    const editions = current.editions.slice();
+    editions[idx] = { ...edition, knowledgeRevision: nextRevision, updatedAt };
+    await this.doc.send(
+      new UpdateCommand({
+        TableName: this.tables.gamesTable,
+        Key: { gameId },
+        UpdateExpression: 'SET editions = :editions, updatedAt = :updatedAt',
+        ConditionExpression: 'updatedAt = :expectedUpdatedAt',
+        ExpressionAttributeValues: {
+          ':editions': editions,
+          ':updatedAt': updatedAt,
+          ':expectedUpdatedAt': current.updatedAt,
+        },
+      }),
+    );
+    return nextRevision;
   }
 }

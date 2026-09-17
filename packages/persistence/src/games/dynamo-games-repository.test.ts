@@ -37,6 +37,7 @@ const edition: Edition = {
   editionId: asEditionId('e_1'),
   gameId: asGameId('g_ti4'),
   name: '4th Edition',
+  knowledgeRevision: 0,
   createdAt: iso,
   updatedAt: iso,
 };

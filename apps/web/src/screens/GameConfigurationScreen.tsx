@@ -6,6 +6,7 @@ interface Props {
   gameId: string;
   onBack: () => void;
   onSessionStarted: (session: SessionView) => void;
+  onManageSources?: () => void;
 }
 
 export const GameConfigurationScreen = ({
@@ -13,6 +14,7 @@ export const GameConfigurationScreen = ({
   gameId,
   onBack,
   onSessionStarted,
+  onManageSources,
 }: Props): JSX.Element => {
   const [game, setGame] = useState<GameWithContent | null>(null);
   const [editionId, setEditionId] = useState<string | null>(null);
@@ -136,6 +138,11 @@ export const GameConfigurationScreen = ({
       >
         {busy ? 'Starting…' : 'Start session'}
       </button>
+      {onManageSources && (
+        <button className="button" type="button" onClick={onManageSources}>
+          Manage sources
+        </button>
+      )}
     </section>
   );
 };

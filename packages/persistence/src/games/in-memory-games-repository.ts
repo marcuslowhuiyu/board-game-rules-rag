@@ -1,7 +1,9 @@
 import {
   ConflictError,
+  NotFoundError,
   type ContentPackage,
   type Edition,
+  type EditionId,
   type Game,
   type GameId,
 } from '@bgr/domain';
@@ -56,5 +58,22 @@ export class InMemoryGamesRepository implements GamesRepository {
       throw new ConflictError(`content already exists: ${pkg.contentId}`);
     }
     this.contentByGame.set(pkg.gameId, [...existing, pkg]);
+  }
+
+  async bumpKnowledgeRevision(
+    gameId: GameId,
+    editionId: EditionId,
+    updatedAt: string,
+  ): Promise<number> {
+    const existing = this.games.get(gameId);
+    if (!existing) throw new NotFoundError('game', gameId);
+    const idx = existing.editions.findIndex((e) => e.editionId === editionId);
+    if (idx === -1) throw new NotFoundError('edition', editionId);
+    const edition = existing.editions[idx]!;
+    const nextRevision = edition.knowledgeRevision + 1;
+    const editions = existing.editions.slice();
+    editions[idx] = { ...edition, knowledgeRevision: nextRevision, updatedAt };
+    this.games.set(gameId, { ...existing, editions, updatedAt });
+    return nextRevision;
   }
 }

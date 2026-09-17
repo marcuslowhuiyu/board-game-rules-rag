@@ -65,6 +65,7 @@ export function gameRoutes(ctxFactory: () => AppContext) {
         editionId: asEditionId(app.ids.editionId()),
         gameId: asGameId(gameId),
         name: input.initialEdition.name,
+        knowledgeRevision: 0,
         ...(input.initialEdition.publisher !== undefined
           ? { publisher: input.initialEdition.publisher }
           : {}),

@@ -3,10 +3,12 @@ import { createApiClient, type SessionView } from './api/client.js';
 import { GameSearchScreen } from './screens/GameSearchScreen.js';
 import { GameConfigurationScreen } from './screens/GameConfigurationScreen.js';
 import { AddGameScreen } from './screens/AddGameScreen.js';
+import { SourcesScreen } from './screens/SourcesScreen.js';
 
 type Screen =
   | { kind: 'search' }
   | { kind: 'configure'; gameId: string }
+  | { kind: 'sources'; gameId: string }
   | { kind: 'add' }
   | { kind: 'started'; session: SessionView };
 
@@ -44,7 +46,15 @@ export const App = ({ apiUrl }: { apiUrl?: string } = {}): JSX.Element => {
             api={api}
             gameId={screen.gameId}
             onBack={() => setScreen({ kind: 'search' })}
+            onManageSources={() => setScreen({ kind: 'sources', gameId: screen.gameId })}
             onSessionStarted={(session) => setScreen({ kind: 'started', session })}
+          />
+        )}
+        {screen.kind === 'sources' && (
+          <SourcesScreen
+            api={api}
+            gameId={screen.gameId}
+            onBack={() => setScreen({ kind: 'configure', gameId: screen.gameId })}
           />
         )}
         {screen.kind === 'add' && (

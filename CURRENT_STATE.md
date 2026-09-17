@@ -1,53 +1,75 @@
 # Current State
 
-_Last updated: 2026-09-16_
+_Last updated: 2026-09-17_
 
 ## Current milestone
 
-**Milestone 2 — Document Ingestion** (not started).
+**Milestone 2 — Document Ingestion** (feature branch `feature/m02-document-ingestion`; PR open; awaiting review + merge + dev deploy).
 
 Spec: `docs/milestones/M2-document-ingestion.md`.
+Architecture decision: `docs/adr/0008-document-ingestion-pipeline.md`.
 
 ## Completed work
 
-- **Milestone 0 — Repository & Engineering Foundation.** Fully bootstrapped and deployed to AWS dev.
-  - pnpm workspace at root; packages `apps/web`, `apps/api`, `packages/{domain,ai,retrieval,ingestion,persistence,shared}`, `infrastructure/cdk`, `evals`.
-  - TypeScript strict everywhere, shared `tsconfig.base.json`, `.nvmrc = 22`, `packageManager: pnpm@10.34.5`.
-  - ESLint 9 flat config + Prettier 3 + Vitest 2 wired into `pnpm lint / format:check / typecheck / test`.
-  - `apps/api` `GET /health` handler returning `{status, commit, time}` with unit tests.
-  - `apps/web` React + Vite skeleton, one Testing-Library test.
-  - `packages/shared` structured JSON logger with unit tests.
-  - `infrastructure/cdk`: `BgrGithubOidcStack` and `BgrDevStack` (Node 22 Lambda behind API Gateway HTTP API, private S3 site bucket, CloudFront distribution with OAC, dedicated CloudWatch log group). CDK unit tests.
-  - GitHub Actions: `ci.yml`, `deploy-dev.yml`, `security.yml`, `dependabot.yml`.
-  - Repository: `marcuslowhuiyu/board-game-rules-rag` (private). CI green, Deploy dev green.
-  - AWS: account `<AWS_ACCOUNT_ID>`, region `ap-southeast-1`.
-  - GitHub Environment `dev` created; `AWS_DEPLOY_ROLE_ARN` secret set to `arn:aws:iam::<AWS_ACCOUNT_ID>:role/bgr-github-deploy-dev`.
+- **Milestone 0 — Repository & Engineering Foundation.** Merged. See prior state.
+- **Milestone 1 — Domain Model, Game Catalog & Sessions.** Merged as PR #6 / commit `6b50738`. Deployed dev remained green; every M1 acceptance check passed.
 
-- **Milestone 1 — Domain Model, Game Catalog & Sessions.** Complete. Merged to `main` as commit `6b50738` (PR [#6](https://github.com/marcuslowhuiyu/board-game-rules-rag/pull/6)); `Deploy dev` run `35078588409` succeeded end-to-end; the deployed dev environment passed every M1 acceptance check.
+## Milestone 2 — what landed on the feature branch
 
-  - **`packages/domain`**: Zod-backed schemas and branded id types for `Game`, `Edition`, `ContentPackage`, `SourceDocumentMetadata`, `Session`, `Message`. `configurationFingerprint(gameId, editionId, enabledContentIds)` returns a SHA-256 hex over the canonical `(g, e, sorted-unique-c)` triple; a `fast-check` property test confirms fingerprint invariance under reordering.
-  - **`packages/persistence`**: `GamesRepository`, `SessionsRepository`, `MessagesRepository` interfaces plus DynamoDB implementations (`@aws-sdk/lib-dynamodb`) and in-memory implementations for tests. `Clock` and `IdGenerator` seams.
-  - **`apps/api`**: single `apps/api/src/handlers/api.ts` Lambda handler with a small path-template router covering `GET /health`, `GET/POST /games`, `GET /games/{id}`, `GET /games/{id}/content`, `POST /sessions`, `GET /sessions/{id}`, `DELETE /sessions/{id}`. Zod validation at every write endpoint; correlation-id-tagged structured logs; the session cookie is `HttpOnly; Secure; SameSite=Lax` (first-party — see ADR-0007); `DELETE` returns an expired cookie. `POST /sessions` rejects any `enabledContentId` that does not belong to the selected edition or whose status is not `READY`.
-  - **`apps/web`**: three mobile-first screens (Game Search / Add Game / Game Configuration) with local `useState` navigation, calling the API through a typed client at `apps/web/src/api/client.ts`. The client defaults its base URL to `/api` (same-origin via CloudFront) and uses `credentials: 'same-origin'`. Styling is vanilla CSS in `apps/web/src/styles.css` (CSS variables, mobile-first widths, safe-area padding). No state library.
-  - **CDK — `BgrDevStack`**: four on-demand DynamoDB tables (`games`, `content`, `sessions` with TTL attribute `ttl`, `messages`); the API Lambda receives least-privilege `readWriteData` grants on each table. A single **CloudFront distribution** serves both the SPA (default behavior → S3) and the API (`/api/*` behavior → API Gateway HTTP API origin with a viewer-request **CloudFront Function** that strips the `/api` prefix). API Gateway carries **no CORS configuration**; every browser request is same-origin. CDK unit tests cover the Node 22 runtime, the four tables and their TTL, the `/api/*` behavior with the prefix-strip Function, and the stack outputs.
-  - **Deploy workflow**: builds the web bundle same-origin (`/api` default, no `VITE_API_URL`), idempotently seeds Twilight Imperium 4 plus `Prophecy of Kings` (EXPANSION) and `Codex Vol 1` (PROMO), exercises the full session-creation flow with both packages enabled, and verifies same-origin routing via `<cloudfront>/api/health`.
+`packages/domain`:
 
-  **Live endpoints (dev):**
-  - API (direct): `https://81wk8wat3m.execute-api.ap-southeast-1.amazonaws.com`
-  - API (same-origin): `https://d1wbjv971ead09.cloudfront.net/api`
-  - Web app: `https://d1wbjv971ead09.cloudfront.net/`
-  - Seeded demo content in dev: `Twilight Imperium 4` / `4th Edition` with `Prophecy of Kings` (EXPANSION, id `c_pok`) and `Codex Vol 1` (PROMO, id `c_codex_vol1`).
+- New schemas: `Chunk`, `IngestionJob` (+ `IngestionJobView`, `CreateIngestionJobInput`), `CreatePresignedUploadInput`. New id types: `ChunkId`, `IngestionJobId`.
+- `SourceDocument` promoted from "metadata only" to the full M2 shape: required `contentHash`, `rawObjectUri`, `origin` (`UPLOAD` | `URL`), `chunkCount`, `knowledgeRevision`, `pageCount?`. Status enum tightened to `CURRENT | SUPERSEDED | ARCHIVED` (`SourceDocumentMetadataSchema` remains as a compatibility alias).
+- `Edition` grew a required `knowledgeRevision: number` field (default 0) — bumped by the FINALIZE stage per §19.
 
-  **Post-merge acceptance results (all green, 2026-09-16):**
-  - `Deploy dev` run 35078588409 → success.
-  - `GET /health` returns commit `6b50738…`, matching the merge commit.
-  - `GET <cloudfront>/api/health` also returns the same commit — same-origin routing live.
-  - Frontend `GET <cloudfront>/` returns the SPA HTML with the built asset bundle.
-  - `GET /games?q=twilight` returns the seeded game with its edition embedded.
-  - `GET /games/{id}/content` returns both the EXPANSION and the PROMO under the seeded edition, both `status: READY`.
-  - `POST <cloudfront>/api/sessions` with both content ids enabled returns a session whose `enabledContentIds` round-trip; `GET /api/sessions/{id}` returns the same record; the browser is issued a `bgr_session` cookie carrying `HttpOnly; Secure; SameSite=Lax; Max-Age=86400` and the cookie is retained across requests.
-  - `DynamoDB GetItem` on the sessions table shows `gameId`, `editionId`, `enabledContentIds`, `configurationFingerprint` (matches locally-recomputed SHA-256) and `ttl` set to 86376 seconds in the future (≈ 24 h, within the expected window).
-  - `POST /sessions` with an unknown `enabledContentId` returns HTTP 400 with body `error.code = BAD_REQUEST`.
+`packages/persistence`:
+
+- New repositories with in-memory + DynamoDB implementations: `DocumentsRepository`, `ChunksRepository`, `IngestionJobsRepository`.
+- `GamesRepository.bumpKnowledgeRevision(gameId, editionId, updatedAt): Promise<number>` — atomic conditional update on `updatedAt` for optimistic concurrency.
+- `IdGenerator` gained `sourceDocumentId()`, `chunkId()`, `ingestionJobId()`.
+
+`packages/ingestion` (new fleshed-out package):
+
+- Types: `ParsedBlock`, `ParsedDocument`, `DocumentQualityReport`, `ChunkOutput`.
+- Utilities: `sha256Hex`, `approxTokenCount`, `contextualPrefix`, `analyzeQuality`.
+- Chunker: `chunkDocument` — heading-aware, configurable 300/500/700-token budget, sentence-split for oversized blocks, page range = min/max of the source blocks.
+- Classifier: `classifySource` — downgrades OFFICIAL_RULES to COMMUNITY_DISCUSSION when the canonical URL is a community host.
+- Parsers behind `DocumentParser`: `createPdfTextLayerParser(extractor)` (heading heuristic covers ALL-CAPS titles + numeric `1.`, `1.2`, `1.2.3` headings), `createHtmlParser()` (strips scripts/nav, prefers `<main>` / `[role=main]`), `createStubFallbackParser()` (declared, throws — M2 explicitly defers OCR/AI fallback per §16).
+- `createUnpdfExtractor()` — real PDF text-layer extraction via `unpdf` (pdfjs-dist wrapper), imported dynamically so the base parser can be unit-tested without pdfjs.
+- SSRF guard: `assertUrlSafeForFetch` blocks non-http(s), loopback, private, link-local, EC2 metadata (`169.254.169.254`), multicast, and `.local` / `.internal` hostnames; re-checks resolved IPs (injectable resolver for tests).
+- Fetchers: `createUrlFetcher()` (SSRF-guarded, 20 s timeout, 25 MiB response cap), `createS3Fetcher(store)`.
+- Object store seam: `ObjectStore` interface + `InMemoryObjectStore` (for tests) + `S3ObjectStore` (in `apps/api/src/lib/`).
+
+`apps/api`:
+
+- New routes: `POST /uploads/presign`, `POST /ingestion`, `GET /ingestion/{jobId}`, `GET /sources/{sourceId}`, `GET /sources/{sourceId}/chunks`.
+- Presign: MIME-restricted (`application/pdf`, `text/html`, `application/xhtml+xml`), size-capped (env `UPLOAD_MAX_BYTES`, default 50 MiB), 10-minute expiry, S3 key `raw/{yyyy-mm-dd}/{uuid}.{ext}`.
+- `POST /ingestion` validates the game/edition/content triple, sanity-checks S3-key existence for `S3` sources, creates a `PENDING` job, and calls `IngestionExecutor.start(jobId)` — which in production issues `StartExecution` against the M2 state machine.
+- `apps/api/src/ingestion/pipeline.ts` implements every stage as a pure function of `(job, StageContext)`; `runFullPipeline(jobId, ctx)` runs the whole chain in-process (used by unit tests + optional dev fixture scripts).
+- `apps/api/src/ingestion/stage-runner.ts` is the Lambda handler each Step Function Task invokes with `{ jobId, stage }`.
+- Dev-only `forceFailureStage` field on jobs — the pipeline throws at the requested stage. Used by the "forced Normalize failure leaves game unchanged" acceptance test (spec verification #6).
+
+`infrastructure/cdk`:
+
+- Three new DynamoDB tables: `documents` (PK `documentId`), `chunks` (PK `documentId`, SK `chunkId`), `ingestionJobs` (PK `jobId`) — all on-demand with SSE + PITR.
+- `IngestionBucket` — private S3 with SSL enforced, PUT-only CORS (`AllowedOrigins: *` for dev — tightening deferred to public beta), and lifecycle rules: `raw/` expires after 90 days, `temporary/` after 1 day, multipart uploads under `normalized/` aborted after 3 days.
+- `IngestionStageRunnerFn` — Node 22, 1024 MB, 60 s timeout, its own log group.
+- `IngestionStateMachine` — Standard workflow, 15 min timeout. Chain: `Stage_VALIDATE → Stage_FETCH → Stage_PARSE → Stage_CLASSIFY → Stage_DISCOVER_ERRATA → Stage_NORMALIZE → Stage_CHUNK → Stage_FINALIZE → SkipEmbedIndexInM2 → PipelineSucceeded`. Each Task retries transient Lambda errors twice and catches everything else to `PipelineFailed`.
+- API Lambda gets read access to `documents`/`chunks`, read/write on `ingestionJobs`, read/write on the ingestion bucket, and `states:StartExecution` on the state machine; the stage runner gets read on `content`, read/write on the other five tables and the bucket. `INGESTION_STATE_MACHINE_ARN` is injected into the API Lambda env.
+- CDK unit test coverage extended to seven DDB tables, the ingestion bucket lifecycle + CORS, the state machine's Task chain, and the new HTTP API routes.
+
+`apps/web`:
+
+- New `SourcesScreen`: content picker, source-type dropdown, PDF upload (presign → PUT → `POST /ingestion`) or URL paste, polling `GET /ingestion/{jobId}` every 2 s until terminal, showing status, stage progression, and `duplicateOf` / `chunkCount` / error details.
+- `GameConfigurationScreen` gained a "Manage sources" button that navigates to the new screen.
+- API client extended with `presignUpload`, `uploadFile`, `createIngestion`, `getIngestion`; new type surface (`IngestionJobView`, `PresignedUploadResponse`, `SourceType`, `Authority`, …).
+
+`evals/fixtures/ingestion/`:
+
+- `tiny-rulebook.pages.json` — per-page plaintext for the two-page synthetic rulebook.
+- `tiny-rulebook.v2.pages.json` — same rulebook with an errata section, used to exercise the supersede/`knowledgeRevision` flow.
+- `living-rules.html` — small living-rules page used by the HTML parser test and by the future URL smoke test.
+- `README.md` explains why no real PDF ships in git (extractor seam lets us test parser/chunker with plaintext fixtures).
 
 ## Active decisions
 
@@ -60,40 +82,24 @@ Load-bearing decisions from `docs/adr/`:
 - **ADR-0005** — Bounded `WebSearchProvider` loop with AgentCore adapter.
 - **ADR-0006** — DynamoDB multi-table design for M1 entities (games, content, sessions, messages).
 - **ADR-0007** — Same-origin routing via CloudFront `/api/*` + first-party `SameSite=Lax` session cookie; no API-side CORS.
-
-M0-only implementation choices captured for future readers:
-
-- CDK opts out of `exactOptionalPropertyTypes` (ADR-0001 Revisions).
-- `BgrGithubOidcStack` imports the existing account-wide OIDC provider (the provider is a per-account IAM singleton).
-- Trust policy uses `repo:<owner>/<repo>:*` **and** `repo:<owner>@<ownerId>/<repo>@<repoId>:*` — the second pattern is required because GitHub emits the immutable-id `sub` shape for this user/org.
-- Deploy role currently holds `PowerUserAccess` + IAM passthrough as a starting point. Tightened per-service in Milestone 9.
-
-M1-only implementation choices:
-
-- **Slug uniqueness on games.** Enforced with a scan-based check inside `POST /games`. Fine at M1 catalog scale; upgrade path (name-prefix GSI or external index) noted in ADR-0006.
-- **Catalog search.** `GET /games?q=` uses DynamoDB `Scan` + client-side case-insensitive `contains` over name and slug. Bounded by the catalog size; upgrade path in ADR-0006.
-- **Frontend routing.** No `react-router`; a single `Screen` union in `App.tsx` drives navigation between the three screens. When the app grows a URL surface, revisit.
-- **Frontend styling.** Plain CSS + CSS variables. No Tailwind / CSS-in-JS. Documented under G15 in `docs/CONTRADICTIONS_AND_GAPS.md`.
-- **Content seeding.** `deploy-dev.yml` seeds two content packages via `aws dynamodb put-item` (bypasses the API on purpose — content authoring is not an M1 API surface). Deterministic ids (`c_pok`, `c_codex_vol1`) keep re-runs idempotent.
+- **ADR-0008** — Document ingestion via Step Functions + S3 + DynamoDB; deterministic PDF text-layer first; content-hash dedup + supersede/`knowledgeRevision`; SSRF-guarded URL fetch; injectable seams for parser/fetcher/object-store so the pipeline is exercisable end-to-end without AWS.
 
 ## Known issues / open questions
 
 Full tracker: `docs/CONTRADICTIONS_AND_GAPS.md`.
 
-- **G3 / G4 (S3 Vectors and AgentCore regional availability in `ap-southeast-1`).** Still not verified against the account — not blocking M2 (M2 is ingestion + parsing + chunking, no vectors yet). Verify before M3 / M6.
-- **CSRF on state-changing endpoints.** M1 accepts the exposure (no user accounts, private beta blast radius). M4 will add a double-submit CSRF token before `POST /sessions/{id}/messages` ships. Recorded in ADR-0007 Consequences.
-- **CloudFront edge latency on the API path.** Adding CloudFront in front of API Gateway costs a small amount of latency per API call; not measured yet. Revisit during M3 / M4 benchmarking (candidate: custom domain covering both hosts if latency becomes an issue).
-- **CodeQL check is red on PRs.** GitHub's Code Scanning is not enabled for this private repo — same underlying gap as branch protection below. Both `Lint / Typecheck / Test / Synth` and `pnpm audit` pass; PRs merge as `MERGEABLE`.
+- **G3 / G4 (S3 Vectors and AgentCore regional availability in `ap-southeast-1`).** Still unverified. Not blocking M2. Verify before M3 / M6.
+- **Ingestion bucket CORS is wide-open in dev.** `POST /uploads/presign` returns URLs that any origin can PUT to. Fine for the private dev environment; tighten to the CloudFront domain before public beta.
+- **No GSI on the documents table.** Edition-scoped lookups (`findByContentHash`, `findCurrentByKey`, `listDocumentsForEdition`) use `Scan` + `FilterExpression` for M2 (documented in ADR-0008). Upgrade path is a `${gameId}#${editionId}` GSI once the doc count grows.
+- **Fallback parser is a stub.** `createStubFallbackParser` throws; the quality detector only surfaces warnings. Concrete OCR/AI fallback is deferred to a later milestone or ADR once we have real failure data (per §16 and the milestone spec).
+- **`InMemorySessionsRepository`'s TTL check uses wall-clock time.** Tests that hard-code a NOW earlier than the real current date will incorrectly see sessions as expired; fixed by using a far-future NOW in `apps/api/src/handlers/sessions.test.ts`. Pre-existing behavior, worth revisiting when we clock-inject the in-memory repos.
+- **CodeQL check is red on PRs.** Same underlying repo-visibility gap as branch protection.
 
 ## Requires operator decision, if you want them
 
-- **Branch protection on `main`.** GitHub free tier does not allow classic branch protection or rulesets on private repositories. Two options:
-  1. Upgrade the repo owner to GitHub Pro (or move to a paid org) and enable a ruleset requiring the "Lint / Typecheck / Test / Synth" check on `main`.
-  2. Make the repo public.
-  Until one of those happens, "main is protected" is honor-system only. Recorded in `docs/CONTRADICTIONS_AND_GAPS.md` under the resolved section with a caveat.
-- **Code Scanning (CodeQL).** Same repo-visibility limitation as branch protection. Would be enabled by either option above.
-- **`AWS_REGION` for a possible second region** for S3 Vectors or AgentCore — pending G3 / G4 verification.
+- **Branch protection on `main`.** Same options as previously recorded (upgrade to GitHub Pro or make the repo public).
+- **AWS_REGION for a possible second region** for S3 Vectors or AgentCore — pending G3 / G4 verification.
 
 ## Next expected work
 
-Milestone 2 — Document Ingestion. See `docs/milestones/M2-document-ingestion.md`.
+Milestone 3 — Embeddings, Retrieval & Evaluation Foundation. See `docs/milestones/M3-embeddings-retrieval.md`.
