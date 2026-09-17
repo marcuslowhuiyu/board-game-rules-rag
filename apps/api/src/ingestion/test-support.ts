@@ -8,7 +8,8 @@ import {
   type DocumentParser,
   type PdfExtractor,
 } from '@bgr/ingestion';
-import type { IdGenerator } from '@bgr/persistence';
+import type { InMemoryDocumentsRepository, InMemoryGamesRepository } from '@bgr/persistence';
+import { InMemoryAtomicPublisher, type AtomicPublisher, type IdGenerator } from '@bgr/persistence';
 import type { AppContext } from '../lib/context.js';
 import type { StageContext } from './pipeline.js';
 
@@ -19,6 +20,7 @@ export interface StageContextOverrides {
   htmlParser?: DocumentParser;
   urlFetcher?: DocumentFetcher;
   s3Fetcher?: DocumentFetcher;
+  publisher?: AtomicPublisher;
   chunkerOptions?: ChunkerOptions;
   now?: () => Date;
 }
@@ -38,6 +40,15 @@ export function makeStageContext(
   const htmlParser = overrides.htmlParser ?? createHtmlParser();
   const s3Fetcher = overrides.s3Fetcher ?? createS3Fetcher(app.rawStore);
   const urlFetcher = overrides.urlFetcher ?? createUrlFetcher();
+  // The test AppContext always uses the in-memory repos, so we can build
+  // the in-memory publisher against those. Callers who supply their own
+  // publisher (e.g. failure-injection stubs) can override.
+  const publisher =
+    overrides.publisher ??
+    new InMemoryAtomicPublisher(
+      app.documents as InMemoryDocumentsRepository,
+      app.games as InMemoryGamesRepository,
+    );
   const ctx: StageContext = {
     now: overrides.now ?? (() => app.clock.now()),
     ids,
@@ -45,6 +56,7 @@ export function makeStageContext(
     chunks: app.chunks,
     jobs: app.ingestionJobs,
     games: app.games,
+    publisher,
     rawStore: app.rawStore,
     normalizedStore: app.normalizedStore,
     urlFetcher,

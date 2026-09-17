@@ -76,4 +76,24 @@ export class InMemoryGamesRepository implements GamesRepository {
     this.games.set(gameId, { ...existing, editions, updatedAt });
     return nextRevision;
   }
+
+  async replaceEditions(
+    gameId: GameId,
+    editions: readonly Edition[],
+    updatedAt: string,
+    expectedUpdatedAt: string,
+  ): Promise<void> {
+    const existing = this.games.get(gameId);
+    if (!existing) throw new NotFoundError('game', gameId);
+    if (existing.updatedAt !== expectedUpdatedAt) {
+      throw new ConflictError(
+        `game ${gameId} updatedAt ${existing.updatedAt} != expected ${expectedUpdatedAt}`,
+      );
+    }
+    this.games.set(gameId, {
+      ...existing,
+      editions: editions.slice(),
+      updatedAt,
+    });
+  }
 }

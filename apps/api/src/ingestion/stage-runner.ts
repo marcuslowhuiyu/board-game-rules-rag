@@ -16,19 +16,28 @@ export interface StageRunnerEvent {
 export interface StageRunnerOutput {
   jobId: string;
   stage: string;
-  nextStage: string | null;
   status: string;
+  nextStage: string | null;
+  /**
+   * The Step Functions Choice state branches on this: any `true` result
+   * short-circuits the pipeline to the Succeed state (SUCCEEDED short-
+   * circuits, e.g. FETCH duplicate; FAILED gets caught elsewhere).
+   */
+  terminal: boolean;
   duplicate?: boolean;
+  alreadyTerminal?: boolean;
   chunkCount?: number;
   documentId?: string;
   supersededDocumentId?: string;
 }
 
 /**
- * Lambda handler for one ingestion stage. The Step Function invokes it once
- * per stage in the pipeline. Throwing from here surfaces to Step Functions
- * as a Task failure, which the state machine catches and routes to the
- * FailStage state.
+ * Lambda handler for one ingestion stage. The Step Function invokes it
+ * once per stage. Two ways a stage can terminate the pipeline:
+ *   1. Thrown error → caught by state machine, MarkJobFailed writes FAILED.
+ *   2. Result with `terminal: true` → Choice state jumps straight to
+ *      PipelineSucceeded (used by FETCH duplicate + FINALIZE + any stage
+ *      that observes an already-terminal job).
  */
 export const handler = async (event: StageRunnerEvent): Promise<StageRunnerOutput> => {
   const parsed = EventSchema.parse(event);
@@ -37,10 +46,12 @@ export const handler = async (event: StageRunnerEvent): Promise<StageRunnerOutpu
   const out: StageRunnerOutput = {
     jobId: result.job.jobId,
     stage: result.ranStage,
+    status: result.status,
     nextStage: result.nextStage,
-    status: result.job.status,
+    terminal: result.terminal,
   };
   if (result.duplicate) out.duplicate = true;
+  if (result.alreadyTerminal) out.alreadyTerminal = true;
   if (result.chunkCount !== undefined) out.chunkCount = result.chunkCount;
   if (result.documentId !== undefined) out.documentId = result.documentId;
   if (result.supersededDocumentId !== undefined) {

@@ -47,7 +47,13 @@ export const IngestionSourceRefSchema = z.discriminatedUnion('kind', [
 ]);
 export type IngestionSourceRef = z.infer<typeof IngestionSourceRefSchema>;
 
-/** Payload accepted by POST /ingestion. */
+/**
+ * Payload accepted by `POST /ingestion`. Deliberately does not expose the
+ * `forceFailureStage` field that the runtime job record carries — synthetic
+ * failure injection is an internal test-only affordance and never travels
+ * over the public API. Tests construct jobs with the internal field
+ * directly (`InternalCreateIngestionJobInputSchema`).
+ */
 export const CreateIngestionJobInputSchema = z.object({
   gameId: GameIdSchema,
   editionId: EditionIdSchema,
@@ -58,10 +64,32 @@ export const CreateIngestionJobInputSchema = z.object({
   source: IngestionSourceRefSchema,
   /** Optional label for the source version (`v1.4`, `2024-05`, …). */
   version: z.string().max(80).optional(),
-  /** Override for unit tests / synthetic failures ("normalize", "chunk" …). */
-  forceFailureStage: IngestionStageSchema.optional(),
 });
 export type CreateIngestionJobInput = z.infer<typeof CreateIngestionJobInputSchema>;
+
+/**
+ * Internal-only input schema that additionally accepts `forceFailureStage`.
+ * Used by unit tests + failure-injection deploy smoke tests, never bound to
+ * an HTTP route.
+ */
+export const InternalCreateIngestionJobInputSchema = CreateIngestionJobInputSchema.extend({
+  forceFailureStage: IngestionStageSchema.optional(),
+});
+export type InternalCreateIngestionJobInput = z.infer<typeof InternalCreateIngestionJobInputSchema>;
+
+/**
+ * Compact quality report attached to a job when the parser flags something
+ * (empty pages, garbled text, likely scan). Mirrors `DocumentQualityReport`
+ * from `@bgr/ingestion`; duplicated in domain to keep persistence dep-free.
+ */
+export const IngestionQualityReportSchema = z.object({
+  emptyPageRatio: z.number().min(0).max(1),
+  averageCharsPerPage: z.number().nonnegative(),
+  garbledCharRatio: z.number().min(0).max(1),
+  isLikelyScan: z.boolean(),
+  warnings: z.array(z.string().max(500)).max(32).default([]),
+});
+export type IngestionQualityReport = z.infer<typeof IngestionQualityReportSchema>;
 
 /**
  * Persisted ingestion job. Written once at create-time, mutated by each
@@ -80,10 +108,22 @@ export const IngestionJobSchema = z.object({
   status: IngestionStatusSchema,
   stage: IngestionStageSchema,
   completedStages: z.array(IngestionStageSchema).default([]),
+  /**
+   * Document id reserved during the CHUNK stage. Chunks are written
+   * against this id BEFORE FINALIZE runs the atomic publish. Present as
+   * soon as CHUNK completes; on a successful FINALIZE it becomes
+   * `documentId`.
+   */
+  plannedDocumentId: SourceDocumentIdSchema.optional(),
+  /**
+   * Present only after a successful FINALIZE (either fresh publish or
+   * duplicate short-circuit).
+   */
   documentId: SourceDocumentIdSchema.optional(),
   chunkCount: z.number().int().nonnegative().optional(),
   duplicateOf: SourceDocumentIdSchema.optional(),
   supersededDocumentId: SourceDocumentIdSchema.optional(),
+  qualityReport: IngestionQualityReportSchema.optional(),
   version: z.string().max(80).optional(),
   forceFailureStage: IngestionStageSchema.optional(),
   error: z

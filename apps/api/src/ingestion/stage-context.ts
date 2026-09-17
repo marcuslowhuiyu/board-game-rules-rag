@@ -1,5 +1,6 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import {
+  DynamoAtomicPublisher,
   DynamoChunksRepository,
   DynamoDocumentsRepository,
   DynamoGamesRepository,
@@ -27,18 +28,19 @@ let cached: StageContext | undefined;
 
 export function getStageContext(): StageContext {
   if (cached) return cached;
-  const region = process.env['AWS_REGION'] ?? 'ap-southeast-1';
   const bucket = requireEnv('INGESTION_BUCKET');
+  const gamesTable = requireEnv('GAMES_TABLE');
+  const documentsTable = requireEnv('DOCUMENTS_TABLE');
   const ddb = new DynamoDBClient({});
-  const rawStore = new S3ObjectStore({ bucket, region });
-  const normalizedStore = rawStore;
+  const store = new S3ObjectStore({
+    bucket,
+    region: process.env['AWS_REGION'] ?? 'ap-southeast-1',
+  });
 
   cached = {
     now: () => new Date(),
     ids: cryptoIdGenerator,
-    documents: new DynamoDocumentsRepository(ddb, {
-      documentsTable: requireEnv('DOCUMENTS_TABLE'),
-    }),
+    documents: new DynamoDocumentsRepository(ddb, { documentsTable }),
     chunks: new DynamoChunksRepository(ddb, {
       chunksTable: requireEnv('CHUNKS_TABLE'),
     }),
@@ -46,13 +48,14 @@ export function getStageContext(): StageContext {
       ingestionJobsTable: requireEnv('INGESTION_JOBS_TABLE'),
     }),
     games: new DynamoGamesRepository(ddb, {
-      gamesTable: requireEnv('GAMES_TABLE'),
+      gamesTable,
       contentTable: requireEnv('CONTENT_TABLE'),
     }),
-    rawStore,
-    normalizedStore,
+    publisher: new DynamoAtomicPublisher(ddb, { documentsTable, gamesTable }),
+    rawStore: store,
+    normalizedStore: store,
     urlFetcher: createUrlFetcher(),
-    s3Fetcher: createS3Fetcher(rawStore),
+    s3Fetcher: createS3Fetcher(store),
     pdfParser: createPdfTextLayerParser(createUnpdfExtractor()),
     htmlParser: createHtmlParser(),
     logger: createLogger({ base: { app: 'bgr-ingestion' } }),

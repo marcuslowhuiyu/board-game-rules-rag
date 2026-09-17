@@ -130,45 +130,97 @@ describe('DevStack', () => {
     template.resourceCountIs('AWS::S3::Bucket', 2);
   });
 
-  it('provisions an ingestion S3 bucket with a raw/ lifecycle rule and PUT CORS', () => {
+  it('retains raw/ and normalized/, expires temporary/ingestion/ after 7 days', () => {
+    // raw/ and normalized/ carry finalized authoritative bytes and canonical
+    // chunk bodies — they must never be silently expired (ADR-0008 §R9).
+    // temporary/ingestion/{jobId}/state/*.json is per-job scratch; expire
+    // after a week. Multipart cleanup on every prefix.
     template.hasResourceProperties('AWS::S3::Bucket', {
       LifecycleConfiguration: Match.objectLike({
         Rules: Match.arrayWith([
           Match.objectLike({
-            Id: 'expire-raw-90d',
+            Id: 'expire-temporary-ingestion-7d',
+            Status: 'Enabled',
+            Prefix: 'temporary/ingestion/',
+            ExpirationInDays: 7,
+          }),
+          Match.objectLike({
+            Id: 'abort-orphan-multipart-raw',
             Status: 'Enabled',
             Prefix: 'raw/',
-            ExpirationInDays: 90,
+            AbortIncompleteMultipartUpload: Match.objectLike({ DaysAfterInitiation: 3 }),
           }),
         ]),
       }),
-      CorsConfiguration: Match.objectLike({
-        CorsRules: Match.arrayWith([
-          Match.objectLike({ AllowedMethods: Match.arrayWith(['PUT']) }),
-        ]),
-      }),
     });
+    const buckets = template.findResources('AWS::S3::Bucket');
+    for (const b of Object.values(buckets)) {
+      const rules =
+        (
+          b.Properties as {
+            LifecycleConfiguration?: {
+              Rules?: Array<{ Id?: string; ExpirationInDays?: number; Prefix?: string }>;
+            };
+          }
+        ).LifecycleConfiguration?.Rules ?? [];
+      for (const r of rules) {
+        if (r.Prefix === 'raw/' || r.Prefix === 'normalized/') {
+          expect(r.ExpirationInDays).toBeUndefined();
+        }
+      }
+    }
   });
 
-  it('provisions a Step Functions state machine with the M2 stage tasks', () => {
+  it('restricts ingestion-bucket CORS to the CloudFront distribution (never `*`)', () => {
+    // Find the ingestion bucket — the one whose CORS references the
+    // CloudFront domain name.
+    const buckets = template.findResources('AWS::S3::Bucket');
+    let ingestion:
+      { CorsConfiguration?: { CorsRules?: Array<{ AllowedOrigins?: unknown[] }> } } | undefined;
+    for (const b of Object.values(buckets)) {
+      const cors = (b.Properties as { CorsConfiguration?: unknown }).CorsConfiguration;
+      if (cors) ingestion = b.Properties as never;
+    }
+    expect(ingestion).toBeDefined();
+    const rule = ingestion!.CorsConfiguration!.CorsRules![0]!;
+    const origins = rule.AllowedOrigins ?? [];
+    expect(origins.length).toBeGreaterThan(0);
+    for (const o of origins) {
+      // Origins come out as Fn::Join tokens referencing the distribution.
+      const asJson = JSON.stringify(o);
+      expect(asJson.includes('"*"')).toBe(false);
+      expect(asJson).toMatch(/WebDistribution.*DomainName|"DomainName"/);
+    }
+  });
+
+  it('state machine has one Choice after each M2 stage plus a MarkJobFailed_<STAGE> catch', () => {
     template.resourceCountIs('AWS::StepFunctions::StateMachine', 1);
-    // DefinitionString is a Fn::Join at synth-time; fetch the raw resource
-    // and stringify the joined pieces to check the stages appear.
     const machines = template.findResources('AWS::StepFunctions::StateMachine');
     const first = Object.values(machines)[0] as {
       Properties: { DefinitionString: { 'Fn::Join': [string, unknown[]] } };
     };
     const parts = first.Properties.DefinitionString['Fn::Join'][1];
     const flat = JSON.stringify(parts);
-    for (const stage of [
-      'Stage_VALIDATE',
-      'Stage_FETCH',
-      'Stage_PARSE',
-      'Stage_CHUNK',
-      'Stage_FINALIZE',
-    ]) {
-      expect(flat).toContain(stage);
+    const stages = [
+      'VALIDATE',
+      'FETCH',
+      'PARSE',
+      'CLASSIFY',
+      'DISCOVER_ERRATA',
+      'NORMALIZE',
+      'CHUNK',
+      'FINALIZE',
+    ];
+    for (const stage of stages) {
+      expect(flat).toContain(`Stage_${stage}`);
+      expect(flat).toContain(`Check_After_${stage}`);
+      expect(flat).toContain(`MarkJobFailed_${stage}`);
     }
+    // Every terminal Fail transitions through a MarkJobFailed_<STAGE>
+    // Lambda first, so no path leaves the job stuck RUNNING.
+    expect(flat).toContain('PipelineFailed');
+    // Choice branches on `$.terminal === true`.
+    expect(flat).toContain('$.terminal');
   });
 
   it('exposes M2 routes on the HTTP API', () => {
@@ -183,13 +235,11 @@ describe('DevStack', () => {
     }
   });
 
-  it('provisions a second Node 22 Lambda for the ingestion stage runner', () => {
-    // Two Node 22 Lambdas total: api-fn + stage-runner-fn. (Auto-delete
-    // custom resources use a different runtime.)
+  it('provisions the ingestion Node 22 Lambdas (api + stage-runner + mark-job-failed)', () => {
     const fns = template.findResources('AWS::Lambda::Function', {
       Properties: { Runtime: 'nodejs22.x' },
     });
-    expect(Object.keys(fns).length).toBeGreaterThanOrEqual(2);
+    expect(Object.keys(fns).length).toBeGreaterThanOrEqual(3);
   });
 });
 

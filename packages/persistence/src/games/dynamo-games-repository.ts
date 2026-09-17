@@ -151,19 +151,42 @@ export class DynamoGamesRepository implements GamesRepository {
     const nextRevision = edition.knowledgeRevision + 1;
     const editions = current.editions.slice();
     editions[idx] = { ...edition, knowledgeRevision: nextRevision, updatedAt };
-    await this.doc.send(
-      new UpdateCommand({
-        TableName: this.tables.gamesTable,
-        Key: { gameId },
-        UpdateExpression: 'SET editions = :editions, updatedAt = :updatedAt',
-        ConditionExpression: 'updatedAt = :expectedUpdatedAt',
-        ExpressionAttributeValues: {
-          ':editions': editions,
-          ':updatedAt': updatedAt,
-          ':expectedUpdatedAt': current.updatedAt,
-        },
-      }),
-    );
+    try {
+      await this.replaceEditions(gameId, editions, updatedAt, current.updatedAt);
+    } catch (err) {
+      if (err instanceof ConflictError) throw err;
+      throw err;
+    }
     return nextRevision;
+  }
+
+  async replaceEditions(
+    gameId: GameId,
+    editions: readonly Edition[],
+    updatedAt: string,
+    expectedUpdatedAt: string,
+  ): Promise<void> {
+    try {
+      await this.doc.send(
+        new UpdateCommand({
+          TableName: this.tables.gamesTable,
+          Key: { gameId },
+          UpdateExpression: 'SET editions = :editions, updatedAt = :updatedAt',
+          ConditionExpression: 'updatedAt = :expectedUpdatedAt',
+          ExpressionAttributeValues: {
+            ':editions': editions,
+            ':updatedAt': updatedAt,
+            ':expectedUpdatedAt': expectedUpdatedAt,
+          },
+        }),
+      );
+    } catch (err) {
+      if (err instanceof ConditionalCheckFailedException) {
+        throw new ConflictError(
+          `game ${gameId} moved underneath us (expected updatedAt ${expectedUpdatedAt})`,
+        );
+      }
+      throw err;
+    }
   }
 }

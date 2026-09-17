@@ -103,13 +103,18 @@ export class DynamoDocumentsRepository implements DocumentsRepository {
   async findByContentHash(
     gameId: GameId,
     editionId: EditionId,
+    contentId: ContentId,
     contentHash: string,
   ): Promise<SourceDocument | null> {
-    const items = await this.scanFilter('gameId = :g AND editionId = :e AND contentHash = :h', {
-      ':g': gameId,
-      ':e': editionId,
-      ':h': contentHash,
-    });
+    const items = await this.scanFilter(
+      'gameId = :g AND editionId = :e AND contentId = :c AND contentHash = :h',
+      {
+        ':g': gameId,
+        ':e': editionId,
+        ':c': contentId,
+        ':h': contentHash,
+      },
+    );
     return items[0] ?? null;
   }
 

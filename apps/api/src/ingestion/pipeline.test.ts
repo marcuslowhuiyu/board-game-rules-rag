@@ -7,7 +7,6 @@ import {
   asSourceDocumentId,
   IngestionJobSchema,
   type ContentPackage,
-  type CreateIngestionJobInput,
   type Game,
   type IngestionJob,
   type IngestionSourceRef,
@@ -74,7 +73,7 @@ async function createPdfJob(
   ctx: AppContext,
   s3Key: string,
   bytes: Uint8Array,
-  overrides: Partial<CreateIngestionJobInput> = {},
+  overrides: Partial<IngestionJob> = {},
 ): Promise<IngestionJob> {
   await ctx.rawStore.putBytes(s3Key, bytes, 'application/pdf');
   const source: IngestionSourceRef = {
@@ -316,5 +315,164 @@ describe('ingestion pipeline (M2 acceptance)', () => {
       'CHUNK',
       'FINALIZE',
     ]);
+  });
+
+  it('FETCH duplicate short-circuit marks the result terminal (state machine skips later stages)', async () => {
+    const stageCtx = makeStageContext(ctx, {
+      pdfExtractor: makeExtractor(RULEBOOK_V1_PAGES),
+    });
+    const bytes = new Uint8Array([9, 9, 9]);
+    const first = await createPdfJob(ctx, 'raw/first.pdf', bytes);
+    await runFullPipeline(first.jobId, stageCtx);
+
+    const second = await createPdfJob(ctx, 'raw/second.pdf', bytes);
+    // Only run VALIDATE + FETCH; FETCH must return terminal:true and short-
+    // circuit the rest of the pipeline (the state machine's Choice state
+    // relies on this).
+    await runStage(second.jobId, 'VALIDATE', stageCtx);
+    const fetchResult = await runStage(second.jobId, 'FETCH', stageCtx);
+    expect(fetchResult.terminal).toBe(true);
+    expect(fetchResult.status).toBe('SUCCEEDED');
+    expect(fetchResult.duplicate).toBe(true);
+    expect(fetchResult.nextStage).toBeNull();
+  });
+
+  it('deduplicates only within the same contentId — identical bytes on a different content package publish a new document', async () => {
+    await ctx.games.addContent({
+      contentId: asContentId('c_promo'),
+      gameId,
+      editionId,
+      slug: 'promo-pack',
+      name: 'Promo Pack',
+      contentType: 'PROMO',
+      dependencies: [],
+      status: 'READY',
+    });
+    const bytes = new Uint8Array([4, 4, 4]);
+    const stageCtx = makeStageContext(ctx, { pdfExtractor: makeExtractor(RULEBOOK_V1_PAGES) });
+
+    const baseJob = await createPdfJob(ctx, 'raw/base.pdf', bytes);
+    const baseResult = await runFullPipeline(baseJob.jobId, stageCtx);
+
+    const promoJob = await createPdfJob(ctx, 'raw/promo.pdf', bytes, {
+      contentId: asContentId('c_promo'),
+      title: 'Same PDF but for the promo',
+    });
+    const promoResult = await runFullPipeline(promoJob.jobId, stageCtx);
+
+    expect(promoResult.job.documentId).not.toBe(baseResult.job.documentId);
+    expect(promoResult.job.duplicateOf).toBeUndefined();
+    const docs = await ctx.documents.listDocumentsForEdition(gameId, editionId);
+    expect(docs.length).toBe(2);
+    expect(new Set(docs.map((d) => d.contentId))).toEqual(new Set(['c_base', 'c_promo']));
+  });
+
+  it('quality gate: PARSE fails on likely-scan output (zero blocks, high empty ratio)', async () => {
+    const emptyExtractor: PdfExtractor = { extract: async () => ({ pages: ['', '', ''] }) };
+    const stageCtx = makeStageContext(ctx, { pdfExtractor: emptyExtractor });
+    const job = await createPdfJob(ctx, 'raw/scan.pdf', new Uint8Array([1, 1, 1]));
+    await expect(runFullPipeline(job.jobId, stageCtx)).rejects.toBeInstanceOf(StageError);
+    const failed = await ctx.ingestionJobs.getJob(job.jobId);
+    expect(failed?.status).toBe('FAILED');
+    expect(failed?.error?.stage).toBe('PARSE');
+    expect(failed?.qualityReport?.isLikelyScan).toBe(true);
+    const game = await ctx.games.getGame(gameId);
+    expect(game?.editions[0]?.knowledgeRevision).toBe(0);
+    expect(await ctx.documents.listDocumentsForEdition(gameId, editionId)).toEqual([]);
+  });
+
+  it('crash between CHUNK and FINALIZE: retry succeeds and does not misreport as duplicate', async () => {
+    const stageCtx = makeStageContext(ctx, { pdfExtractor: makeExtractor(RULEBOOK_V1_PAGES) });
+    const job = await createPdfJob(ctx, 'raw/crash.pdf', new Uint8Array([2, 2, 2]));
+    // Run every stage up to and including CHUNK; then simulate a crash
+    // BEFORE FINALIZE by stopping here.
+    for (const stage of [
+      'VALIDATE',
+      'FETCH',
+      'PARSE',
+      'CLASSIFY',
+      'DISCOVER_ERRATA',
+      'NORMALIZE',
+      'CHUNK',
+    ] as const) {
+      await runStage(job.jobId, stage, stageCtx);
+    }
+    const afterChunk = await ctx.ingestionJobs.getJob(job.jobId);
+    expect(afterChunk?.plannedDocumentId).toBeDefined();
+    // No document is published yet.
+    expect(await ctx.documents.listDocumentsForEdition(gameId, editionId)).toEqual([]);
+    // Previous state unchanged.
+    const gameBefore = await ctx.games.getGame(gameId);
+    expect(gameBefore?.editions[0]?.knowledgeRevision).toBe(0);
+
+    // Now run FINALIZE — should complete successfully.
+    const finalize = await runStage(job.jobId, 'FINALIZE', stageCtx);
+    expect(finalize.terminal).toBe(true);
+    expect(finalize.duplicate).toBeUndefined();
+    expect(finalize.status).toBe('SUCCEEDED');
+    const gameAfter = await ctx.games.getGame(gameId);
+    expect(gameAfter?.editions[0]?.knowledgeRevision).toBe(1);
+  });
+
+  it('crash after FINALIZE publish (before job.updateJob): retry recovers via plannedDocumentId', async () => {
+    const stageCtx = makeStageContext(ctx, { pdfExtractor: makeExtractor(RULEBOOK_V1_PAGES) });
+    const job = await createPdfJob(ctx, 'raw/half.pdf', new Uint8Array([3, 3, 3]));
+    // Advance to and including CHUNK; then run FINALIZE.
+    for (const stage of [
+      'VALIDATE',
+      'FETCH',
+      'PARSE',
+      'CLASSIFY',
+      'DISCOVER_ERRATA',
+      'NORMALIZE',
+      'CHUNK',
+    ] as const) {
+      await runStage(job.jobId, stage, stageCtx);
+    }
+    // Simulate a crash between publish and job.updateJob: manually clear the
+    // job's SUCCEEDED marker so a retry sees an in-flight FINALIZE while the
+    // document + edition mutations have already landed.
+    await runStage(job.jobId, 'FINALIZE', stageCtx);
+    await ctx.ingestionJobs.updateJob(
+      job.jobId,
+      {
+        status: 'RUNNING',
+        stage: 'FINALIZE',
+        documentId: undefined,
+      },
+      ctx.clock.now().toISOString(),
+    );
+
+    // Second FINALIZE — must recover, not mislabel as a duplicate.
+    const retry = await runStage(job.jobId, 'FINALIZE', stageCtx);
+    expect(retry.terminal).toBe(true);
+    expect(retry.status).toBe('SUCCEEDED');
+    // A recovery is NOT a duplicate (its `documentId` equals what the same
+    // job planned — the state machine and UI should not label it as one).
+    expect(retry.duplicate).toBeUndefined();
+    // Revision was bumped exactly once — the retry did not double-bump.
+    const game = await ctx.games.getGame(gameId);
+    expect(game?.editions[0]?.knowledgeRevision).toBe(1);
+    const docs = await ctx.documents.listDocumentsForEdition(gameId, editionId);
+    expect(docs).toHaveLength(1);
+    expect(docs[0]?.status).toBe('CURRENT');
+  });
+
+  it('stage runner is idempotent on already-terminal jobs (safe against Step Functions redelivery)', async () => {
+    const stageCtx = makeStageContext(ctx, { pdfExtractor: makeExtractor(RULEBOOK_V1_PAGES) });
+    const job = await createPdfJob(ctx, 'raw/terminal.pdf', new Uint8Array([5, 5, 5]));
+    const first = await runFullPipeline(job.jobId, stageCtx);
+    expect(first.terminal).toBe(true);
+    // Unexpected redelivery of any earlier stage must be a safe no-op.
+    for (const s of ['VALIDATE', 'FETCH', 'CHUNK', 'FINALIZE'] as const) {
+      const again = await runStage(job.jobId, s, stageCtx);
+      expect(again.terminal).toBe(true);
+      expect(again.alreadyTerminal).toBe(true);
+      expect(again.status).toBe('SUCCEEDED');
+    }
+    const game = await ctx.games.getGame(gameId);
+    expect(game?.editions[0]?.knowledgeRevision).toBe(1);
+    const docs = await ctx.documents.listDocumentsForEdition(gameId, editionId);
+    expect(docs).toHaveLength(1);
   });
 });

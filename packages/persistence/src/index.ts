@@ -20,3 +20,6 @@ export * from './chunks/dynamo-chunks-repository.js';
 export * from './ingestion-jobs/ingestion-jobs-repository.js';
 export * from './ingestion-jobs/in-memory-ingestion-jobs-repository.js';
 export * from './ingestion-jobs/dynamo-ingestion-jobs-repository.js';
+export * from './publisher/atomic-publisher.js';
+export * from './publisher/in-memory-atomic-publisher.js';
+export * from './publisher/dynamo-atomic-publisher.js';

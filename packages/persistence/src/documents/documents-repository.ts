@@ -15,13 +15,19 @@ export interface DocumentsRepository {
   /** All documents for an edition (any status). Small-scale scan; see ADR-0008. */
   listDocumentsForEdition(gameId: GameId, editionId: EditionId): Promise<SourceDocument[]>;
   /**
-   * Look up by dedup key — same edition + same raw bytes.
-   * Returns any status (so we can short-circuit on ACTIVE or refuse re-ingest of an ARCHIVED).
-   * See MASTER_PLAN §18.
+   * Look up by dedup key — same (game, edition, contentId, contentHash).
+   * See MASTER_PLAN §18 and ADR-0008: `contentId` is part of the identity
+   * because the same bytes may legitimately be attached to different content
+   * packages (e.g. a base-rulebook PDF also uploaded against a promo pack).
+   * `sourceType` is intentionally NOT part of the dedup key — the same
+   * document should not be re-ingested twice for a single content package
+   * simply because the operator toggled the source-type dropdown.
+   * Returns any status (CURRENT/SUPERSEDED/ARCHIVED).
    */
   findByContentHash(
     gameId: GameId,
     editionId: EditionId,
+    contentId: ContentId,
     contentHash: string,
   ): Promise<SourceDocument | null>;
   /**

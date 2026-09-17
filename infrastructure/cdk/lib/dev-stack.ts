@@ -18,24 +18,26 @@ import { AttributeType, BillingMode, Table, TableEncryption } from 'aws-cdk-lib/
 import { Runtime } from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction, OutputFormat } from 'aws-cdk-lib/aws-lambda-nodejs';
 import { LogGroup, RetentionDays } from 'aws-cdk-lib/aws-logs';
+import type { CfnBucket } from 'aws-cdk-lib/aws-s3';
 import {
   BlockPublicAccess,
   Bucket,
   BucketEncryption,
-  HttpMethods,
   type LifecycleRule,
 } from 'aws-cdk-lib/aws-s3';
 import {
+  Chain,
+  Choice,
+  Condition,
   DefinitionBody,
-  IntegrationPattern,
+  Fail,
   JsonPath,
   LogLevel,
   Pass,
   StateMachine,
   Succeed,
-  Fail,
   TaskInput,
-  Chain,
+  type IChainable,
 } from 'aws-cdk-lib/aws-stepfunctions';
 import { LambdaInvoke } from 'aws-cdk-lib/aws-stepfunctions-tasks';
 import type { Construct } from 'constructs';
@@ -132,7 +134,10 @@ export class DevStack extends Stack {
       removalPolicy: RemovalPolicy.DESTROY,
     });
 
-    // ------ Ingestion S3 bucket (raw/ + normalized/) --------------------
+    // ------ Ingestion S3 bucket (raw/ + normalized/ + temporary/) --------
+    // CORS is left unset here and applied after the CloudFront distribution
+    // is constructed (bottom of the constructor) so `allowedOrigins` can pin
+    // to the distribution's domain instead of `*`.
     const ingestionBucket = new Bucket(this, 'IngestionBucket', {
       blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
       encryption: BucketEncryption.S3_MANAGED,
@@ -141,16 +146,6 @@ export class DevStack extends Stack {
       removalPolicy: RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
       lifecycleRules: buildIngestionLifecycle(),
-      // Presigned PUTs go directly from the browser to S3 — needs CORS.
-      cors: [
-        {
-          allowedMethods: [HttpMethods.PUT],
-          allowedOrigins: ['*'],
-          allowedHeaders: ['*'],
-          exposedHeaders: ['ETag'],
-          maxAge: 3000,
-        },
-      ],
     });
 
     // ------ API Lambda + HTTP API ---------------------------------------
@@ -198,9 +193,6 @@ export class DevStack extends Stack {
       entry: path.resolve(__dirname, '../../../apps/api/src/ingestion/stage-runner.ts'),
       handler: 'handler',
       memorySize: 1024,
-      // PDF parsing (unpdf → pdfjs-dist) can be moderately CPU-heavy on
-      // large rulebooks; a 60s wall-clock keeps us safe under Lambda limits
-      // while Step Functions handles orchestration-level retries.
       timeout: Duration.seconds(60),
       logGroup: stageRunnerLogGroup,
       environment: {
@@ -228,54 +220,119 @@ export class DevStack extends Stack {
     ingestionJobsTable.grantReadWriteData(stageRunnerFn);
     ingestionBucket.grantReadWrite(stageRunnerFn);
 
+    // ------ MarkJobFailed Lambda (state-machine safety net) --------------
+    // Even when the stage-runner Lambda itself fails (Lambda.ServiceException,
+    // SdkClientException, timeout, ...) the state machine's Catch path
+    // invokes this Lambda so the ingestion job row is observably FAILED.
+    // Every terminal Fail state in the state machine transitions through
+    // this Lambda first.
+    const markJobFailedLogGroup = new LogGroup(this, 'MarkJobFailedLogs', {
+      retention: RetentionDays.ONE_WEEK,
+      removalPolicy: RemovalPolicy.DESTROY,
+    });
+    const markJobFailedFn = new NodejsFunction(this, 'MarkJobFailedFn', {
+      runtime: Runtime.NODEJS_22_X,
+      entry: path.resolve(__dirname, '../../../apps/api/src/ingestion/mark-job-failed.ts'),
+      handler: 'handler',
+      memorySize: 256,
+      timeout: Duration.seconds(15),
+      logGroup: markJobFailedLogGroup,
+      environment: {
+        NODE_OPTIONS: '--enable-source-maps',
+        INGESTION_JOBS_TABLE: ingestionJobsTable.tableName,
+      },
+      bundling: {
+        format: OutputFormat.ESM,
+        target: 'node22',
+        sourceMap: true,
+        minify: false,
+      },
+    });
+    ingestionJobsTable.grantReadWriteData(markJobFailedFn);
+
     // ------ Step Functions state machine --------------------------------
     const sfnLogGroup = new LogGroup(this, 'IngestionStateMachineLogs', {
       retention: RetentionDays.ONE_WEEK,
       removalPolicy: RemovalPolicy.DESTROY,
     });
 
+    // Single terminal Fail state at the bottom — every MarkJobFailed_<STAGE>
+    // Task transitions here on success.
     const failState = new Fail(this, 'PipelineFailed', {
-      comment: 'One of the stage Lambdas threw; the job row has the error details.',
-      cause: "Stage runner threw. See the ingestion jobs table for the job's error field.",
+      comment:
+        'Terminal failure state. MarkJobFailed_<STAGE> writes FAILED to the ingestion job before this state ends the execution.',
+      cause: 'See the ingestion job row for `error.stage`, `error.message`, `error.code`.',
       error: 'IngestionStageFailed',
     });
 
-    const stageTasks = M2_STAGES.map((stage) =>
-      new LambdaInvoke(this, `Stage_${stage}`, {
+    const succeed = new Succeed(this, 'PipelineSucceeded');
+    // Trailing Pass state — EMBED / INDEX slot in here in M3 without a
+    // definition rewrite. Both duplicate short-circuits and the last stage
+    // fan into it.
+    const skippedEmbedIndex = new Pass(this, 'SkipEmbedIndexInM2', {
+      comment: 'EMBED / INDEX declared but skipped in M2; the FINALIZE result flows here.',
+    }).next(succeed);
+
+    // Build stage entry-points in reverse so each stage can wire its Choice
+    // "continue" branch to the next stage's entry.
+    const stageEntries = new Map<(typeof M2_STAGES)[number], IChainable>();
+    for (let i = M2_STAGES.length - 1; i >= 0; i--) {
+      const stage = M2_STAGES[i]!;
+      const nextEntry: IChainable =
+        i === M2_STAGES.length - 1 ? skippedEmbedIndex : stageEntries.get(M2_STAGES[i + 1]!)!;
+
+      const markFailedTask = new LambdaInvoke(this, `MarkJobFailed_${stage}`, {
+        lambdaFunction: markJobFailedFn,
+        payloadResponseOnly: true,
+        payload: TaskInput.fromObject({
+          jobId: JsonPath.stringAt('$.jobId'),
+          stage,
+          cause: JsonPath.stringAt('$.error.Cause'),
+          errorName: JsonPath.stringAt('$.error.Error'),
+        }),
+        resultPath: JsonPath.DISCARD,
+      }).next(failState);
+
+      const stageTask = new LambdaInvoke(this, `Stage_${stage}`, {
         lambdaFunction: stageRunnerFn,
-        integrationPattern: IntegrationPattern.REQUEST_RESPONSE,
+        payloadResponseOnly: true,
         payload: TaskInput.fromObject({
           jobId: JsonPath.stringAt('$.jobId'),
           stage,
         }),
-        resultPath: JsonPath.DISCARD,
-        // The stage runner is idempotent — a stalled Lambda / throttled DDB
-        // write is safe to retry. Two attempts, 5–20s backoff.
-      })
-        .addRetry({
-          errors: [
-            'Lambda.ServiceException',
-            'Lambda.AWSLambdaException',
-            'Lambda.SdkClientException',
-          ],
-          maxAttempts: 2,
-          interval: Duration.seconds(5),
-          backoffRate: 2,
-        })
-        .addCatch(failState, { errors: ['States.ALL'], resultPath: '$.error' }),
-    );
+        // Overwrite the input with the runner's response object. The
+        // response carries `jobId`, so subsequent Choice/Task states keep
+        // access to it via `$.jobId`.
+        resultPath: '$',
+      });
+      stageTask.addRetry({
+        errors: [
+          'Lambda.ServiceException',
+          'Lambda.AWSLambdaException',
+          'Lambda.SdkClientException',
+          'Lambda.TooManyRequestsException',
+        ],
+        maxAttempts: 2,
+        interval: Duration.seconds(5),
+        backoffRate: 2,
+      });
+      stageTask.addCatch(markFailedTask, {
+        errors: ['States.ALL'],
+        resultPath: '$.error',
+      });
 
-    const succeed = new Succeed(this, 'PipelineSucceeded');
-    // A trailing Pass keeps future EMBED / INDEX insertions non-breaking.
-    const skippedEmbedIndex = new Pass(this, 'SkipEmbedIndexInM2', {
-      comment: 'EMBED / INDEX stages are declared but skipped in M2; they light up in M3.',
-    });
+      // Choice after each stage — a terminal SUCCEEDED result (e.g. FETCH
+      // dedup short-circuit or FINALIZE completion) skips the rest of the
+      // pipeline and jumps to the trailing Pass → Succeed.
+      const choice = new Choice(this, `Check_After_${stage}`)
+        .when(Condition.booleanEquals('$.terminal', true), skippedEmbedIndex)
+        .otherwise(nextEntry);
 
-    let chain: Chain | undefined;
-    for (const task of stageTasks) {
-      chain = chain ? chain.next(task) : Chain.start(task);
+      const entry = stageTask.next(choice);
+      stageEntries.set(stage, entry);
     }
-    chain = chain!.next(skippedEmbedIndex).next(succeed);
+
+    const chain = Chain.start(stageEntries.get('VALIDATE')!);
 
     const stateMachine = new StateMachine(this, 'IngestionStateMachine', {
       definitionBody: DefinitionBody.fromChainable(chain),
@@ -284,8 +341,6 @@ export class DevStack extends Stack {
       tracingEnabled: false,
     });
 
-    // The API Lambda kicks off executions; the state machine invokes the
-    // stage runner (grant already added when we grantInvoke on the SFN).
     stateMachine.grantStartExecution(apiFn);
     apiFn.addEnvironment('INGESTION_STATE_MACHINE_ARN', stateMachine.stateMachineArn);
 
@@ -383,6 +438,22 @@ export class DevStack extends Stack {
       ],
     });
 
+    // Tighten the ingestion bucket CORS to only the CloudFront web origin
+    // (ADR-0008 §R10). Applied via the L1 CfnBucket escape hatch because the
+    // distribution domain is only known after `Distribution` is constructed.
+    const cfnIngestionBucket = ingestionBucket.node.defaultChild as CfnBucket;
+    cfnIngestionBucket.corsConfiguration = {
+      corsRules: [
+        {
+          allowedMethods: ['PUT'],
+          allowedOrigins: [`https://${distribution.distributionDomainName}`],
+          allowedHeaders: ['*'],
+          exposedHeaders: ['ETag'],
+          maxAge: 3000,
+        },
+      ],
+    };
+
     new CfnOutput(this, 'ApiUrl', { value: api.apiEndpoint });
     new CfnOutput(this, 'DistributionDomain', {
       value: distribution.distributionDomainName,
@@ -439,31 +510,42 @@ function baseApiEnvironment(args: ApiEnvArgs): Record<string, string> {
 }
 
 function buildIngestionLifecycle(): LifecycleRule[] {
-  // See MASTER_PLAN §51 cost controls and §49 upload controls. Raw uploads
-  // are retained for 90 days for reprocessing; normalized/state artifacts
-  // are cleaned up more aggressively since the DDB rows are the source of
-  // truth after finalize.
+  // ADR-0008 §R9 storage lifecycle:
+  //   raw/                       — retained; finalized SourceDocument rows
+  //                                 reference these objects. Reprocessing an
+  //                                 uploaded rulebook must remain possible.
+  //   normalized/                — retained; canonical chunk bodies.
+  //   temporary/ingestion/       — 7 day expiry; per-job intermediate stage
+  //                                 state (parsed.json, normalized.json, …).
+  //   temporary/                 — 1 day expiry catch-all for scratch space.
+  // Multipart uploads under any prefix are aborted after 3 days to avoid
+  // orphaned parts.
   return [
     {
-      id: 'expire-raw-90d',
-      prefix: 'raw/',
+      id: 'expire-temporary-ingestion-7d',
+      prefix: 'temporary/ingestion/',
       enabled: true,
-      expiration: Duration.days(90),
-    },
-    {
-      id: 'expire-state-cleanup',
-      prefix: 'normalized/',
-      enabled: true,
-      // Chunk-body files live under normalized/{documentId}/*.txt — the DDB
-      // row references them; multi-part uploads that never complete are
-      // cleaned up eagerly to avoid orphaned parts.
+      expiration: Duration.days(7),
       abortIncompleteMultipartUploadAfter: Duration.days(3),
     },
     {
-      id: 'expire-temp-1d',
+      id: 'expire-temporary-1d',
       prefix: 'temporary/',
       enabled: true,
       expiration: Duration.days(1),
+      abortIncompleteMultipartUploadAfter: Duration.days(3),
+    },
+    {
+      id: 'abort-orphan-multipart-raw',
+      prefix: 'raw/',
+      enabled: true,
+      abortIncompleteMultipartUploadAfter: Duration.days(3),
+    },
+    {
+      id: 'abort-orphan-multipart-normalized',
+      prefix: 'normalized/',
+      enabled: true,
+      abortIncompleteMultipartUploadAfter: Duration.days(3),
     },
   ];
 }

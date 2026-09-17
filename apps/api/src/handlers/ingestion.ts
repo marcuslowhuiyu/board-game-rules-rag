@@ -40,6 +40,10 @@ export function ingestionRoutes(ctxFactory: () => AppContext) {
 
     const nowIso = app.clock.now().toISOString();
     const jobId = asIngestionJobId(app.ids.ingestionJobId());
+    // Deliberately do NOT read `forceFailureStage` from `input` — the public
+    // schema does not carry it (ADR-0008 §R8 / test-only affordance). Tests
+    // that need synthetic failures construct jobs against
+    // `InternalCreateIngestionJobInputSchema` directly.
     const job: IngestionJob = IngestionJobSchema.parse({
       jobId,
       gameId: input.gameId,
@@ -55,9 +59,6 @@ export function ingestionRoutes(ctxFactory: () => AppContext) {
       createdAt: nowIso,
       updatedAt: nowIso,
       ...(input.version !== undefined ? { version: input.version } : {}),
-      ...(input.forceFailureStage !== undefined
-        ? { forceFailureStage: input.forceFailureStage }
-        : {}),
     });
     await app.ingestionJobs.createJob(job);
     try {

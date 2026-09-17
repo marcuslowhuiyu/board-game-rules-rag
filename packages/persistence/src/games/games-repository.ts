@@ -29,6 +29,24 @@ export interface GamesRepository {
    * Atomically bump the knowledgeRevision for a specific edition and return
    * the new revision number. Fails if the edition is not present.
    * See MASTER_PLAN §19 — called by the Finalize ingestion stage.
+   *
+   * NOTE: FINALIZE now prefers the atomic `AtomicPublisher.publishDocument`
+   * path so the revision bump commits in the same DDB transaction as the
+   * new-document publish and the previous-document supersede; direct callers
+   * of `bumpKnowledgeRevision` are legacy paths and dev fixture scripts.
    */
   bumpKnowledgeRevision(gameId: GameId, editionId: EditionId, updatedAt: string): Promise<number>;
+  /**
+   * Overwrite a game's editions array with `editions` and set `updatedAt` to
+   * `updatedAt`, but only if the game's current `updatedAt` still matches
+   * `expectedUpdatedAt`. Used by the atomic publisher; direct call sites
+   * should prefer `bumpKnowledgeRevision`.
+   * Throws a `ConflictError` if the row moved underneath us.
+   */
+  replaceEditions(
+    gameId: GameId,
+    editions: readonly Edition[],
+    updatedAt: string,
+    expectedUpdatedAt: string,
+  ): Promise<void>;
 }

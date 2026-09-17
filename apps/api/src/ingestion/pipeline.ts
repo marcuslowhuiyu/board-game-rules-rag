@@ -1,28 +1,29 @@
 import {
   ChunkSchema,
   IngestionJobSchema,
+  IngestionQualityReportSchema,
   SourceDocumentSchema,
   asChunkId,
   asIngestionJobId,
   asSourceDocumentId,
   type Chunk,
-  type ContentId,
-  type EditionId,
-  type GameId,
+  type Edition,
   type IngestionJob,
   type IngestionJobId,
   type IngestionStage,
   type SourceDocument,
-  type SourceType,
+  type SourceDocumentId,
 } from '@bgr/domain';
 import type { Logger } from '@bgr/shared';
 import type {
+  AtomicPublisher,
   ChunksRepository,
   DocumentsRepository,
   GamesRepository,
   IdGenerator,
   IngestionJobsRepository,
 } from '@bgr/persistence';
+import { PublishConflictError } from '@bgr/persistence';
 import {
   classifySource,
   chunkDocument,
@@ -31,6 +32,7 @@ import {
   type ChunkerOptions,
   type DocumentFetcher,
   type DocumentParser,
+  type DocumentQualityReport,
   type ObjectStore,
   type ParsedDocument,
 } from '@bgr/ingestion';
@@ -42,9 +44,14 @@ export interface StageContext {
   chunks: ChunksRepository;
   jobs: IngestionJobsRepository;
   games: GamesRepository;
+  publisher: AtomicPublisher;
   /** Raw source bytes bucket (`raw/…`). */
   rawStore: ObjectStore;
-  /** Parsed/normalized/chunk text bucket (`normalized/…`). */
+  /**
+   * Bucket for chunk bodies and transient per-stage state.
+   * Chunk bodies live at `normalized/{documentId}/{chunkId}.txt` (persistent).
+   * Transient stage state lives at `temporary/ingestion/{jobId}/state/*.json`.
+   */
   normalizedStore: ObjectStore;
   urlFetcher: DocumentFetcher;
   s3Fetcher: DocumentFetcher;
@@ -54,7 +61,7 @@ export interface StageContext {
   logger?: Logger;
 }
 
-/** Ordered list of stages that actually run in M2. */
+/** Ordered list of stages that run in M2 (EMBED / INDEX skipped until M3). */
 export const M2_STAGE_ORDER: IngestionStage[] = [
   'VALIDATE',
   'FETCH',
@@ -86,22 +93,24 @@ export class StageError extends Error {
 
 export interface RunStageResult {
   job: IngestionJob;
-  /** The stage that just ran (== input stage), and the next one to run — or null when finished. */
   ranStage: IngestionStage;
+  /** Next stage the state machine should invoke, or null when finished. */
   nextStage: IngestionStage | null;
-  /** True when we short-circuited to FINALIZE on a duplicate upload. */
+  /** True when the pipeline is done (success or duplicate). */
+  terminal: boolean;
+  status: IngestionJob['status'];
   duplicate?: boolean;
-  /** Total chunk count after the run (only meaningful for the FINALIZE stage). */
   chunkCount?: number;
   documentId?: string;
   supersededDocumentId?: string;
-  knowledgeRevision?: number;
+  /** True when the stage did nothing because the job is already terminal. */
+  alreadyTerminal?: boolean;
 }
 
 /**
- * Execute one ingestion stage against the job. The Lambda handler wraps
- * this call to translate thrown errors into DynamoDB failure records. The
- * unit tests call this directly for a step-by-step trace.
+ * Execute one ingestion stage against the job. Idempotent: if the job is
+ * already terminal (SUCCEEDED or FAILED), this is a no-op and returns
+ * `terminal: true` so the state machine can exit cleanly on a retry.
  */
 export async function runStage(
   jobIdInput: string,
@@ -112,10 +121,28 @@ export async function runStage(
   const job = await ctx.jobs.getJob(jobId);
   if (!job) throw new StageError(stage, `job not found: ${jobId}`, 'JOB_NOT_FOUND');
 
-  ctx.logger?.info('stage begin', { jobId, stage });
+  ctx.logger?.info('stage begin', { jobId, stage, status: job.status });
 
-  // Force a synthetic failure at the requested stage — used to exercise the
-  // Step Functions failure path in tests and the dev deploy.
+  // Already terminal — safe no-op for retries (an at-least-once state
+  // machine invocation must not re-run a stage on a completed/failed job).
+  if (job.status === 'SUCCEEDED' || job.status === 'FAILED') {
+    return {
+      job,
+      ranStage: stage,
+      nextStage: null,
+      terminal: true,
+      status: job.status,
+      alreadyTerminal: true,
+      ...(job.documentId ? { documentId: job.documentId } : {}),
+      ...(job.chunkCount !== undefined ? { chunkCount: job.chunkCount } : {}),
+      ...(job.duplicateOf ? { duplicate: true } : {}),
+      ...(job.supersededDocumentId ? { supersededDocumentId: job.supersededDocumentId } : {}),
+    };
+  }
+
+  // Synthetic failure — internal test-only affordance. `forceFailureStage`
+  // is not accepted from the public `POST /ingestion` schema; tests set it
+  // via the InternalCreateIngestionJobInputSchema.
   if (job.forceFailureStage === stage) {
     await failJob(ctx, job, stage, `forced failure at stage ${stage}`, 'FORCED_FAILURE');
     throw new StageError(stage, `forced failure at stage ${stage}`, 'FORCED_FAILURE');
@@ -150,10 +177,8 @@ export async function runStage(
         break;
       default:
         // EMBED / INDEX are stubbed in the state machine but not exercised
-        // in M2; they light up in M3.
-        mutated = await advanceStage(ctx, job, stage, {
-          status: 'RUNNING',
-        });
+        // in M2; treat as no-op advances.
+        mutated = await advanceStage(ctx, job, stage, { status: 'RUNNING' });
     }
   } catch (err) {
     if (err instanceof StageError) {
@@ -165,7 +190,8 @@ export async function runStage(
     throw new StageError(stage, message);
   }
 
-  const isDuplicate = mutated.duplicateOf !== undefined && stage === 'FETCH';
+  const isDuplicate =
+    mutated.duplicateOf !== undefined && mutated.duplicateOf !== mutated.plannedDocumentId;
   const isFinished = mutated.status === 'SUCCEEDED';
   const next = isFinished ? null : nextStage(stage);
   ctx.logger?.info('stage end', { jobId, stage, next, status: mutated.status });
@@ -173,6 +199,8 @@ export async function runStage(
     job: mutated,
     ranStage: stage,
     nextStage: next,
+    terminal: isFinished || mutated.status === 'FAILED' || next === null,
+    status: mutated.status,
   };
   if (isDuplicate) result.duplicate = true;
   if (mutated.chunkCount !== undefined) result.chunkCount = mutated.chunkCount;
@@ -183,7 +211,7 @@ export async function runStage(
   return result;
 }
 
-/** Run every remaining stage in order. Used for local tests + dev fixture. */
+/** Run every remaining stage in order. Used for local tests + dev fixtures. */
 export async function runFullPipeline(
   jobId: string,
   ctx: StageContext,
@@ -194,6 +222,7 @@ export async function runFullPipeline(
   while (current) {
     const res = await runStage(jobId, current, ctx);
     lastResult = res;
+    if (res.terminal) break;
     current = res.nextStage;
   }
   if (!lastResult) throw new Error(`no stages ran for job ${jobId}`);
@@ -201,7 +230,7 @@ export async function runFullPipeline(
 }
 
 // ---------------------------------------------------------------------------
-// Individual stages
+// Stages
 // ---------------------------------------------------------------------------
 
 async function stageValidate(ctx: StageContext, job: IngestionJob): Promise<IngestionJob> {
@@ -231,15 +260,19 @@ async function stageFetch(ctx: StageContext, job: IngestionJob): Promise<Ingesti
   const fetched = await fetcher.fetch(job.source);
   const contentHash = sha256Hex(fetched.bytes);
 
-  // Dedup — if we already have a document with the same bytes for this edition,
-  // short-circuit. See MASTER_PLAN §18.
-  const dup = await ctx.documents.findByContentHash(job.gameId, job.editionId, contentHash);
+  // Dedup — see ADR-0008. Scope: (game, edition, contentId, contentHash).
+  const dup = await ctx.documents.findByContentHash(
+    job.gameId,
+    job.editionId,
+    job.contentId,
+    contentHash,
+  );
   if (dup) {
     ctx.logger?.info('duplicate upload — reusing existing document', {
       jobId: job.jobId,
       documentId: dup.documentId,
     });
-    const finished = await ctx.jobs.updateJob(
+    return ctx.jobs.updateJob(
       job.jobId,
       {
         status: 'SUCCEEDED',
@@ -251,10 +284,9 @@ async function stageFetch(ctx: StageContext, job: IngestionJob): Promise<Ingesti
       },
       ctx.now().toISOString(),
     );
-    return finished;
   }
 
-  // Persist raw bytes for URL sources — the S3 upload path already has them.
+  // Persist raw bytes for URL sources — S3 uploads already sit at their key.
   let rawUri: string;
   if (job.source.kind === 'S3') {
     rawUri = ctx.rawStore.toUri(job.source.s3Key);
@@ -284,6 +316,35 @@ async function stageParse(ctx: StageContext, job: IngestionJob): Promise<Ingesti
     ...(fetchState.filename !== undefined ? { filename: fetchState.filename } : {}),
     ...(fetchState.canonicalUrl !== undefined ? { canonicalUrl: fetchState.canonicalUrl } : {}),
   });
+
+  // Quality gate (ADR-0008 §5): OCR/AI fallback is not implemented in M2,
+  // so an inadequate deterministic extraction must not become authoritative
+  // knowledge. Fail here (never inside FINALIZE) so `knowledgeRevision`
+  // remains untouched.
+  const qualityReport = normalizeQualityReport(parsed.quality);
+  await ctx.jobs.updateJob(job.jobId, { qualityReport }, ctx.now().toISOString());
+  if (parsed.blocks.length === 0) {
+    throw new StageError(
+      'PARSE',
+      `parser emitted zero blocks (${qualityReport.warnings.join('; ') || 'no warnings'})`,
+      'EMPTY_PARSE',
+    );
+  }
+  if (parsed.quality.isLikelyScan) {
+    throw new StageError(
+      'PARSE',
+      `deterministic PDF extraction inadequate: ${qualityReport.warnings.join('; ') || 'likely scan'}`,
+      'LIKELY_SCAN',
+    );
+  }
+  if (parsed.quality.emptyPageRatio > 0.7) {
+    throw new StageError(
+      'PARSE',
+      `${(parsed.quality.emptyPageRatio * 100).toFixed(0)}% of pages produced no text`,
+      'HIGH_EMPTY_PAGE_RATIO',
+    );
+  }
+
   await writeState(ctx, job.jobId, 'parsed', parsed);
   return advanceStage(ctx, job, 'PARSE', { status: 'RUNNING' });
 }
@@ -330,36 +391,122 @@ async function stageNormalize(ctx: StageContext, job: IngestionJob): Promise<Ing
 
 async function stageChunk(ctx: StageContext, job: IngestionJob): Promise<IngestionJob> {
   const normalized = await readState<ParsedDocument>(ctx, job.jobId, 'normalized');
-  const chunks = chunkDocument(normalized, ctx.chunkerOptions ?? {});
-  await writeState(ctx, job.jobId, 'chunks', chunks);
+  const chunkOutputs = chunkDocument(normalized, ctx.chunkerOptions ?? {});
+  if (chunkOutputs.length === 0) {
+    throw new StageError('CHUNK', 'chunker produced zero chunks', 'ZERO_CHUNKS');
+  }
+
+  // Reserve the destination document id once, on the first CHUNK attempt.
+  // Chunks are keyed deterministically by (plannedDocumentId, ordinal) so
+  // retries are idempotent (an existing chunk row is overwritten with the
+  // same content). This is what makes it safe for FINALIZE to trust the
+  // chunk rows without a race window.
+  const plannedDocumentId = job.plannedDocumentId ?? asSourceDocumentId(ctx.ids.sourceDocumentId());
+
+  const nowIso = ctx.now().toISOString();
+  const chunkRecords: Chunk[] = [];
+  for (const c of chunkOutputs) {
+    const chunkId = deriveChunkId(plannedDocumentId, c.ordinal);
+    const textKey = `normalized/${plannedDocumentId}/${chunkId}.txt`;
+    const put = await ctx.normalizedStore.putBytes(textKey, c.text, 'text/plain; charset=utf-8');
+    chunkRecords.push(
+      ChunkSchema.parse({
+        chunkId: asChunkId(chunkId),
+        documentId: asSourceDocumentId(plannedDocumentId),
+        gameId: job.gameId,
+        editionId: job.editionId,
+        contentId: job.contentId,
+        ordinal: c.ordinal,
+        headingPath: c.headingPath,
+        pageStart: c.pageStart,
+        pageEnd: c.pageEnd,
+        textUri: put.uri,
+        textPreview: c.text.slice(0, 400),
+        charCount: c.charCount,
+        tokenCount: c.tokenCount,
+        authority: job.authority,
+        sourceType: job.sourceType,
+        isCurrent: true,
+        createdAt: nowIso,
+        ...(job.version !== undefined ? { documentVersion: job.version } : {}),
+      }),
+    );
+  }
+  await ctx.chunks.putChunks(chunkRecords);
+
   return advanceStage(ctx, job, 'CHUNK', {
     status: 'RUNNING',
-    chunkCount: chunks.length,
+    plannedDocumentId: asSourceDocumentId(plannedDocumentId),
+    chunkCount: chunkRecords.length,
   });
 }
 
 async function stageFinalize(ctx: StageContext, job: IngestionJob): Promise<IngestionJob> {
-  const parsed = await readState<ParsedDocument>(ctx, job.jobId, 'parsed');
   const fetchState = await readState<FetchState>(ctx, job.jobId, 'fetch');
-  const chunkOutputs = await readState<
-    Array<{
-      ordinal: number;
-      headingPath: string[];
-      pageStart: number;
-      pageEnd: number;
-      text: string;
-      charCount: number;
-      tokenCount: number;
-    }>
-  >(ctx, job.jobId, 'chunks');
+  if (!job.plannedDocumentId) {
+    throw new StageError(
+      'FINALIZE',
+      'plannedDocumentId is missing — CHUNK did not run',
+      'NO_PLANNED_DOC',
+    );
+  }
 
-  // Idempotency — one more check by content hash. If we've been retried
-  // after a partial finalize, prefer the existing document.
+  // Duplicate short-circuit (also serves as retry-recovery — see below).
   const dup = await ctx.documents.findByContentHash(
     job.gameId,
     job.editionId,
+    job.contentId,
     fetchState.contentHash,
   );
+  if (dup) {
+    if (dup.documentId === job.plannedDocumentId) {
+      // This job already published successfully; a subsequent retry landed
+      // here after `updateJob` crashed. Treat as success, not duplicate.
+      return ctx.jobs.updateJob(
+        job.jobId,
+        {
+          status: 'SUCCEEDED',
+          stage: 'FINALIZE',
+          completedStages: appendStage(job.completedStages, ...M2_STAGE_ORDER),
+          documentId: dup.documentId,
+          chunkCount: dup.chunkCount,
+        },
+        ctx.now().toISOString(),
+      );
+    }
+    // Real duplicate — some other document already carries these bytes.
+    return ctx.jobs.updateJob(
+      job.jobId,
+      {
+        status: 'SUCCEEDED',
+        stage: 'FINALIZE',
+        completedStages: appendStage(job.completedStages, ...M2_STAGE_ORDER),
+        documentId: dup.documentId,
+        duplicateOf: dup.documentId,
+        chunkCount: dup.chunkCount,
+      },
+      ctx.now().toISOString(),
+    );
+  }
+
+  // Verify chunks were persisted before we touch authoritative state.
+  const persistedChunks = await ctx.chunks.listChunksForDocument(job.plannedDocumentId);
+  if (job.chunkCount === undefined || persistedChunks.length !== job.chunkCount) {
+    throw new StageError(
+      'FINALIZE',
+      `chunk count mismatch: expected ${job.chunkCount}, found ${persistedChunks.length}`,
+      'CHUNK_COUNT_MISMATCH',
+    );
+  }
+
+  const game = await ctx.games.getGame(job.gameId);
+  if (!game) throw new StageError('FINALIZE', `game vanished: ${job.gameId}`, 'GAME_MISSING');
+  const editionIdx = game.editions.findIndex((e) => e.editionId === job.editionId);
+  if (editionIdx === -1) {
+    throw new StageError('FINALIZE', `edition vanished: ${job.editionId}`, 'EDITION_MISSING');
+  }
+  const currentEdition = game.editions[editionIdx]!;
+  const newRev = currentEdition.knowledgeRevision + 1;
 
   const superseded = await ctx.documents.findCurrentByKey(
     job.gameId,
@@ -369,98 +516,92 @@ async function stageFinalize(ctx: StageContext, job: IngestionJob): Promise<Inge
   );
 
   const nowIso = ctx.now().toISOString();
+  const parsedPageCount = persistedChunks.reduce((max, c) => Math.max(max, c.pageEnd), 0);
 
-  let documentId: string;
-  let supersededId: string | undefined;
-  let knowledgeRevision: number;
-  const supersedesList: string[] = [];
+  const newDoc: SourceDocument = SourceDocumentSchema.parse({
+    documentId: job.plannedDocumentId,
+    gameId: job.gameId,
+    editionId: job.editionId,
+    contentId: job.contentId,
+    title: job.title,
+    sourceType: job.sourceType,
+    authority: job.authority,
+    origin: job.source.kind === 'S3' ? 'UPLOAD' : 'URL',
+    contentHash: fetchState.contentHash,
+    rawObjectUri: fetchState.rawUri,
+    pageCount: parsedPageCount,
+    chunkCount: persistedChunks.length,
+    status: 'CURRENT',
+    supersedes: superseded ? [superseded.documentId] : [],
+    knowledgeRevision: newRev,
+    createdAt: nowIso,
+    updatedAt: nowIso,
+    ...(job.version !== undefined ? { version: job.version } : {}),
+    ...(fetchState.canonicalUrl !== undefined ? { canonicalUrl: fetchState.canonicalUrl } : {}),
+    ...(fetchState.canonicalUrl ? { publisherDomain: safeHostname(fetchState.canonicalUrl) } : {}),
+  });
 
-  if (dup) {
-    documentId = dup.documentId;
-    knowledgeRevision = dup.knowledgeRevision;
-  } else {
-    documentId = ctx.ids.sourceDocumentId();
-    if (superseded && superseded.documentId !== documentId) {
-      supersedesList.push(superseded.documentId);
-      supersededId = superseded.documentId;
-      await ctx.documents.markSuperseded(superseded.documentId, nowIso);
-    }
-    knowledgeRevision = await ctx.games.bumpKnowledgeRevision(job.gameId, job.editionId, nowIso);
-    const doc: SourceDocument = SourceDocumentSchema.parse({
-      documentId: asSourceDocumentId(documentId),
+  const nextEditions: Edition[] = game.editions.slice();
+  nextEditions[editionIdx] = {
+    ...currentEdition,
+    knowledgeRevision: newRev,
+    updatedAt: nowIso,
+  };
+
+  try {
+    await ctx.publisher.publishDocument({
+      newDocument: newDoc,
+      ...(superseded ? { supersedeDocumentId: superseded.documentId } : {}),
       gameId: job.gameId,
-      editionId: job.editionId,
-      contentId: job.contentId,
-      title: job.title,
-      sourceType: job.sourceType,
-      authority: job.authority,
-      origin: job.source.kind === 'S3' ? 'UPLOAD' : 'URL',
-      contentHash: fetchState.contentHash,
-      rawObjectUri: fetchState.rawUri,
-      pageCount: parsed.pageCount,
-      chunkCount: chunkOutputs.length,
-      status: 'CURRENT',
-      supersedes: supersedesList,
-      knowledgeRevision,
-      createdAt: nowIso,
-      updatedAt: nowIso,
-      ...(job.version !== undefined ? { version: job.version } : {}),
-      ...(fetchState.canonicalUrl !== undefined ? { canonicalUrl: fetchState.canonicalUrl } : {}),
-      ...(fetchState.canonicalUrl
-        ? { publisherDomain: safeHostname(fetchState.canonicalUrl) }
-        : {}),
+      nextEditions,
+      expectedGameUpdatedAt: game.updatedAt,
+      now: nowIso,
     });
-    await ctx.documents.createDocument(doc);
-
-    // Persist each chunk body to S3 + its metadata row to DynamoDB.
-    const chunkRecords: Chunk[] = [];
-    for (const c of chunkOutputs) {
-      const chunkId = ctx.ids.chunkId();
-      const textKey = `normalized/${documentId}/${chunkId}.txt`;
-      const put = await ctx.normalizedStore.putBytes(textKey, c.text, 'text/plain; charset=utf-8');
-      chunkRecords.push(
-        ChunkSchema.parse({
-          chunkId: asChunkId(chunkId),
-          documentId: asSourceDocumentId(documentId),
-          gameId: job.gameId,
-          editionId: job.editionId,
-          contentId: job.contentId,
-          ordinal: c.ordinal,
-          headingPath: c.headingPath,
-          pageStart: c.pageStart,
-          pageEnd: c.pageEnd,
-          textUri: put.uri,
-          textPreview: c.text.slice(0, 400),
-          charCount: c.charCount,
-          tokenCount: c.tokenCount,
-          authority: job.authority,
-          sourceType: job.sourceType,
-          isCurrent: true,
-          createdAt: nowIso,
-          ...(job.version !== undefined ? { documentVersion: job.version } : {}),
-        }),
-      );
+  } catch (err) {
+    if (err instanceof PublishConflictError) {
+      if (err.reason === 'DOC_EXISTS') {
+        // Transaction saw the new doc already present — we published in a
+        // previous retry. Recover as success (not "duplicate", because it's
+        // the same doc we planned).
+        const existing = await ctx.documents.getDocument(job.plannedDocumentId as SourceDocumentId);
+        if (!existing) {
+          throw new StageError(
+            'FINALIZE',
+            'DOC_EXISTS reported but document could not be read on retry',
+            'PUBLISH_RECOVERY_FAILED',
+          );
+        }
+        return ctx.jobs.updateJob(
+          job.jobId,
+          {
+            status: 'SUCCEEDED',
+            stage: 'FINALIZE',
+            completedStages: appendStage(job.completedStages, ...M2_STAGE_ORDER),
+            documentId: existing.documentId,
+            chunkCount: existing.chunkCount,
+            ...(existing.supersedes.length > 0
+              ? { supersededDocumentId: existing.supersedes[0]! }
+              : {}),
+          },
+          ctx.now().toISOString(),
+        );
+      }
+      // GAME_STALE / PREV_NOT_CURRENT — re-throw so the state machine
+      // retries FINALIZE, which will re-read fresh state.
+      throw new StageError('FINALIZE', err.message, err.reason);
     }
-    if (chunkRecords.length > 0) {
-      await ctx.chunks.putChunks(chunkRecords);
-    }
-    await ctx.documents.updateChunkCount(
-      asSourceDocumentId(documentId),
-      chunkRecords.length,
-      nowIso,
-    );
+    throw err;
   }
 
   const patch: Partial<Omit<IngestionJob, 'jobId' | 'createdAt'>> = {
     status: 'SUCCEEDED',
     stage: 'FINALIZE',
     completedStages: appendStage(job.completedStages, ...M2_STAGE_ORDER),
-    documentId: asSourceDocumentId(documentId),
-    chunkCount: chunkOutputs.length,
+    documentId: newDoc.documentId,
+    chunkCount: persistedChunks.length,
   };
-  if (supersededId !== undefined) patch.supersededDocumentId = asSourceDocumentId(supersededId);
-  const updated = await ctx.jobs.updateJob(job.jobId, patch, nowIso);
-  return IngestionJobSchema.parse(updated);
+  if (superseded) patch.supersededDocumentId = superseded.documentId;
+  return ctx.jobs.updateJob(job.jobId, patch, nowIso);
 }
 
 // ---------------------------------------------------------------------------
@@ -537,12 +678,12 @@ async function writeState<T>(
   key: string,
   data: T,
 ): Promise<void> {
-  const path = `normalized/${jobId}/state/${key}.json`;
+  const path = `temporary/ingestion/${jobId}/state/${key}.json`;
   await ctx.normalizedStore.putBytes(path, JSON.stringify(data), 'application/json');
 }
 
 async function readState<T>(ctx: StageContext, jobId: IngestionJobId, key: string): Promise<T> {
-  const uri = ctx.normalizedStore.toUri(`normalized/${jobId}/state/${key}.json`);
+  const uri = ctx.normalizedStore.toUri(`temporary/ingestion/${jobId}/state/${key}.json`);
   const text = await ctx.normalizedStore.getText(uri);
   return JSON.parse(text) as T;
 }
@@ -555,15 +696,36 @@ function safeHostname(url: string): string | undefined {
   }
 }
 
-/** Convenience typed helper for constructing a job before insertion. */
+function normalizeQualityReport(input: DocumentQualityReport) {
+  return IngestionQualityReportSchema.parse({
+    emptyPageRatio: input.emptyPageRatio,
+    averageCharsPerPage: input.averageCharsPerPage,
+    garbledCharRatio: input.garbledCharRatio,
+    isLikelyScan: input.isLikelyScan,
+    warnings: input.warnings.slice(0, 32),
+  });
+}
+
+/**
+ * Deterministic per-document chunk id. Encoding: `ch_<docSuffix>_<ordinal>`
+ * where `docSuffix` is the plannedDocumentId with any `doc_` prefix
+ * stripped. Keeps chunk writes idempotent across CHUNK-stage retries.
+ */
+export function deriveChunkId(documentId: string, ordinal: number): string {
+  const suffix = documentId.startsWith('doc_') ? documentId.slice(4) : documentId;
+  const trimmed = suffix.slice(0, 40);
+  return `ch_${trimmed}_${ordinal.toString().padStart(4, '0')}`;
+}
+
+/** Test helper — a validated job with sensible defaults. */
 export function seedJob(overrides: Partial<IngestionJob> = {}): IngestionJob {
   return IngestionJobSchema.parse({
     jobId: 'job_seed',
-    gameId: 'g_seed' as GameId,
-    editionId: 'e_seed' as EditionId,
-    contentId: 'c_seed' as ContentId,
+    gameId: 'g_seed',
+    editionId: 'e_seed',
+    contentId: 'c_seed',
     title: 'Seed',
-    sourceType: 'RULEBOOK' as SourceType,
+    sourceType: 'RULEBOOK',
     authority: 'OFFICIAL_RULES',
     source: { kind: 'S3', s3Key: 'raw/seed.pdf', contentType: 'application/pdf' },
     status: 'PENDING',

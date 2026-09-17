@@ -1,105 +1,80 @@
 # Current State
 
-_Last updated: 2026-09-17_
+_Last updated: 2026-09-17 (post-review)_
 
 ## Current milestone
 
-**Milestone 2 — Document Ingestion** (feature branch `feature/m02-document-ingestion`; PR open; awaiting review + merge + dev deploy).
+**Milestone 2 — Document Ingestion** (feature branch `feature/m02-document-ingestion`; PR #7 open, currently under review after operator feedback). Do not advance to M3 until PR #7 merges AND the post-merge real-document acceptance checks pass on dev.
 
 Spec: `docs/milestones/M2-document-ingestion.md`.
-Architecture decision: `docs/adr/0008-document-ingestion-pipeline.md`.
+Architecture decision: `docs/adr/0008-document-ingestion-pipeline.md` (revised 2026-09-17).
 
 ## Completed work
 
 - **Milestone 0 — Repository & Engineering Foundation.** Merged. See prior state.
 - **Milestone 1 — Domain Model, Game Catalog & Sessions.** Merged as PR #6 / commit `6b50738`. Deployed dev remained green; every M1 acceptance check passed.
 
-## Milestone 2 — what landed on the feature branch
+## Milestone 2 — what's on `feature/m02-document-ingestion`
 
-`packages/domain`:
+### First-pass work (initial PR)
 
-- New schemas: `Chunk`, `IngestionJob` (+ `IngestionJobView`, `CreateIngestionJobInput`), `CreatePresignedUploadInput`. New id types: `ChunkId`, `IngestionJobId`.
-- `SourceDocument` promoted from "metadata only" to the full M2 shape: required `contentHash`, `rawObjectUri`, `origin` (`UPLOAD` | `URL`), `chunkCount`, `knowledgeRevision`, `pageCount?`. Status enum tightened to `CURRENT | SUPERSEDED | ARCHIVED` (`SourceDocumentMetadataSchema` remains as a compatibility alias).
-- `Edition` grew a required `knowledgeRevision: number` field (default 0) — bumped by the FINALIZE stage per §19.
+- Domain: `Chunk`, `IngestionJob`, `IngestionQualityReport` schemas; `SourceDocument` promoted to the full M2 shape (required `contentHash`, `rawObjectUri`, `origin`, `chunkCount`, `knowledgeRevision`, `pageCount?`); status enum `CURRENT | SUPERSEDED | ARCHIVED`; `Edition.knowledgeRevision`.
+- Persistence: in-memory + DynamoDB repos for documents, chunks, ingestion jobs; `GamesRepository.bumpKnowledgeRevision` + `replaceEditions`.
+- Ingestion package (`@bgr/ingestion`): heading-aware chunker, deterministic PDF text-layer parser (via `unpdf`), HTML parser (via `cheerio`), SSRF guard, content-hash utility, quality detector, classifier, `ObjectStore` seam.
+- API: `POST /uploads/presign`, `POST /ingestion`, `GET /ingestion/{jobId}`, `GET /sources/{sourceId}`, `GET /sources/{sourceId}/chunks`. Ingestion pipeline as pure stage functions of `(job, StageContext)`.
+- Infra: three DDB tables (documents / chunks / ingestionJobs), private S3 bucket, `IngestionStageRunnerFn`, Step Functions state machine.
+- Frontend: `SourcesScreen` — presigned PUT + `POST /ingestion` for PDFs; URL paste; polls `GET /ingestion/{jobId}`.
+- ADR-0008; hand-crafted fixtures under `evals/fixtures/ingestion/`.
 
-`packages/persistence`:
+### Review revisions applied 2026-09-17 (this commit)
 
-- New repositories with in-memory + DynamoDB implementations: `DocumentsRepository`, `ChunksRepository`, `IngestionJobsRepository`.
-- `GamesRepository.bumpKnowledgeRevision(gameId, editionId, updatedAt): Promise<number>` — atomic conditional update on `updatedAt` for optimistic concurrency.
-- `IdGenerator` gained `sourceDocumentId()`, `chunkId()`, `ingestionJobId()`.
+1. **State machine short-circuit (R1).** Each stage now returns `{ terminal }`; a `Choice_After_<STAGE>` state routes terminal results (duplicate at FETCH, FINALIZE completion, already-terminal redelivery) straight to `SkipEmbedIndexInM2 → PipelineSucceeded`. The stage runner also refuses to re-run against a job whose `status` is already `SUCCEEDED` / `FAILED`. Covered by CDK tests (`Check_After_<STAGE>` + `MarkJobFailed_<STAGE>` present per stage) and pipeline tests (duplicate short-circuit, `alreadyTerminal: true` on redelivery).
+2. **Failure-safe FINALIZE (R2).** `CHUNK` reserves `plannedDocumentId` and writes chunks (deterministic ids so retries overwrite) before `FINALIZE` touches authoritative state. `FINALIZE` uses `AtomicPublisher.publishDocument()` (new persistence interface) — DynamoDB `TransactWriteItems` puts the new `SourceDocument`, supersedes the previous CURRENT doc, and bumps the edition `knowledgeRevision` in a single transaction. `PublishConflictError` reasons map to typed recovery (`DOC_EXISTS` → resume as success; `PREV_NOT_CURRENT` / `GAME_STALE` → retry). `Chunk.isCurrent` is documented as a creation-time snapshot; `SourceDocument.status` is the authoritative currency source (retriever in M3 must join on it). Failure-injection tests cover: crash between CHUNK and FINALIZE, crash after publish but before job update (no double revision bump), forced NORMALIZE failure (edition + docs untouched).
+3. **Dedup scope (R3).** `findByContentHash` now takes `contentId`. Regression test: identical bytes on `c_base` and `c_promo` publish two separate documents.
+4. **SSRF redirect handling (R4).** `createUrlFetcher()` uses `redirect: 'manual'` and re-runs `assertUrlSafeForFetch` on each redirect target (up to 5 hops). Redirect loop detection. `SourceDocument.canonicalUrl` records the FINAL URL. Tests cover safe redirect, private-IP redirect rejection, second-hop hostname rejection, and loop detection. DNS-rebinding residual risk explicitly documented in ADR-0008.
+5. **Quality gate (R5).** `PARSE` fails on zero blocks / likely scan / > 70 % empty pages. Full `IngestionQualityReport` persisted on `IngestionJob.qualityReport` and returned by `GET /ingestion/{jobId}`. `CHUNK` fails on zero chunks. Regression test confirms empty-parser output leaves `knowledgeRevision` unchanged.
+6. **BatchWrite `UnprocessedItems` (R6).** `DynamoChunksRepository.putChunks` / `deleteChunksForDocument` loop with capped exponential backoff (max 6 attempts, 100 ms base, jitter). Throws if items remain. Covered by `aws-sdk-client-mock`-based test.
+7. **State-machine failure path (R7).** Each stage's `Catch` goes through a per-stage `MarkJobFailed_<STAGE>` Lambda before the shared `PipelineFailed` state. `MarkJobFailedFn` writes `status = FAILED` with stage/message/code even when the stage runner itself never got to write its own `failJob` (Lambda service exception, timeout, SDK failure). Retry-policy claim narrowed to the specific `Lambda.*` errors we actually retry.
+8. **`forceFailureStage` off the public schema (R8).** `CreateIngestionJobInputSchema` no longer carries `forceFailureStage`. `InternalCreateIngestionJobInputSchema` extends it for tests. The public `POST /ingestion` handler never reads it from the request body.
+9. **Storage lifecycle (R9).** `raw/` and `normalized/` are retained (no `ExpirationInDays`). Per-job stage state moved from `normalized/{jobId}/state/*` to `temporary/ingestion/{jobId}/state/*.json`, which has a 7-day lifecycle expiration. `temporary/` catch-all expires after 1 day. Multipart cleanup on every prefix (3 days). CDK test enforces raw/ and normalized/ have no ExpirationInDays.
+10. **Bucket CORS (R10).** Ingestion bucket CORS `AllowedOrigins` is pinned to the CloudFront `distributionDomainName` via a CfnBucket escape hatch after the distribution is constructed. Never `*`. CDK test asserts no `*` and that the origin references the distribution's domain.
+11. **Deploy workflow smoke test (R11).** Now reads the actual `Edition.knowledgeRevision` from the games table before and after the duplicate ingestion and asserts equality. Also added: a `pdf-lib`-generated synthetic PDF test that exercises the real `createUnpdfExtractor()` end-to-end (`packages/ingestion/src/parsers/unpdf-extractor.test.ts`), so the deployed `unpdf` path is covered by CI, not only by the deploy smoke test.
 
-`packages/ingestion` (new fleshed-out package):
+### What still MUST happen post-merge before M2 is closed
 
-- Types: `ParsedBlock`, `ParsedDocument`, `DocumentQualityReport`, `ChunkOutput`.
-- Utilities: `sha256Hex`, `approxTokenCount`, `contextualPrefix`, `analyzeQuality`.
-- Chunker: `chunkDocument` — heading-aware, configurable 300/500/700-token budget, sentence-split for oversized blocks, page range = min/max of the source blocks.
-- Classifier: `classifySource` — downgrades OFFICIAL_RULES to COMMUNITY_DISCUSSION when the canonical URL is a community host.
-- Parsers behind `DocumentParser`: `createPdfTextLayerParser(extractor)` (heading heuristic covers ALL-CAPS titles + numeric `1.`, `1.2`, `1.2.3` headings), `createHtmlParser()` (strips scripts/nav, prefers `<main>` / `[role=main]`), `createStubFallbackParser()` (declared, throws — M2 explicitly defers OCR/AI fallback per §16).
-- `createUnpdfExtractor()` — real PDF text-layer extraction via `unpdf` (pdfjs-dist wrapper), imported dynamically so the base parser can be unit-tested without pdfjs.
-- SSRF guard: `assertUrlSafeForFetch` blocks non-http(s), loopback, private, link-local, EC2 metadata (`169.254.169.254`), multicast, and `.local` / `.internal` hostnames; re-checks resolved IPs (injectable resolver for tests).
-- Fetchers: `createUrlFetcher()` (SSRF-guarded, 20 s timeout, 25 MiB response cap), `createS3Fetcher(store)`.
-- Object store seam: `ObjectStore` interface + `InMemoryObjectStore` (for tests) + `S3ObjectStore` (in `apps/api/src/lib/`).
-
-`apps/api`:
-
-- New routes: `POST /uploads/presign`, `POST /ingestion`, `GET /ingestion/{jobId}`, `GET /sources/{sourceId}`, `GET /sources/{sourceId}/chunks`.
-- Presign: MIME-restricted (`application/pdf`, `text/html`, `application/xhtml+xml`), size-capped (env `UPLOAD_MAX_BYTES`, default 50 MiB), 10-minute expiry, S3 key `raw/{yyyy-mm-dd}/{uuid}.{ext}`.
-- `POST /ingestion` validates the game/edition/content triple, sanity-checks S3-key existence for `S3` sources, creates a `PENDING` job, and calls `IngestionExecutor.start(jobId)` — which in production issues `StartExecution` against the M2 state machine.
-- `apps/api/src/ingestion/pipeline.ts` implements every stage as a pure function of `(job, StageContext)`; `runFullPipeline(jobId, ctx)` runs the whole chain in-process (used by unit tests + optional dev fixture scripts).
-- `apps/api/src/ingestion/stage-runner.ts` is the Lambda handler each Step Function Task invokes with `{ jobId, stage }`.
-- Dev-only `forceFailureStage` field on jobs — the pipeline throws at the requested stage. Used by the "forced Normalize failure leaves game unchanged" acceptance test (spec verification #6).
-
-`infrastructure/cdk`:
-
-- Three new DynamoDB tables: `documents` (PK `documentId`), `chunks` (PK `documentId`, SK `chunkId`), `ingestionJobs` (PK `jobId`) — all on-demand with SSE + PITR.
-- `IngestionBucket` — private S3 with SSL enforced, PUT-only CORS (`AllowedOrigins: *` for dev — tightening deferred to public beta), and lifecycle rules: `raw/` expires after 90 days, `temporary/` after 1 day, multipart uploads under `normalized/` aborted after 3 days.
-- `IngestionStageRunnerFn` — Node 22, 1024 MB, 60 s timeout, its own log group.
-- `IngestionStateMachine` — Standard workflow, 15 min timeout. Chain: `Stage_VALIDATE → Stage_FETCH → Stage_PARSE → Stage_CLASSIFY → Stage_DISCOVER_ERRATA → Stage_NORMALIZE → Stage_CHUNK → Stage_FINALIZE → SkipEmbedIndexInM2 → PipelineSucceeded`. Each Task retries transient Lambda errors twice and catches everything else to `PipelineFailed`.
-- API Lambda gets read access to `documents`/`chunks`, read/write on `ingestionJobs`, read/write on the ingestion bucket, and `states:StartExecution` on the state machine; the stage runner gets read on `content`, read/write on the other five tables and the bucket. `INGESTION_STATE_MACHINE_ARN` is injected into the API Lambda env.
-- CDK unit test coverage extended to seven DDB tables, the ingestion bucket lifecycle + CORS, the state machine's Task chain, and the new HTTP API routes.
-
-`apps/web`:
-
-- New `SourcesScreen`: content picker, source-type dropdown, PDF upload (presign → PUT → `POST /ingestion`) or URL paste, polling `GET /ingestion/{jobId}` every 2 s until terminal, showing status, stage progression, and `duplicateOf` / `chunkCount` / error details.
-- `GameConfigurationScreen` gained a "Manage sources" button that navigates to the new screen.
-- API client extended with `presignUpload`, `uploadFile`, `createIngestion`, `getIngestion`; new type surface (`IngestionJobView`, `PresignedUploadResponse`, `SourceType`, `Authority`, …).
-
-`evals/fixtures/ingestion/`:
-
-- `tiny-rulebook.pages.json` — per-page plaintext for the two-page synthetic rulebook.
-- `tiny-rulebook.v2.pages.json` — same rulebook with an errata section, used to exercise the supersede/`knowledgeRevision` flow.
-- `living-rules.html` — small living-rules page used by the HTML parser test and by the future URL smoke test.
-- `README.md` explains why no real PDF ships in git (extractor seam lets us test parser/chunker with plaintext fixtures).
+- Ingest two structurally different real PDF rulebooks through the deployed `unpdf` path in dev; inspect representative complete chunks (heading paths, page ranges, lists / rule numbers). Real rulebooks stay out of the repo.
+- Ingest at least one source through the actual URL path in dev.
+- Confirm modified-version superseding + `knowledgeRevision` increment in dev.
 
 ## Active decisions
 
 Load-bearing decisions from `docs/adr/`:
 
-- **ADR-0001** — TypeScript strict, Node 22 LTS, pnpm 10, CDK v2 TypeScript. Vitest / ESLint 9 / Prettier 3.
+- **ADR-0001** — TypeScript strict, Node 22 LTS, pnpm 10, CDK v2 TypeScript.
 - **ADR-0002** — S3 Vectors initial vector store behind `RulesRetriever`.
 - **ADR-0003** — `RulesModel` interface + Bedrock Converse adapter default.
 - **ADR-0004** — DynamoDB full log + rolling summary + recent turns, 24h TTL.
 - **ADR-0005** — Bounded `WebSearchProvider` loop with AgentCore adapter.
-- **ADR-0006** — DynamoDB multi-table design for M1 entities (games, content, sessions, messages).
-- **ADR-0007** — Same-origin routing via CloudFront `/api/*` + first-party `SameSite=Lax` session cookie; no API-side CORS.
-- **ADR-0008** — Document ingestion via Step Functions + S3 + DynamoDB; deterministic PDF text-layer first; content-hash dedup + supersede/`knowledgeRevision`; SSRF-guarded URL fetch; injectable seams for parser/fetcher/object-store so the pipeline is exercisable end-to-end without AWS.
+- **ADR-0006** — DynamoDB multi-table design for M1 entities.
+- **ADR-0007** — Same-origin routing via CloudFront `/api/*` + first-party `SameSite=Lax` session cookie.
+- **ADR-0008 (revised 2026-09-17)** — Ingestion pipeline: Step Functions + one stage-runner Lambda + Choice-based short-circuit + `MarkJobFailed` failure path; deterministic PDF-first; `TransactWriteItems`-based atomic publish; content-hash dedup scoped to `(game, edition, contentId, hash)`; manual redirect SSRF handling; quality gate at PARSE; storage lifecycle keeps raw/ + normalized/ retained and expires only `temporary/`; ingestion-bucket CORS pinned to the CloudFront domain.
 
 ## Known issues / open questions
 
 Full tracker: `docs/CONTRADICTIONS_AND_GAPS.md`.
 
 - **G3 / G4 (S3 Vectors and AgentCore regional availability in `ap-southeast-1`).** Still unverified. Not blocking M2. Verify before M3 / M6.
-- **Ingestion bucket CORS is wide-open in dev.** `POST /uploads/presign` returns URLs that any origin can PUT to. Fine for the private dev environment; tighten to the CloudFront domain before public beta.
-- **No GSI on the documents table.** Edition-scoped lookups (`findByContentHash`, `findCurrentByKey`, `listDocumentsForEdition`) use `Scan` + `FilterExpression` for M2 (documented in ADR-0008). Upgrade path is a `${gameId}#${editionId}` GSI once the doc count grows.
-- **Fallback parser is a stub.** `createStubFallbackParser` throws; the quality detector only surfaces warnings. Concrete OCR/AI fallback is deferred to a later milestone or ADR once we have real failure data (per §16 and the milestone spec).
-- **`InMemorySessionsRepository`'s TTL check uses wall-clock time.** Tests that hard-code a NOW earlier than the real current date will incorrectly see sessions as expired; fixed by using a far-future NOW in `apps/api/src/handlers/sessions.test.ts`. Pre-existing behavior, worth revisiting when we clock-inject the in-memory repos.
-- **CodeQL check is red on PRs.** Same underlying repo-visibility gap as branch protection.
+- **DNS rebinding on URL ingestion** — mitigated at validation time (resolved IPs re-checked) but the subsequent `fetch()` performs its own resolution; a custom `undici.Agent` with a pinned resolver would fully close this. Tracked as an M2 residual risk in ADR-0008 §SSRF.
+- **No GSI on the documents table** — dev-scale scan with FilterExpression is fine at M2. Upgrade path noted.
+- **Fallback parser is a stub** — `createStubFallbackParser` throws. OCR/AI deferred.
+- **`InMemorySessionsRepository`'s TTL check uses wall-clock time** — tests that hardcode a past NOW would falsely see sessions as expired; worked around by using a far-future NOW. Consider clock-injecting in a later cleanup.
+- **CodeQL is not enabled on the private repo** (pre-existing).
 
 ## Requires operator decision, if you want them
 
-- **Branch protection on `main`.** Same options as previously recorded (upgrade to GitHub Pro or make the repo public).
-- **AWS_REGION for a possible second region** for S3 Vectors or AgentCore — pending G3 / G4 verification.
+- **Branch protection on `main`.** Same options as previously (upgrade to GitHub Pro, or make the repo public).
+- **`AWS_REGION` for a possible second region** for S3 Vectors or AgentCore — pending G3 / G4 verification.
 
 ## Next expected work
 
-Milestone 3 — Embeddings, Retrieval & Evaluation Foundation. See `docs/milestones/M3-embeddings-retrieval.md`.
+Real-document acceptance in dev after PR #7 merges. Once those checks pass, advance to Milestone 3 — Embeddings, Retrieval & Evaluation Foundation. See `docs/milestones/M3-embeddings-retrieval.md`.

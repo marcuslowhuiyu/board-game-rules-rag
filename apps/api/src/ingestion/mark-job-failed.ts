@@ -1,0 +1,96 @@
+import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import { DynamoIngestionJobsRepository, type IngestionJobsRepository } from '@bgr/persistence';
+import { IngestionStageSchema, asIngestionJobId, type IngestionStage } from '@bgr/domain';
+import { createLogger } from '@bgr/shared';
+
+/**
+ * Lambda invoked from the Step Functions Catch path. Its job is to make
+ * absolutely sure the DDB record shows the job as FAILED even when the
+ * failure was itself in the stage-runner Lambda (Lambda service exception,
+ * SDK client failure, timeout, etc.) — the stage runner may never have
+ * reached its own `failJob` writeback in those cases.
+ *
+ * Input shape from Step Functions:
+ *   {
+ *     jobId:  <string>,
+ *     stage:  <IngestionStage>,     // stage that was being invoked
+ *     cause:  <string>,             // exception message, from States.ErrorInfo
+ *     errorName?: <string>,         // exception class name
+ *   }
+ * Passing `stage` explicitly in the Task's payload keeps this handler
+ * decoupled from the caught-error shape (which Step Functions marshals as
+ * a JSON string).
+ */
+export interface MarkJobFailedEvent {
+  jobId: string;
+  stage: string;
+  cause?: unknown;
+  errorName?: string;
+}
+
+const logger = createLogger({ base: { app: 'bgr-ingestion', handler: 'mark-job-failed' } });
+
+let cachedRepo: IngestionJobsRepository | undefined;
+
+function repo(): IngestionJobsRepository {
+  if (cachedRepo) return cachedRepo;
+  const ddb = new DynamoDBClient({});
+  cachedRepo = new DynamoIngestionJobsRepository(ddb, {
+    ingestionJobsTable: requireEnv('INGESTION_JOBS_TABLE'),
+  });
+  return cachedRepo;
+}
+
+function requireEnv(key: string): string {
+  const v = process.env[key];
+  if (!v || v.length === 0) throw new Error(`missing required env var: ${key}`);
+  return v;
+}
+
+export interface MarkJobFailedOutput {
+  jobId: string;
+  status: 'FAILED';
+  stage: IngestionStage;
+}
+
+export const handler = async (event: MarkJobFailedEvent): Promise<MarkJobFailedOutput> => {
+  const jobId = asIngestionJobId(event.jobId);
+  const stageResult = IngestionStageSchema.safeParse(event.stage);
+  const stage: IngestionStage = stageResult.success ? stageResult.data : 'FINALIZE';
+  const message = formatCause(event.cause);
+  const code =
+    typeof event.errorName === 'string' ? event.errorName.slice(0, 80) : 'STEPFUNCTIONS_FAILURE';
+
+  const current = await repo().getJob(jobId);
+  if (!current) {
+    logger.warn('mark-job-failed: job not found', { jobId, stage });
+    return { jobId, status: 'FAILED', stage };
+  }
+  if (current.status === 'FAILED') {
+    // Already marked by the stage runner — keep its more specific error.
+    logger.info('mark-job-failed: job already FAILED', { jobId });
+    return { jobId, status: 'FAILED', stage: current.stage };
+  }
+  const now = new Date().toISOString();
+  await repo().updateJob(
+    jobId,
+    {
+      status: 'FAILED',
+      stage,
+      error: { stage, message: message.slice(0, 2000), code },
+    },
+    now,
+  );
+  logger.info('mark-job-failed: FAILED persisted', { jobId, stage, code });
+  return { jobId, status: 'FAILED', stage };
+};
+
+function formatCause(cause: unknown): string {
+  if (cause === undefined || cause === null) return 'Step Functions execution failed';
+  if (typeof cause === 'string') return cause;
+  try {
+    return JSON.stringify(cause);
+  } catch {
+    return String(cause);
+  }
+}

@@ -64,6 +64,7 @@ jobs:
             echo "distribution_id=$(get DistributionId)"
             echo "web_bucket=$(get WebBucketName)"
             echo "content_table=$(get ContentTableName)"
+            echo "games_table=$(get GamesTableName)"
             echo "documents_table=$(get DocumentsTableName)"
             echo "chunks_table=$(get ChunksTableName)"
             echo "ingestion_jobs_table=$(get IngestionJobsTableName)"
@@ -174,11 +175,12 @@ jobs:
 
           echo "M1 acceptance flow: OK"
 
-      - name: Exercise the M2 ingestion flow (upload HTML fixture, poll job, verify chunks)
+      - name: Exercise the M2 ingestion flow (HTML upload + dedup + SSRF)
         env:
           BASE: ${{ steps.outputs.outputs.api_url }}
           GAME_ID: ${{ steps.seed.outputs.game_id }}
           EDITION_ID: ${{ steps.seed.outputs.edition_id }}
+          GAMES_TABLE: ${{ steps.outputs.outputs.games_table }}
           DOCUMENTS_TABLE: ${{ steps.outputs.outputs.documents_table }}
           CHUNKS_TABLE: ${{ steps.outputs.outputs.chunks_table }}
           INGESTION_JOBS_TABLE: ${{ steps.outputs.outputs.ingestion_jobs_table }}
@@ -246,10 +248,16 @@ jobs:
           test "$(jq '.items | length' < /tmp/chunks.json)" = "$CHUNKS"
           test "$(jq '.items[0].headingPath | length' < /tmp/chunks.json)" -ge 1
 
-          # 7) Re-run the same upload → dedup, no new document, revision unchanged.
-          REV_BEFORE=$(aws dynamodb get-item --table-name "${{ steps.outputs.outputs.content_table }}" \
-            --key "{\"gameId\":{\"S\":\"$GAME_ID\"},\"contentId\":{\"S\":\"c_base\"}}" \
-            --query 'Item.editionId.S' --output text || true)
+          # 7) Re-run the same upload → dedup, no new document, edition
+          # knowledgeRevision must remain unchanged. Read the actual edition
+          # knowledgeRevision from the games table so the assertion tests
+          # the invariant (not a placeholder like the pre-review draft did).
+          REV_BEFORE=$(aws dynamodb get-item \
+            --table-name "$GAMES_TABLE" \
+            --key "{\"gameId\":{\"S\":\"$GAME_ID\"}}" \
+            --query "Item.editions.L[?M.editionId.S=='$EDITION_ID'].M.knowledgeRevision.N | [0]" \
+            --output text)
+          echo "knowledgeRevision before duplicate ingestion: $REV_BEFORE"
           # A second upload creates a fresh S3 key + fresh job, but content hash matches.
           PRESIGN2=$(curl -fsS -X POST "$BASE/uploads/presign" \
             -H "content-type: application/json" \
@@ -277,6 +285,17 @@ jobs:
           test "$(jq -r '.status' < /tmp/job2.json)" = "SUCCEEDED"
           test "$(jq -r '.documentId' < /tmp/job2.json)" = "$DOC_ID"
           test "$(jq -r '.duplicateOf' < /tmp/job2.json)" = "$DOC_ID"
+
+          REV_AFTER=$(aws dynamodb get-item \
+            --table-name "$GAMES_TABLE" \
+            --key "{\"gameId\":{\"S\":\"$GAME_ID\"}}" \
+            --query "Item.editions.L[?M.editionId.S=='$EDITION_ID'].M.knowledgeRevision.N | [0]" \
+            --output text)
+          echo "knowledgeRevision after duplicate ingestion: $REV_AFTER"
+          if [ "$REV_BEFORE" != "$REV_AFTER" ]; then
+            echo "FAIL: duplicate ingestion bumped knowledgeRevision ($REV_BEFORE → $REV_AFTER)"
+            exit 1
+          fi
           echo "Duplicate short-circuit: OK"
 
           # 8) SSRF guard — a job that targets EC2 metadata must fail at FETCH.

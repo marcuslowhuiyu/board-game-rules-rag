@@ -33,10 +33,16 @@ export class InMemoryDocumentsRepository implements DocumentsRepository {
   async findByContentHash(
     gameId: GameId,
     editionId: EditionId,
+    contentId: ContentId,
     contentHash: string,
   ): Promise<SourceDocument | null> {
     for (const d of this.byId.values()) {
-      if (d.gameId === gameId && d.editionId === editionId && d.contentHash === contentHash) {
+      if (
+        d.gameId === gameId &&
+        d.editionId === editionId &&
+        d.contentId === contentId &&
+        d.contentHash === contentHash
+      ) {
         return d;
       }
     }
