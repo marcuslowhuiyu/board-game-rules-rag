@@ -6,9 +6,14 @@ import {
   PutCommand,
   QueryCommand,
   ScanCommand,
+  TransactWriteCommand,
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
-import { ConditionalCheckFailedException, DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import {
+  ConditionalCheckFailedException,
+  DynamoDBClient,
+  TransactionCanceledException,
+} from '@aws-sdk/client-dynamodb';
 import {
   ConflictError,
   asContentId,
@@ -69,6 +74,29 @@ describe('DynamoGamesRepository', () => {
       TableName: 'games',
       ConditionExpression: 'attribute_not_exists(gameId)',
     });
+  });
+
+  it('createGame with initial content writes the game and its content in one transaction', async () => {
+    docMock.on(TransactWriteCommand).resolves({});
+    await makeRepo().createGame(game, [content]);
+    expect(docMock.commandCalls(PutCommand)).toHaveLength(0);
+    const items = docMock.commandCalls(TransactWriteCommand)[0]!.args[0].input.TransactItems!;
+    expect(items.map((i) => [i.Put!.TableName, i.Put!.ConditionExpression])).toEqual([
+      ['games', 'attribute_not_exists(gameId)'],
+      ['content', 'attribute_not_exists(contentId)'],
+    ]);
+    expect(items[1]!.Put!.Item).toMatchObject({ contentId: 'c_pok' });
+  });
+
+  it('createGame with content maps a cancelled transaction to ConflictError', async () => {
+    docMock.on(TransactWriteCommand).rejects(
+      new TransactionCanceledException({
+        message: 'cancelled',
+        $metadata: {},
+        CancellationReasons: [{ Code: 'None' }, { Code: 'ConditionalCheckFailed' }],
+      }),
+    );
+    await expect(makeRepo().createGame(game, [content])).rejects.toBeInstanceOf(ConflictError);
   });
 
   it('createGame maps ConditionalCheckFailed to ConflictError', async () => {

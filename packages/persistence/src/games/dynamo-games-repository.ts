@@ -9,13 +9,18 @@ import {
   type Game,
   type GameId,
 } from '@bgr/domain';
-import { ConditionalCheckFailedException, type DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import {
+  ConditionalCheckFailedException,
+  TransactionCanceledException,
+  type DynamoDBClient,
+} from '@aws-sdk/client-dynamodb';
 import {
   DynamoDBDocumentClient,
   GetCommand,
   PutCommand,
   QueryCommand,
   ScanCommand,
+  TransactWriteCommand,
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
 import type { GameSearchOptions, GameSearchResult, GamesRepository } from './games-repository.js';
@@ -37,7 +42,38 @@ export class DynamoGamesRepository implements GamesRepository {
     });
   }
 
-  async createGame(game: Game): Promise<Game> {
+  async createGame(game: Game, initialContent: readonly ContentPackage[] = []): Promise<Game> {
+    if (initialContent.length > 0) {
+      // One transaction across both tables: no game without its content.
+      try {
+        await this.doc.send(
+          new TransactWriteCommand({
+            TransactItems: [
+              {
+                Put: {
+                  TableName: this.tables.gamesTable,
+                  Item: game,
+                  ConditionExpression: 'attribute_not_exists(gameId)',
+                },
+              },
+              ...initialContent.map((pkg) => ({
+                Put: {
+                  TableName: this.tables.contentTable,
+                  Item: pkg,
+                  ConditionExpression: 'attribute_not_exists(contentId)',
+                },
+              })),
+            ],
+          }),
+        );
+      } catch (err) {
+        if (err instanceof TransactionCanceledException) {
+          throw new ConflictError(`game or initial content already exists: ${game.gameId}`);
+        }
+        throw err;
+      }
+      return game;
+    }
     try {
       await this.doc.send(
         new PutCommand({

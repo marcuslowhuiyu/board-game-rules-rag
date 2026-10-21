@@ -13,8 +13,13 @@ export interface GameSearchOptions {
 }
 
 export interface GamesRepository {
-  /** Create a new Game. Fails with ConflictError if the slug already exists. */
-  createGame(game: Game): Promise<Game>;
+  /**
+   * Create a new Game together with its initial content packages, all or
+   * nothing: a game must never exist without the content it was created with
+   * (no endpoint can add it later). Fails with ConflictError if the game or
+   * any content package already exists.
+   */
+  createGame(game: Game, initialContent?: readonly ContentPackage[]): Promise<Game>;
   /** Get a Game by id. Returns null if not found. Editions are embedded on the record. */
   getGame(gameId: GameId): Promise<Game | null>;
   /** List/search games. Prefix match on name (case-insensitive) when query is set. */

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Game } from '@bgr/domain';
 import { asContentId, asEditionId, asGameId } from '@bgr/domain';
+import { sequentialIds } from '../ingestion/test-support.js';
 import { makeHandler } from '../lib/router.js';
 import { bodyAs, makeEvent, makeTestContext } from '../test-support.js';
 import { gameRoutes } from './games.js';
@@ -206,5 +207,33 @@ describe('games handlers', () => {
     const { ctx, handler } = build();
     const game = bodyAs<Game>(await postGame(handler, { name: 'Azul' }));
     expect(await ctx.games.listContent(game.gameId)).toEqual([]);
+  });
+
+  it('a create whose content write fails leaves nothing behind, so a retry succeeds', async () => {
+    const ctx = makeTestContext({ now: NOW, ids: sequentialIds() });
+    const handler = makeHandler(gameRoutes(() => ctx));
+    // sequentialIds will issue g_1, e_2, c_3 for the first request. Occupy
+    // c_3 so the default content write collides after the game is chosen.
+    await ctx.games.addContent({
+      contentId: asContentId('c_3'),
+      gameId: asGameId('g_1'),
+      editionId: asEditionId('e_2'),
+      slug: 'squatter',
+      name: 'Squatter',
+      contentType: 'PROMO',
+      dependencies: [],
+      status: 'READY',
+    });
+    const body = { name: 'Cascadia', initialEdition: { name: 'First Edition' } };
+
+    const first = await postGame(handler, body);
+    expect(first.statusCode).toBeGreaterThanOrEqual(400);
+    expect(await ctx.games.getGame(asGameId('g_1'))).toBeNull();
+
+    const retry = await postGame(handler, body);
+    expect(retry.statusCode).toBe(201);
+    const game = bodyAs<Game>(retry);
+    expect(await ctx.games.listContent(game.gameId)).toHaveLength(1);
+    expect((await ctx.games.searchGames({ query: 'cascadia' })).items).toHaveLength(1);
   });
 });

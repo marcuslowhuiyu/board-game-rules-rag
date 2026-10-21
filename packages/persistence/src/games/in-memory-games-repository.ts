@@ -13,13 +13,23 @@ export class InMemoryGamesRepository implements GamesRepository {
   private readonly games = new Map<GameId, Game>();
   private readonly contentByGame = new Map<GameId, ContentPackage[]>();
 
-  async createGame(game: Game): Promise<Game> {
+  async createGame(game: Game, initialContent: readonly ContentPackage[] = []): Promise<Game> {
+    // Check everything before writing anything, mirroring the DynamoDB
+    // transaction: either the game and all its content land, or nothing does.
     for (const existing of this.games.values()) {
       if (existing.slug === game.slug) {
         throw new ConflictError(`game with slug already exists: ${game.slug}`);
       }
     }
+    for (const pkg of initialContent) {
+      if ((this.contentByGame.get(pkg.gameId) ?? []).some((c) => c.contentId === pkg.contentId)) {
+        throw new ConflictError(`content already exists: ${pkg.contentId}`);
+      }
+    }
     this.games.set(game.gameId, game);
+    for (const pkg of initialContent) {
+      this.contentByGame.set(pkg.gameId, [...(this.contentByGame.get(pkg.gameId) ?? []), pkg]);
+    }
     return game;
   }
 

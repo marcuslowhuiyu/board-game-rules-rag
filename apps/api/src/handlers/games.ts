@@ -89,23 +89,22 @@ export function gameRoutes(ctxFactory: () => AppContext) {
       updatedAt: now,
     });
 
-    await app.games.createGame(game);
     // Ingestion is keyed by content package and no endpoint creates one, so a
     // new edition gets a default READY base package to ingest sources into.
-    for (const edition of editions) {
-      await app.games.addContent(
-        ContentPackageSchema.parse({
-          contentId: app.ids.contentId(),
-          gameId: game.gameId,
-          editionId: edition.editionId,
-          slug: 'base',
-          name: 'Base Game',
-          contentType: 'BASE',
-          dependencies: [],
-          status: 'READY',
-        }),
-      );
-    }
+    // Written in the same atomic create as the game.
+    const baseContent: ContentPackage[] = editions.map((edition) =>
+      ContentPackageSchema.parse({
+        contentId: app.ids.contentId(),
+        gameId: game.gameId,
+        editionId: edition.editionId,
+        slug: 'base',
+        name: 'Base Game',
+        contentType: 'BASE',
+        dependencies: [],
+        status: 'READY',
+      }),
+    );
+    await app.games.createGame(game, baseContent);
     rc.logger.info('game created', { gameId: game.gameId, slug: game.slug });
     return created(game);
   };

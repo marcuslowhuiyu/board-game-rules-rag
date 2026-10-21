@@ -136,7 +136,7 @@ The 25 MiB response cap is enforced **while streaming**: the body is read increm
 
 ### Default content package for new games
 
-Ingestion jobs are keyed by `(game, edition, contentId)`, and no HTTP route creates content packages. A game created through `POST /games` with an `initialEdition` therefore also gets a READY `BASE` package (`slug: base`, `name: Base Game`) for that edition. Otherwise a game added in the app could never ingest a source (M2-R3 §5d). Games without an edition get no content. Seeded games keep their explicitly seeded packages.
+Ingestion jobs are keyed by `(game, edition, contentId)`, and no HTTP route creates content packages. A game created through `POST /games` with an `initialEdition` therefore also gets a READY `BASE` package (`slug: base`, `name: Base Game`) for that edition. Otherwise a game added in the app could never ingest a source (M2-R3 §5d). The game and its base package are written in **one DynamoDB transaction** across the games and content tables (`GamesRepository.createGame(game, initialContent)`). If the content write could fail after the game committed, a retry would get 409 on the slug, and nothing could repair the content-less game. Games without an edition get no content. Seeded games keep their explicitly seeded packages.
 
 ### `POST /ingestion` public schema
 

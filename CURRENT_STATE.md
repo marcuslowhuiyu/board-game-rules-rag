@@ -70,11 +70,11 @@ Tests: Dynamo publisher (4-item transaction, `JOB_STALE` mapping), `MarkJobFaile
 3. PDF headings are detected on every line (unpdf's single-newline output had flattened all but the first heading per page).
 4. Chunk queries follow `LastEvaluatedKey` for listing and deletion.
 5. The URL fetcher enforces the size cap while streaming and cancels the body.
-6. `POST /games` with an initial edition also creates a READY base content package.
+6. `POST /games` with an initial edition also creates a READY base content package, atomically with the game. The R3 Codex review caught a partial-create failure in the first version.
 7. SourcesScreen resets the content package when the edition changes; the old code sent the previous edition's `contentId`.
 8. SourcesScreen cancels the previous job's poll loop when a new job starts, and on unmount.
 
-251 tests total. `main` was merged into the branch (CI-minimisation and repo-recreation changes).
+254 tests total. `main` was merged into the branch (CI-minimisation and repo-recreation changes).
 
 ### What still MUST happen post-merge before M2 is closed
 
