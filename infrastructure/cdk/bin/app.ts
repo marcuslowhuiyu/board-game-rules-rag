@@ -21,6 +21,7 @@ const githubRepo =
 
 const existingOidcProviderArn = app.node.tryGetContext('existingOidcProviderArn') as
   string | undefined;
+const useExistingOidcProvider = app.node.tryGetContext('useExistingOidcProvider') === true;
 const githubOwnerId = app.node.tryGetContext('githubOwnerId') as string | undefined;
 const githubRepoId = app.node.tryGetContext('githubRepoId') as string | undefined;
 
@@ -29,6 +30,7 @@ new GithubOidcStack(app, 'BgrGithubOidcStack', {
   githubRepo,
   environmentName: 'dev',
   ...(existingOidcProviderArn ? { existingOidcProviderArn } : {}),
+  useExistingOidcProvider,
   ...(githubOwnerId ? { githubOwnerId } : {}),
   ...(githubRepoId ? { githubRepoId } : {}),
 });

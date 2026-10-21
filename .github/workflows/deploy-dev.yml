@@ -3,6 +3,10 @@ name: Deploy dev
 on:
   push:
     branches: [main]
+    # Docs-only merges change nothing deployed (ADR-0009).
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
   workflow_dispatch:
 
 concurrency:
@@ -13,6 +17,7 @@ jobs:
   deploy:
     name: CDK deploy → dev
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     environment: dev
     permissions:
       id-token: write
@@ -38,6 +43,8 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
+          # Redact the account id from all later log output (ADR-0009).
+          mask-aws-account-id: true
 
       - name: CDK synth
         run: pnpm -C infrastructure/cdk synth -c githubRepo=${{ github.repository }}

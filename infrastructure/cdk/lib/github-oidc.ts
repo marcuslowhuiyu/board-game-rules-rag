@@ -25,6 +25,13 @@ export interface GithubOidcStackProps extends StackProps {
    */
   existingOidcProviderArn?: string;
   /**
+   * Reuse the account's existing GitHub OIDC provider, deriving its ARN from
+   * the stack's own account. Preferred over `existingOidcProviderArn` because
+   * it keeps the account id out of committed config. Ignored when
+   * `existingOidcProviderArn` is set.
+   */
+  useExistingOidcProvider?: boolean;
+  /**
    * Numeric GitHub owner (user or org) id. When set together with `githubRepoId`,
    * the trust policy also accepts GitHub's immutable-id `sub` claim format
    * (`repo:<owner>@<ownerId>/<repo>@<repoId>:*`). This claim shape is emitted
@@ -51,11 +58,21 @@ export class GithubOidcStack extends Stack {
 
     const environmentName = props.environmentName ?? 'dev';
 
-    const provider = props.existingOidcProviderArn
+    const existingProviderArn =
+      props.existingOidcProviderArn ??
+      (props.useExistingOidcProvider
+        ? this.formatArn({
+            service: 'iam',
+            region: '',
+            resource: 'oidc-provider',
+            resourceName: 'token.actions.githubusercontent.com',
+          })
+        : undefined);
+    const provider = existingProviderArn
       ? OpenIdConnectProvider.fromOpenIdConnectProviderArn(
           this,
           'GithubOidcProvider',
-          props.existingOidcProviderArn,
+          existingProviderArn,
         )
       : new OpenIdConnectProvider(this, 'GithubOidcProvider', {
           url: 'https://token.actions.githubusercontent.com',
