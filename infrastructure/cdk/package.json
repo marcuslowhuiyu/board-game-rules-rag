@@ -15,12 +15,12 @@
     "deploy:oidc": "cdk deploy BgrGithubOidcStack --require-approval never"
   },
   "dependencies": {
-    "aws-cdk-lib": "^2.160.0",
+    "aws-cdk-lib": "^2.273.0",
     "constructs": "^10.3.0"
   },
   "devDependencies": {
     "@types/node": "^22.7.0",
-    "aws-cdk": "^2.160.0",
+    "aws-cdk": "^2.1145.0",
     "tsx": "^4.19.1",
     "typescript": "^5.6.2",
     "vitest": "^2.1.1"
