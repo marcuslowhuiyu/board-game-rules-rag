@@ -2102,7 +2102,8 @@ For every milestone Claude Code must:
 8. run quality checks;
 9. update documentation;
 10. update `CURRENT_STATE.md`;
-11. prepare a concise PR summary.
+11. run an independent Codex review of the branch and triage its findings (`CLAUDE.md` §Independent review);
+12. prepare a concise PR summary, including the review triage.
 
 Claude Code must not proactively implement future milestones unless required for a minimal interface/stub.
 
