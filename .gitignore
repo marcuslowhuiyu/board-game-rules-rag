@@ -15,3 +15,6 @@ cdk.context.json
 evals/reports
 .pnpm-store
 *.tsbuildinfo
+
+# CodeGraph local index (per-developer, never committed)
+.codegraph/
