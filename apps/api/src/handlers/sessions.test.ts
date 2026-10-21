@@ -10,7 +10,10 @@ import { makeHandler } from '../lib/router.js';
 import { bodyAs, makeEvent, makeTestContext } from '../test-support.js';
 import { sessionRoutes } from './sessions.js';
 
-const NOW = '2026-09-16T00:00:00.000Z';
+// Future-dated to keep the session's 24h TTL from expiring against wall-clock
+// checks in `InMemorySessionsRepository.getSession` when tests run after
+// 2026-09-17.
+const NOW = '2099-01-01T00:00:00.000Z';
 
 const seedGame = async (
   ctx: ReturnType<typeof makeTestContext>,
