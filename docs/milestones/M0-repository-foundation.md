@@ -25,9 +25,9 @@ Repository layout (`MASTER_PLAN.md` §57):
                        log group, IAM OIDC role for GitHub Actions
 /evals           empty package + README
 /.github/workflows
-  ci.yml         install / format-check / lint / typecheck / test / cdk synth / security
+  ci.yml         install / format-check / lint / typecheck / test / cdk synth / audit
   deploy-dev.yml on merge to main: assume OIDC role, cdk deploy dev, smoke test
-  security.yml   Dependabot + CodeQL
+  security.yml   Dependabot + CodeQL (removed by ADR-0009; audit folded into ci.yml)
 ```
 
 Tooling:
@@ -38,7 +38,7 @@ Tooling:
 - Vitest configured in `apps/api`, `apps/web`, and one package as proof.
 - `.nvmrc` and `engines` pinning the Node LTS version (record it in ADR-0001 as a "Revision" line).
 - Dependabot config for npm + GitHub Actions.
-- CodeQL workflow for the JS/TS ecosystem.
+- CodeQL workflow for the JS/TS ecosystem. _(Removed by ADR-0009: CodeQL is unavailable on the private repo.)_
 
 AWS bootstrap:
 
