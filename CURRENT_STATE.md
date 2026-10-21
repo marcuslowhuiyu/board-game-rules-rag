@@ -1,10 +1,10 @@
 # Current State
 
-_Last updated: 2026-09-17 (post-review)_
+_Last updated: 2026-10-21 (M2-R1 review-fix slice)_
 
 ## Current milestone
 
-**Milestone 2 — Document Ingestion** (feature branch `feature/m02-document-ingestion`; PR #7 open, currently under review after operator feedback). Do not advance to M3 until PR #7 merges AND the post-merge real-document acceptance checks pass on dev.
+**Milestone 2 — Document Ingestion** (feature branch `feature/m02-document-ingestion`; PR #7 open). Second-round review fixes are tracked in `docs/milestones/M2-REVIEW-FIXES.md` as three slices: **M2-R1 done (awaiting human review)**, M2-R2 and M2-R3 not started. Do not advance to M3 until PR #7 merges AND the post-merge real-document acceptance checks pass on dev.
 
 Spec: `docs/milestones/M2-document-ingestion.md`.
 Architecture decision: `docs/adr/0008-document-ingestion-pipeline.md` (revised 2026-09-17).
@@ -39,6 +39,19 @@ Architecture decision: `docs/adr/0008-document-ingestion-pipeline.md` (revised 2
 9. **Storage lifecycle (R9).** `raw/` and `normalized/` are retained (no `ExpirationInDays`). Per-job stage state moved from `normalized/{jobId}/state/*` to `temporary/ingestion/{jobId}/state/*.json`, which has a 7-day lifecycle expiration. `temporary/` catch-all expires after 1 day. Multipart cleanup on every prefix (3 days). CDK test enforces raw/ and normalized/ have no ExpirationInDays.
 10. **Bucket CORS (R10).** Ingestion bucket CORS `AllowedOrigins` is pinned to the CloudFront `distributionDomainName` via a CfnBucket escape hatch after the distribution is constructed. Never `*`. CDK test asserts no `*` and that the origin references the distribution's domain.
 11. **Deploy workflow smoke test (R11).** Now reads the actual `Edition.knowledgeRevision` from the games table before and after the duplicate ingestion and asserts equality. Also added: a `pdf-lib`-generated synthetic PDF test that exercises the real `createUnpdfExtractor()` end-to-end (`packages/ingestion/src/parsers/unpdf-extractor.test.ts`), so the deployed `unpdf` path is covered by CI, not only by the deploy smoke test.
+
+### Second-round review fixes (`docs/milestones/M2-REVIEW-FIXES.md`)
+
+**M2-R1 — Pipeline state correctness (done, awaiting review).**
+
+1. FINALIZE's job `SUCCEEDED` write is now the fourth item in the atomic-publish transaction (`PublishDocumentArgs.completedJob` + `expectedJobUpdatedAt`, new `JOB_STALE` conflict reason). No window where the document is CURRENT but the job is not SUCCEEDED. `failJob` also refuses to downgrade a SUCCEEDED job.
+2. `GAME_STALE` / `PREV_NOT_CURRENT` / `JOB_STALE` throw `RetryableStageError`; the runner does not persist FAILED for them, and the FINALIZE task retries that error (3 attempts, 1 s/exp backoff) before the Catch path records FAILED.
+3. `Check_After_<STAGE>` routes only `terminal && status = SUCCEEDED` to success; any other terminal result goes `TerminalNotSucceeded_<STAGE> → MarkJobFailed_<STAGE> → PipelineFailed`.
+4. `MarkJobFailed` never overwrites a SUCCEEDED job.
+
+Tests: Dynamo publisher (4-item transaction, `JOB_STALE` mapping), `MarkJobFailed` handler (RUNNING / FAILED / SUCCEEDED), pipeline (error after commit, rejected publish, each retryable reason, real `JOB_STALE`, FAILED redelivery), and structural CDK assertions on the Choice branches and the FINALIZE retrier. 214 tests total.
+
+**M2-R2** (chunk idempotency + storage invariants) and **M2-R3** (parse quality + final cleanup) not started.
 
 ### What still MUST happen post-merge before M2 is closed
 

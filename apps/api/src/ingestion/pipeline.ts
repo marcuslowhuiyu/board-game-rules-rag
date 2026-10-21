@@ -91,6 +91,20 @@ export class StageError extends Error {
   }
 }
 
+/**
+ * A stage failure that re-reading state and running the stage again may
+ * resolve (e.g. FINALIZE lost an optimistic-concurrency race). The runner
+ * does NOT persist FAILED for these; the error propagates to Step Functions,
+ * whose Retry policy matches on `name` (the Lambda `errorType`). Only once
+ * retries are exhausted does the Catch → MarkJobFailed path record FAILED.
+ */
+export class RetryableStageError extends StageError {
+  constructor(stage: IngestionStage, message: string, code: string) {
+    super(stage, message, code);
+    this.name = 'RetryableStageError';
+  }
+}
+
 export interface RunStageResult {
   job: IngestionJob;
   ranStage: IngestionStage;
@@ -181,6 +195,10 @@ export async function runStage(
         mutated = await advanceStage(ctx, job, stage, { status: 'RUNNING' });
     }
   } catch (err) {
+    if (err instanceof RetryableStageError) {
+      ctx.logger?.warn('stage hit a retryable conflict', { jobId, stage, code: err.code });
+      throw err;
+    }
     if (err instanceof StageError) {
       await failJob(ctx, job, stage, err.message, err.code);
       throw err;
@@ -548,6 +566,20 @@ async function stageFinalize(ctx: StageContext, job: IngestionJob): Promise<Inge
     updatedAt: nowIso,
   };
 
+  // The job's SUCCEEDED write rides in the same transaction as the publish
+  // (ADR-0008 §FINALIZE), so there is no window in which the document is
+  // CURRENT but the job still reads RUNNING.
+  const completedJob: IngestionJob = IngestionJobSchema.parse({
+    ...job,
+    status: 'SUCCEEDED',
+    stage: 'FINALIZE',
+    completedStages: appendStage(job.completedStages, ...M2_STAGE_ORDER),
+    documentId: newDoc.documentId,
+    chunkCount: persistedChunks.length,
+    ...(superseded ? { supersededDocumentId: superseded.documentId } : {}),
+    updatedAt: nowIso,
+  });
+
   try {
     await ctx.publisher.publishDocument({
       newDocument: newDoc,
@@ -555,14 +587,18 @@ async function stageFinalize(ctx: StageContext, job: IngestionJob): Promise<Inge
       gameId: job.gameId,
       nextEditions,
       expectedGameUpdatedAt: game.updatedAt,
+      completedJob,
+      expectedJobUpdatedAt: job.updatedAt,
       now: nowIso,
     });
   } catch (err) {
     if (err instanceof PublishConflictError) {
       if (err.reason === 'DOC_EXISTS') {
-        // Transaction saw the new doc already present — we published in a
-        // previous retry. Recover as success (not "duplicate", because it's
-        // the same doc we planned).
+        // Defensive: with the job write inside the transaction, a published
+        // document implies a SUCCEEDED job, so a retry normally exits at the
+        // already-terminal check in `runStage`. If the job row was nonetheless
+        // left non-terminal (manual repair, legacy data), recover as success
+        // — not "duplicate", because it's the same doc we planned.
         const existing = await ctx.documents.getDocument(job.plannedDocumentId as SourceDocumentId);
         if (!existing) {
           throw new StageError(
@@ -586,22 +622,15 @@ async function stageFinalize(ctx: StageContext, job: IngestionJob): Promise<Inge
           ctx.now().toISOString(),
         );
       }
-      // GAME_STALE / PREV_NOT_CURRENT — re-throw so the state machine
-      // retries FINALIZE, which will re-read fresh state.
-      throw new StageError('FINALIZE', err.message, err.reason);
+      // GAME_STALE / PREV_NOT_CURRENT / JOB_STALE — not terminal. Leave the
+      // job RUNNING and let the state machine retry FINALIZE, which re-reads
+      // the game row, the previous CURRENT doc and the job.
+      throw new RetryableStageError('FINALIZE', err.message, err.reason);
     }
     throw err;
   }
 
-  const patch: Partial<Omit<IngestionJob, 'jobId' | 'createdAt'>> = {
-    status: 'SUCCEEDED',
-    stage: 'FINALIZE',
-    completedStages: appendStage(job.completedStages, ...M2_STAGE_ORDER),
-    documentId: newDoc.documentId,
-    chunkCount: persistedChunks.length,
-  };
-  if (superseded) patch.supersededDocumentId = superseded.documentId;
-  return ctx.jobs.updateJob(job.jobId, patch, nowIso);
+  return completedJob;
 }
 
 // ---------------------------------------------------------------------------
@@ -646,6 +675,14 @@ async function failJob(
   code: string,
 ): Promise<void> {
   try {
+    // Never downgrade a finished job: FINALIZE's transaction may have
+    // committed SUCCEEDED before a later error (e.g. a lost response) reached
+    // this handler.
+    const current = await ctx.jobs.getJob(job.jobId);
+    if (current?.status === 'SUCCEEDED') {
+      ctx.logger?.warn('not marking SUCCEEDED job as FAILED', { jobId: job.jobId, stage, code });
+      return;
+    }
     await ctx.jobs.updateJob(
       job.jobId,
       {

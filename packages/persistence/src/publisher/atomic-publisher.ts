@@ -1,4 +1,4 @@
-import type { Edition, GameId, SourceDocument, SourceDocumentId } from '@bgr/domain';
+import type { Edition, GameId, IngestionJob, SourceDocument, SourceDocumentId } from '@bgr/domain';
 
 /**
  * Arguments for one atomic publish. Everything that must succeed or fail
@@ -21,14 +21,31 @@ export interface PublishDocumentArgs {
    * underneath us — caller should retry FINALIZE.
    */
   expectedGameUpdatedAt: string;
+  /**
+   * The ingestion job in its final SUCCEEDED shape, written in the same
+   * transaction so "document is CURRENT" and "job is SUCCEEDED" can never
+   * disagree (ADR-0008 §FINALIZE). The write is conditional on the job row
+   * still carrying `expectedJobUpdatedAt`; otherwise the publish fails as
+   * `JOB_STALE`.
+   */
+  completedJob: IngestionJob;
+  expectedJobUpdatedAt: string;
   /** Wall-clock timestamp to stamp on all mutated rows. */
   now: string;
 }
 
+/**
+ * - `DOC_EXISTS` — the planned document is already present (an earlier
+ *   attempt published it).
+ * - `PREV_NOT_CURRENT` / `GAME_STALE` / `JOB_STALE` — something moved
+ *   underneath the caller; re-reading state and retrying may succeed.
+ */
+export type PublishConflictReason = 'DOC_EXISTS' | 'PREV_NOT_CURRENT' | 'GAME_STALE' | 'JOB_STALE';
+
 export class PublishConflictError extends Error {
   constructor(
     message: string,
-    public readonly reason: 'DOC_EXISTS' | 'PREV_NOT_CURRENT' | 'GAME_STALE',
+    public readonly reason: PublishConflictReason,
   ) {
     super(message);
     this.name = 'PublishConflictError';
@@ -40,7 +57,8 @@ export class PublishConflictError extends Error {
  *   - the new document appears with `status = CURRENT`,
  *   - the previous CURRENT document (if any) flips to `SUPERSEDED`,
  *   - the game's edition `knowledgeRevision` is bumped,
- * all in one commit. On failure, none of the three mutations lands. See
+ *   - the ingestion job is marked SUCCEEDED,
+ * all in one commit. On failure, none of the four mutations lands. See
  * ADR-0008 for the invariant this guarantees.
  */
 export interface AtomicPublisher {

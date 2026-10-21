@@ -316,16 +316,50 @@ export class DevStack extends Stack {
         interval: Duration.seconds(5),
         backoffRate: 2,
       });
+      if (stage === 'FINALIZE') {
+        // Optimistic-concurrency conflicts on the atomic publish (GAME_STALE /
+        // PREV_NOT_CURRENT / JOB_STALE) are thrown as RetryableStageError and
+        // NOT persisted as FAILED by the runner. Retry re-reads fresh state;
+        // once exhausted, the Catch below records FAILED via MarkJobFailed.
+        stageTask.addRetry({
+          errors: ['RetryableStageError'],
+          maxAttempts: 3,
+          interval: Duration.seconds(1),
+          backoffRate: 2,
+        });
+      }
       stageTask.addCatch(markFailedTask, {
         errors: ['States.ALL'],
         resultPath: '$.error',
       });
 
+      // A terminal result whose job is not SUCCEEDED (e.g. redelivery of a
+      // stage against an already-FAILED job) must not reach Succeed. Synthesise
+      // the `$.error` shape the Catch path produces and reuse the same
+      // MarkJobFailed_<STAGE> task (idempotent on FAILED, never downgrades
+      // SUCCEEDED).
+      const terminalNotSucceeded = new Pass(this, `TerminalNotSucceeded_${stage}`, {
+        comment: 'Stage runner reported a terminal job that is not SUCCEEDED.',
+        parameters: {
+          Error: 'TerminalJobNotSucceeded',
+          'Cause.$': "States.Format('stage runner returned terminal job with status {}', $.status)",
+        },
+        resultPath: '$.error',
+      }).next(markFailedTask);
+
       // Choice after each stage — a terminal SUCCEEDED result (e.g. FETCH
       // dedup short-circuit or FINALIZE completion) skips the rest of the
-      // pipeline and jumps to the trailing Pass → Succeed.
+      // pipeline and jumps to the trailing Pass → Succeed. Any other terminal
+      // result fails the execution.
       const choice = new Choice(this, `Check_After_${stage}`)
-        .when(Condition.booleanEquals('$.terminal', true), skippedEmbedIndex)
+        .when(
+          Condition.and(
+            Condition.booleanEquals('$.terminal', true),
+            Condition.stringEquals('$.status', 'SUCCEEDED'),
+          ),
+          skippedEmbedIndex,
+        )
+        .when(Condition.booleanEquals('$.terminal', true), terminalNotSucceeded)
         .otherwise(nextEntry);
 
       const entry = stageTask.next(choice);

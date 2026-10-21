@@ -1,6 +1,6 @@
 # ADR-0008: Document ingestion — Step Functions + S3 + DynamoDB, deterministic PDF first
 
-- **Status:** Accepted (revised 2026-09-17 after PR #7 review)
+- **Status:** Accepted (revised 2026-09-17 after PR #7 review; revised 2026-10-21 for M2-R1 review fixes)
 - **Date:** 2026-09-17
 - **Deciders:** Marcus Low, Claude Code (M2)
 - **Related:** `MASTER_PLAN.md` §13, §14, §15, §16, §17, §18, §19, §46, §47, §48, §49, §51; Milestone 2; ADR-0001
@@ -24,13 +24,20 @@ M1 already established the domain types, DynamoDB access, and same-origin CloudF
 
 AWS Step Functions Standard workflow. Each of the eight M2 stages (`VALIDATE`, `FETCH`, `PARSE`, `CLASSIFY`, `DISCOVER_ERRATA`, `NORMALIZE`, `CHUNK`, `FINALIZE`) is a `LambdaInvoke` Task calling **the same** Node 22 Lambda (`ingestion-stage-runner`) with `{ jobId, stage }`. `EMBED` / `INDEX` are declared in a trailing `Pass` state and skipped in M2.
 
-After every stage the state machine runs a `Choice` state on the runner's response. When `$.terminal === true` (duplicate short-circuit at FETCH, FINALIZE completion, or an already-terminal job on redelivery) the chain jumps straight to `SkipEmbedIndexInM2 → PipelineSucceeded`. This is what fixes the "duplicate ran every subsequent stage anyway" bug reported in the first PR review.
+After every stage the state machine runs a `Choice` state on the runner's response, with two terminal branches:
 
-Every stage Task has a `Catch` to a per-stage `MarkJobFailed_<STAGE>` Lambda Task. That Lambda writes `status = FAILED`, `error.stage`, `error.message`, `error.code` to the job row before the `PipelineFailed` Fail state ends the execution — so a Lambda infrastructure failure (`Lambda.ServiceException`, `SdkClientException`, timeout) cannot leave a job stuck `RUNNING`. The retry policy is deliberately narrow (`Lambda.ServiceException`, `Lambda.AWSLambdaException`, `Lambda.SdkClientException`, `Lambda.TooManyRequestsException`, two attempts, 5 s/exp backoff) — application-level errors from the stage runner are NOT retried at the Step Functions level; the runner already writes its own `FAILED` record for those.
+- `$.terminal === true && $.status === 'SUCCEEDED'` (duplicate short-circuit at FETCH, FINALIZE completion, or an already-SUCCEEDED job on redelivery) → `SkipEmbedIndexInM2 → PipelineSucceeded`. This is what fixes the "duplicate ran every subsequent stage anyway" bug reported in the first PR review.
+- `$.terminal === true` with any other status (e.g. redelivery of a stage against an already-FAILED job) → `TerminalNotSucceeded_<STAGE>` (a Pass that synthesises the `$.error` shape the Catch path produces) → `MarkJobFailed_<STAGE>` → `PipelineFailed`. A FAILED job can never end in a successful execution.
+
+Non-terminal results continue to the next stage.
+
+Every stage Task has a `Catch` to a per-stage `MarkJobFailed_<STAGE>` Lambda Task. That Lambda writes `status = FAILED`, `error.stage`, `error.message`, `error.code` to the job row before the `PipelineFailed` Fail state ends the execution — so a Lambda infrastructure failure (`Lambda.ServiceException`, `SdkClientException`, timeout) cannot leave a job stuck `RUNNING`. The retry policy is deliberately narrow (`Lambda.ServiceException`, `Lambda.AWSLambdaException`, `Lambda.SdkClientException`, `Lambda.TooManyRequestsException`, two attempts, 5 s/exp backoff) — application-level errors from the stage runner are NOT retried at the Step Functions level; the runner already writes its own `FAILED` record for those. The one exception is `RetryableStageError` on the FINALIZE task (see FINALIZE below): three attempts, 1 s/exp backoff, and the runner deliberately does not write `FAILED` for it.
+
+`MarkJobFailed` is idempotent on `FAILED` (keeps the runner's more specific error) and **never overwrites `SUCCEEDED`**: if the runner's own write landed but Step Functions still took the Catch path (e.g. the invocation timed out after the commit), it logs the skip and leaves the job alone. The runner's own `failJob` has the same guard.
 
 ### Stage runner idempotency + already-terminal jobs
 
-The runner checks `job.status` first. If the job is already `SUCCEEDED` or `FAILED` (Step Functions redelivery, at-least-once semantics), the runner returns `{ terminal: true }` without any side effects. The Choice state then jumps straight to the Succeed state.
+The runner checks `job.status` first. If the job is already `SUCCEEDED` or `FAILED` (Step Functions redelivery, at-least-once semantics), the runner returns `{ terminal: true }` without any side effects. The Choice state then routes on the job's status: SUCCEEDED to Succeed, FAILED through `MarkJobFailed` to Fail.
 
 ### State layout
 
@@ -88,19 +95,22 @@ Rewritten from the pre-review draft. The old order mutated authoritative state b
 1. `CHUNK` reserves `plannedDocumentId` (if not already set on retry), writes every chunk body to S3 and every chunk metadata row to DynamoDB against that reserved id. Chunk ids are deterministic so retries overwrite. Fails if the chunker produced zero chunks.
 2. `FINALIZE` first does the dedup lookup by `(game, edition, contentId, contentHash)`.
    - Real duplicate (existing doc that is not our `plannedDocumentId`) → success with `duplicateOf` set. No mutations.
-   - Existing doc equals `plannedDocumentId` → retry recovery; the transaction already landed on a previous attempt. Success without `duplicateOf`.
+   - Existing doc equals `plannedDocumentId` → defensive recovery (see step 5: a landed transaction normally means the job is already SUCCEEDED and the runner exits before FINALIZE runs). Success without `duplicateOf`.
 3. Verifies persisted chunk count matches `job.chunkCount`. Fails FINALIZE if not (a retry of `CHUNK` will re-establish the invariant).
 4. Reads current game/edition state, computes the new `SourceDocument` and `nextEditions[]` (bumped `knowledgeRevision`).
-5. **Single atomic publish via `AtomicPublisher.publishDocument()`** — DynamoDB `TransactWriteItems` with three actions:
+5. **Single atomic publish via `AtomicPublisher.publishDocument()`** — DynamoDB `TransactWriteItems` with four actions:
    - `Put` new `SourceDocument` (condition `attribute_not_exists(documentId)`)
    - `Update` previous CURRENT doc to SUPERSEDED (condition `status = CURRENT`)
    - `Update` game row with `nextEditions` (condition `updatedAt = expected`)
-   All three land, or none do.
+   - `Put` the ingestion job in its final `SUCCEEDED` shape (condition `updatedAt = expected`)
+   All four land, or none do. FINALIZE performs no separate job write afterwards.
+
+**Why the job write is inside the transaction (M2-R1 §1).** With only three items, a crash or lost response between the commit and the follow-up `updateJob` left the document CURRENT and the revision bumped while the job read `RUNNING` — and if the error surfaced in the runner, `failJob` / `MarkJobFailed` would then record `FAILED` for a job whose document is live. The alternative (tolerate "doc is CURRENT with our `plannedDocumentId`" as a recovery path) only helps if FINALIZE is re-run, which a persisted `FAILED` prevents. Making the job row a fourth transaction item removes the window instead of recovering from it: "document CURRENT" ⇔ "job SUCCEEDED". The SDK's auto-generated `ClientRequestToken` makes the transaction idempotent across SDK-level retries; a Step Functions retry of the task sees `SUCCEEDED` and exits as already-terminal. DynamoDB's 100-item transaction limit is not a concern at four items.
 
 `PublishConflictError` reasons map to typed recovery:
 
-- `DOC_EXISTS` — we already published in a previous retry. Recover as success (not duplicate).
-- `PREV_NOT_CURRENT` / `GAME_STALE` — throw so the state machine retries FINALIZE from a fresh read.
+- `DOC_EXISTS` — defensive: the planned document is already present. Recover as success (not duplicate).
+- `PREV_NOT_CURRENT` / `GAME_STALE` / `JOB_STALE` — optimistic-concurrency conflicts that a fresh read can resolve. FINALIZE throws `RetryableStageError` (Lambda `errorType` = `RetryableStageError`); the runner does **not** persist `FAILED`, the job stays `RUNNING`, and the FINALIZE task's Retry policy re-runs it. Only after retries are exhausted does the Catch path record `FAILED` via `MarkJobFailed`. (Before M2-R1 these were persisted as `FAILED` by the runner, which made the documented "retry" impossible.)
 
 ### `Chunk.isCurrent` invariant
 

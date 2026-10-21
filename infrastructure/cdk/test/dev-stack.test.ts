@@ -1,6 +1,6 @@
 import { App } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { DevStack } from '../lib/dev-stack.js';
 import { GithubOidcStack } from '../lib/github-oidc.js';
 
@@ -221,6 +221,79 @@ describe('DevStack', () => {
     expect(flat).toContain('PipelineFailed');
     // Choice branches on `$.terminal === true`.
     expect(flat).toContain('$.terminal');
+  });
+
+  describe('state machine terminal routing + retries', () => {
+    type State = {
+      Type: string;
+      Next?: string;
+      Choices?: { Next: string; And?: unknown[]; BooleanEquals?: boolean; Variable?: string }[];
+      Default?: string;
+      Retry?: { ErrorEquals: string[]; MaxAttempts?: number }[];
+    };
+    let states: Record<string, State>;
+
+    beforeAll(() => {
+      const machines = template.findResources('AWS::StepFunctions::StateMachine');
+      const first = Object.values(machines)[0] as {
+        Properties: { DefinitionString: { 'Fn::Join': [string, unknown[]] } };
+      };
+      // Replace intrinsic tokens (Lambda ARNs) with a placeholder string so
+      // the definition parses as plain JSON.
+      const json = first.Properties.DefinitionString['Fn::Join'][1]
+        .map((p) => (typeof p === 'string' ? p : 'TOKEN'))
+        .join('');
+      states = (JSON.parse(json) as { States: Record<string, State> }).States;
+    });
+
+    const STAGES = [
+      'VALIDATE',
+      'FETCH',
+      'PARSE',
+      'CLASSIFY',
+      'DISCOVER_ERRATA',
+      'NORMALIZE',
+      'CHUNK',
+      'FINALIZE',
+    ];
+
+    it.each(STAGES)('Check_After_%s sends only terminal SUCCEEDED to the success path', (stage) => {
+      const choice = states[`Check_After_${stage}`]!;
+      expect(choice.Type).toBe('Choice');
+      const [success, terminalOther] = choice.Choices!;
+      expect(success!.Next).toBe('SkipEmbedIndexInM2');
+      expect(success!.And).toEqual(
+        expect.arrayContaining([
+          { Variable: '$.terminal', BooleanEquals: true },
+          { Variable: '$.status', StringEquals: 'SUCCEEDED' },
+        ]),
+      );
+      expect(terminalOther).toMatchObject({ Variable: '$.terminal', BooleanEquals: true });
+      expect(terminalOther!.Next).toBe(`TerminalNotSucceeded_${stage}`);
+    });
+
+    it.each(STAGES)(
+      'terminal non-SUCCEEDED after %s goes through MarkJobFailed to PipelineFailed',
+      (stage) => {
+        expect(states[`TerminalNotSucceeded_${stage}`]!.Next).toBe(`MarkJobFailed_${stage}`);
+        expect(states[`MarkJobFailed_${stage}`]!.Next).toBe('PipelineFailed');
+        expect(states['PipelineFailed']!.Type).toBe('Fail');
+      },
+    );
+
+    it('only FINALIZE retries RetryableStageError, with a bounded attempt count', () => {
+      for (const stage of STAGES) {
+        const retriers = states[`Stage_${stage}`]!.Retry ?? [];
+        const retryable = retriers.find((r) => r.ErrorEquals.includes('RetryableStageError'));
+        if (stage === 'FINALIZE') {
+          expect(retryable).toBeDefined();
+          expect(retryable!.MaxAttempts).toBeGreaterThan(0);
+          expect(retryable!.MaxAttempts).toBeLessThanOrEqual(5);
+        } else {
+          expect(retryable).toBeUndefined();
+        }
+      }
+    });
   });
 
   it('exposes M2 routes on the HTTP API', () => {

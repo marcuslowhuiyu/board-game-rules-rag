@@ -13,12 +13,14 @@ import {
 export interface DynamoAtomicPublisherTables {
   documentsTable: string;
   gamesTable: string;
+  ingestionJobsTable: string;
 }
 
 /**
  * DynamoDB `AtomicPublisher` — a single `TransactWriteItems` call that
- * publishes the new document, supersedes the previous CURRENT document, and
- * bumps the game edition's `knowledgeRevision`. All-or-nothing.
+ * publishes the new document, supersedes the previous CURRENT document,
+ * bumps the game edition's `knowledgeRevision`, and marks the ingestion job
+ * SUCCEEDED. All-or-nothing.
  *
  * Cancellation reasons are mapped to the typed
  * `PublishConflictError.reason`s so the pipeline can distinguish
@@ -79,16 +81,27 @@ export class DynamoAtomicPublisher implements AtomicPublisher {
       },
     });
 
+    items.push({
+      Put: {
+        TableName: this.tables.ingestionJobsTable,
+        Item: args.completedJob,
+        ExpressionAttributeValues: { ':expJobUpd': args.expectedJobUpdatedAt },
+        ConditionExpression: 'updatedAt = :expJobUpd',
+      },
+    });
+
     try {
       await this.doc.send(new TransactWriteCommand({ TransactItems: items }));
     } catch (err) {
       if (err instanceof TransactionCanceledException) {
         const reasons = err.CancellationReasons ?? [];
-        // Items order: [0]=newDoc put, [1..N]=supersede? + game update.
-        const [newDocReason, next] = [reasons[0], reasons[1]];
-        const supersedeIsPresent = args.supersedeDocumentId !== undefined;
-        const supersedeReason = supersedeIsPresent ? next : undefined;
-        const gameReason = supersedeIsPresent ? reasons[2] : reasons[1];
+        // Items order: [0]=newDoc put, [1]=supersede (optional), then game
+        // update, then job put.
+        const offset = args.supersedeDocumentId !== undefined ? 1 : 0;
+        const newDocReason = reasons[0];
+        const supersedeReason = offset === 1 ? reasons[1] : undefined;
+        const gameReason = reasons[1 + offset];
+        const jobReason = reasons[2 + offset];
         if (newDocReason?.Code === 'ConditionalCheckFailed') {
           throw new PublishConflictError(
             `document already exists: ${args.newDocument.documentId}`,
@@ -105,6 +118,12 @@ export class DynamoAtomicPublisher implements AtomicPublisher {
           throw new PublishConflictError(
             `game ${args.gameId} moved (expected updatedAt ${args.expectedGameUpdatedAt})`,
             'GAME_STALE',
+          );
+        }
+        if (jobReason?.Code === 'ConditionalCheckFailed') {
+          throw new PublishConflictError(
+            `ingestion job ${args.completedJob.jobId} moved (expected updatedAt ${args.expectedJobUpdatedAt})`,
+            'JOB_STALE',
           );
         }
         // Unclassified — surface the raw reasons for observability.

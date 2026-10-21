@@ -1,5 +1,6 @@
 import type { InMemoryDocumentsRepository } from '../documents/in-memory-documents-repository.js';
 import type { InMemoryGamesRepository } from '../games/in-memory-games-repository.js';
+import type { InMemoryIngestionJobsRepository } from '../ingestion-jobs/in-memory-ingestion-jobs-repository.js';
 import {
   PublishConflictError,
   type AtomicPublisher,
@@ -17,6 +18,7 @@ export class InMemoryAtomicPublisher implements AtomicPublisher {
   constructor(
     private readonly documents: InMemoryDocumentsRepository,
     private readonly games: InMemoryGamesRepository,
+    private readonly jobs: InMemoryIngestionJobsRepository,
   ) {}
 
   async publishDocument(args: PublishDocumentArgs): Promise<void> {
@@ -35,6 +37,13 @@ export class InMemoryAtomicPublisher implements AtomicPublisher {
       throw new PublishConflictError(
         `document already exists: ${args.newDocument.documentId}`,
         'DOC_EXISTS',
+      );
+    }
+    const job = await this.jobs.getJob(args.completedJob.jobId);
+    if (!job || job.updatedAt !== args.expectedJobUpdatedAt) {
+      throw new PublishConflictError(
+        `ingestion job ${args.completedJob.jobId} moved (expected updatedAt ${args.expectedJobUpdatedAt})`,
+        'JOB_STALE',
       );
     }
     if (args.supersedeDocumentId) {
@@ -65,5 +74,7 @@ export class InMemoryAtomicPublisher implements AtomicPublisher {
       args.now,
       args.expectedGameUpdatedAt,
     );
+    const { jobId, createdAt: _createdAt, ...rest } = args.completedJob;
+    await this.jobs.updateJob(jobId, rest, args.completedJob.updatedAt);
   }
 }

@@ -14,7 +14,15 @@ import {
 import { sha256Hex, type PdfExtractor } from '@bgr/ingestion';
 import { makeTestContext } from '../test-support.js';
 import type { AppContext } from '../lib/context.js';
-import { runFullPipeline, runStage, StageError } from './pipeline.js';
+import {
+  PublishConflictError,
+  type AtomicPublisher,
+  type InMemoryDocumentsRepository,
+  type InMemoryGamesRepository,
+  type InMemoryIngestionJobsRepository,
+  InMemoryAtomicPublisher,
+} from '@bgr/persistence';
+import { RetryableStageError, runFullPipeline, runStage, StageError } from './pipeline.js';
 import { makeStageContext, sequentialIds } from './test-support.js';
 
 const NOW = '2026-09-17T00:00:00.000Z';
@@ -414,7 +422,7 @@ describe('ingestion pipeline (M2 acceptance)', () => {
     expect(gameAfter?.editions[0]?.knowledgeRevision).toBe(1);
   });
 
-  it('crash after FINALIZE publish (before job.updateJob): retry recovers via plannedDocumentId', async () => {
+  it('defensive: a published document with a non-terminal job row recovers via plannedDocumentId', async () => {
     const stageCtx = makeStageContext(ctx, { pdfExtractor: makeExtractor(RULEBOOK_V1_PAGES) });
     const job = await createPdfJob(ctx, 'raw/half.pdf', new Uint8Array([3, 3, 3]));
     // Advance to and including CHUNK; then run FINALIZE.
@@ -429,9 +437,9 @@ describe('ingestion pipeline (M2 acceptance)', () => {
     ] as const) {
       await runStage(job.jobId, stage, stageCtx);
     }
-    // Simulate a crash between publish and job.updateJob: manually clear the
-    // job's SUCCEEDED marker so a retry sees an in-flight FINALIZE while the
-    // document + edition mutations have already landed.
+    // The job write is inside the publish transaction, so this state can't
+    // arise from a crash; simulate it (manual repair / legacy rows) by
+    // clearing the job's SUCCEEDED marker after the publish landed.
     await runStage(job.jobId, 'FINALIZE', stageCtx);
     await ctx.ingestionJobs.updateJob(
       job.jobId,
@@ -474,5 +482,141 @@ describe('ingestion pipeline (M2 acceptance)', () => {
     expect(game?.editions[0]?.knowledgeRevision).toBe(1);
     const docs = await ctx.documents.listDocumentsForEdition(gameId, editionId);
     expect(docs).toHaveLength(1);
+  });
+
+  async function runThroughChunk(jobId: string, stageCtx: ReturnType<typeof makeStageContext>) {
+    for (const stage of [
+      'VALIDATE',
+      'FETCH',
+      'PARSE',
+      'CLASSIFY',
+      'DISCOVER_ERRATA',
+      'NORMALIZE',
+      'CHUNK',
+    ] as const) {
+      await runStage(jobId, stage, stageCtx);
+    }
+  }
+
+  function realPublisher(): InMemoryAtomicPublisher {
+    return new InMemoryAtomicPublisher(
+      ctx.documents as InMemoryDocumentsRepository,
+      ctx.games as InMemoryGamesRepository,
+      ctx.ingestionJobs as InMemoryIngestionJobsRepository,
+    );
+  }
+
+  it('FINALIZE commits job SUCCEEDED with the publish: an error after commit does not mark it FAILED', async () => {
+    const inner = realPublisher();
+    // Transaction commits, then the call still throws (e.g. lost response).
+    const publisher: AtomicPublisher = {
+      publishDocument: async (args) => {
+        await inner.publishDocument(args);
+        throw new Error('socket hang up');
+      },
+    };
+    const stageCtx = makeStageContext(ctx, {
+      pdfExtractor: makeExtractor(RULEBOOK_V1_PAGES),
+      publisher,
+    });
+    const job = await createPdfJob(ctx, 'raw/lost.pdf', new Uint8Array([6, 6, 6]));
+    await runThroughChunk(job.jobId, stageCtx);
+
+    await expect(runStage(job.jobId, 'FINALIZE', stageCtx)).rejects.toThrow('socket hang up');
+    const after = await ctx.ingestionJobs.getJob(job.jobId);
+    expect(after?.status).toBe('SUCCEEDED');
+    expect(after?.error).toBeUndefined();
+    expect(after?.documentId).toBe(after?.plannedDocumentId);
+
+    // A Step Functions retry of FINALIZE is a no-op and reports SUCCEEDED.
+    const retry = await runStage(job.jobId, 'FINALIZE', stageCtx);
+    expect(retry).toMatchObject({ terminal: true, alreadyTerminal: true, status: 'SUCCEEDED' });
+    const game = await ctx.games.getGame(gameId);
+    expect(game?.editions[0]?.knowledgeRevision).toBe(1);
+  });
+
+  it('FINALIZE leaves no partial state when the publish transaction is rejected', async () => {
+    const stageCtx = makeStageContext(ctx, {
+      pdfExtractor: makeExtractor(RULEBOOK_V1_PAGES),
+      publisher: {
+        publishDocument: async () => {
+          throw new PublishConflictError('game moved', 'GAME_STALE');
+        },
+      },
+    });
+    const job = await createPdfJob(ctx, 'raw/reject.pdf', new Uint8Array([7, 7, 7]));
+    await runThroughChunk(job.jobId, stageCtx);
+    await expect(runStage(job.jobId, 'FINALIZE', stageCtx)).rejects.toThrow();
+    expect(await ctx.documents.listDocumentsForEdition(gameId, editionId)).toEqual([]);
+    const after = await ctx.ingestionJobs.getJob(job.jobId);
+    expect(after?.status).toBe('RUNNING');
+    expect(after?.documentId).toBeUndefined();
+  });
+
+  it.each(['GAME_STALE', 'PREV_NOT_CURRENT', 'JOB_STALE'] as const)(
+    'FINALIZE %s conflict is retryable: job stays RUNNING and a retry publishes',
+    async (reason) => {
+      const inner = realPublisher();
+      let calls = 0;
+      const publisher: AtomicPublisher = {
+        publishDocument: async (args) => {
+          calls++;
+          if (calls === 1) throw new PublishConflictError(`simulated ${reason}`, reason);
+          await inner.publishDocument(args);
+        },
+      };
+      const stageCtx = makeStageContext(ctx, {
+        pdfExtractor: makeExtractor(RULEBOOK_V1_PAGES),
+        publisher,
+      });
+      const job = await createPdfJob(ctx, `raw/${reason}.pdf`, new Uint8Array([8, 8, 8]));
+      await runThroughChunk(job.jobId, stageCtx);
+
+      const err = await runStage(job.jobId, 'FINALIZE', stageCtx).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(RetryableStageError);
+      // Lambda reports `name` as errorType; the state machine retries on it.
+      expect((err as Error).name).toBe('RetryableStageError');
+      expect((err as RetryableStageError).code).toBe(reason);
+      const mid = await ctx.ingestionJobs.getJob(job.jobId);
+      expect(mid?.status).toBe('RUNNING');
+      expect(mid?.error).toBeUndefined();
+
+      const retry = await runStage(job.jobId, 'FINALIZE', stageCtx);
+      expect(retry.status).toBe('SUCCEEDED');
+      expect(retry.terminal).toBe(true);
+      const game = await ctx.games.getGame(gameId);
+      expect(game?.editions[0]?.knowledgeRevision).toBe(1);
+    },
+  );
+
+  it('real JOB_STALE: FINALIZE refuses to publish over a job row that moved', async () => {
+    const stageCtx = makeStageContext(ctx, { pdfExtractor: makeExtractor(RULEBOOK_V1_PAGES) });
+    const job = await createPdfJob(ctx, 'raw/stale.pdf', new Uint8Array([9, 9, 9]));
+    await runThroughChunk(job.jobId, stageCtx);
+    const before = await ctx.ingestionJobs.getJob(job.jobId);
+    // Another writer touches the job between FINALIZE's read and its publish.
+    const racing: AtomicPublisher = {
+      publishDocument: async (args) => {
+        await ctx.ingestionJobs.updateJob(job.jobId, {}, '2026-09-17T01:00:00.000Z');
+        await realPublisher().publishDocument(args);
+      },
+    };
+    await expect(
+      runStage(job.jobId, 'FINALIZE', { ...stageCtx, publisher: racing }),
+    ).rejects.toBeInstanceOf(RetryableStageError);
+    expect(before?.status).toBe('RUNNING');
+    expect(await ctx.documents.listDocumentsForEdition(gameId, editionId)).toEqual([]);
+    const game = await ctx.games.getGame(gameId);
+    expect(game?.editions[0]?.knowledgeRevision).toBe(0);
+  });
+
+  it('redelivery against an already-FAILED job reports terminal FAILED (state machine routes to MarkJobFailed)', async () => {
+    const stageCtx = makeStageContext(ctx, { pdfExtractor: makeExtractor(RULEBOOK_V1_PAGES) });
+    const job = await createPdfJob(ctx, 'raw/failed.pdf', new Uint8Array([4, 4, 4]), {
+      forceFailureStage: 'PARSE',
+    });
+    await expect(runFullPipeline(job.jobId, stageCtx)).rejects.toBeInstanceOf(StageError);
+    const again = await runStage(job.jobId, 'CLASSIFY', stageCtx);
+    expect(again).toMatchObject({ terminal: true, alreadyTerminal: true, status: 'FAILED' });
   });
 });

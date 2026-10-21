@@ -31,6 +31,7 @@ export function getStageContext(): StageContext {
   const bucket = requireEnv('INGESTION_BUCKET');
   const gamesTable = requireEnv('GAMES_TABLE');
   const documentsTable = requireEnv('DOCUMENTS_TABLE');
+  const ingestionJobsTable = requireEnv('INGESTION_JOBS_TABLE');
   const ddb = new DynamoDBClient({});
   const store = new S3ObjectStore({
     bucket,
@@ -44,14 +45,16 @@ export function getStageContext(): StageContext {
     chunks: new DynamoChunksRepository(ddb, {
       chunksTable: requireEnv('CHUNKS_TABLE'),
     }),
-    jobs: new DynamoIngestionJobsRepository(ddb, {
-      ingestionJobsTable: requireEnv('INGESTION_JOBS_TABLE'),
-    }),
+    jobs: new DynamoIngestionJobsRepository(ddb, { ingestionJobsTable }),
     games: new DynamoGamesRepository(ddb, {
       gamesTable,
       contentTable: requireEnv('CONTENT_TABLE'),
     }),
-    publisher: new DynamoAtomicPublisher(ddb, { documentsTable, gamesTable }),
+    publisher: new DynamoAtomicPublisher(ddb, {
+      documentsTable,
+      gamesTable,
+      ingestionJobsTable,
+    }),
     rawStore: store,
     normalizedStore: store,
     urlFetcher: createUrlFetcher(),

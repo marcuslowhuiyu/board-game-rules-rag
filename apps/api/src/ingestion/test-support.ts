@@ -8,7 +8,11 @@ import {
   type DocumentParser,
   type PdfExtractor,
 } from '@bgr/ingestion';
-import type { InMemoryDocumentsRepository, InMemoryGamesRepository } from '@bgr/persistence';
+import type {
+  InMemoryDocumentsRepository,
+  InMemoryGamesRepository,
+  InMemoryIngestionJobsRepository,
+} from '@bgr/persistence';
 import { InMemoryAtomicPublisher, type AtomicPublisher, type IdGenerator } from '@bgr/persistence';
 import type { AppContext } from '../lib/context.js';
 import type { StageContext } from './pipeline.js';
@@ -48,6 +52,7 @@ export function makeStageContext(
     new InMemoryAtomicPublisher(
       app.documents as InMemoryDocumentsRepository,
       app.games as InMemoryGamesRepository,
+      app.ingestionJobs as InMemoryIngestionJobsRepository,
     );
   const ctx: StageContext = {
     now: overrides.now ?? (() => app.clock.now()),

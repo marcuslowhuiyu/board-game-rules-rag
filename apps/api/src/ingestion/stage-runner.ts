@@ -19,9 +19,10 @@ export interface StageRunnerOutput {
   status: string;
   nextStage: string | null;
   /**
-   * The Step Functions Choice state branches on this: any `true` result
-   * short-circuits the pipeline to the Succeed state (SUCCEEDED short-
-   * circuits, e.g. FETCH duplicate; FAILED gets caught elsewhere).
+   * The Step Functions Choice state branches on this together with `status`:
+   * `terminal && status === 'SUCCEEDED'` short-circuits to Succeed (e.g.
+   * FETCH duplicate); any other terminal result routes through
+   * MarkJobFailed to the Fail state.
    */
   terminal: boolean;
   duplicate?: boolean;
@@ -34,10 +35,11 @@ export interface StageRunnerOutput {
 /**
  * Lambda handler for one ingestion stage. The Step Function invokes it
  * once per stage. Two ways a stage can terminate the pipeline:
- *   1. Thrown error → caught by state machine, MarkJobFailed writes FAILED.
- *   2. Result with `terminal: true` → Choice state jumps straight to
- *      PipelineSucceeded (used by FETCH duplicate + FINALIZE + any stage
- *      that observes an already-terminal job).
+ *   1. Thrown error → caught by state machine, MarkJobFailed writes FAILED
+ *      (except `RetryableStageError` from FINALIZE, which is retried first).
+ *   2. Result with `terminal: true` → Choice state jumps to PipelineSucceeded
+ *      when the job is SUCCEEDED (FETCH duplicate, FINALIZE, or redelivery
+ *      against a finished job), otherwise via MarkJobFailed to PipelineFailed.
  */
 export const handler = async (event: StageRunnerEvent): Promise<StageRunnerOutput> => {
   const parsed = EventSchema.parse(event);

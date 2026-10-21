@@ -41,6 +41,14 @@ function repo(): IngestionJobsRepository {
   return cachedRepo;
 }
 
+export function overrideRepoForTests(r: IngestionJobsRepository): void {
+  cachedRepo = r;
+}
+
+export function resetRepoForTests(): void {
+  cachedRepo = undefined;
+}
+
 function requireEnv(key: string): string {
   const v = process.env[key];
   if (!v || v.length === 0) throw new Error(`missing required env var: ${key}`);
@@ -49,7 +57,12 @@ function requireEnv(key: string): string {
 
 export interface MarkJobFailedOutput {
   jobId: string;
-  status: 'FAILED';
+  /**
+   * `SUCCEEDED` only when the job had already completed — the handler never
+   * downgrades a finished job (e.g. the stage runner wrote SUCCEEDED but its
+   * invocation then timed out and Step Functions took the Catch path).
+   */
+  status: 'FAILED' | 'SUCCEEDED';
   stage: IngestionStage;
 }
 
@@ -70,6 +83,14 @@ export const handler = async (event: MarkJobFailedEvent): Promise<MarkJobFailedO
     // Already marked by the stage runner — keep its more specific error.
     logger.info('mark-job-failed: job already FAILED', { jobId });
     return { jobId, status: 'FAILED', stage: current.stage };
+  }
+  if (current.status === 'SUCCEEDED') {
+    logger.warn('mark-job-failed: job already SUCCEEDED, not overwriting', {
+      jobId,
+      stage,
+      code,
+    });
+    return { jobId, status: 'SUCCEEDED', stage: current.stage };
   }
   const now = new Date().toISOString();
   await repo().updateJob(
