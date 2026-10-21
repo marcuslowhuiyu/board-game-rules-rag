@@ -122,6 +122,24 @@ describe('GithubOidcStack (creates a new OIDC provider)', () => {
   });
 });
 
+describe('GithubOidcStack (reuses the account provider, ARN derived from the stack account)', () => {
+  const app = new App();
+  const stack = new GithubOidcStack(app, 'TestOidcDerived', {
+    env: { account: '111111111111', region: 'ap-southeast-1' },
+    githubRepo: 'example-owner/example-repo',
+    useExistingOidcProvider: true,
+  });
+  const template = Template.fromStack(stack);
+
+  it('does not create a provider and trusts the provider in its own account', () => {
+    template.resourceCountIs('Custom::AWSCDKOpenIdConnectProvider', 0);
+    const roles = template.findResources('AWS::IAM::Role');
+    const trust = JSON.stringify(Object.values(roles)[0]!.Properties);
+    // `arn:${AWS::Partition}:iam::<account>:oidc-provider/…`
+    expect(trust).toContain(':iam::111111111111:oidc-provider/token.actions.githubusercontent.com');
+  });
+});
+
 describe('GithubOidcStack (reuses an existing OIDC provider)', () => {
   const app = new App();
   const stack = new GithubOidcStack(app, 'TestOidcReuse', {

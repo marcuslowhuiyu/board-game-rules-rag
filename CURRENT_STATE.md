@@ -20,8 +20,8 @@ Spec: `docs/milestones/M2-document-ingestion.md`.
   - `infrastructure/cdk`: `BgrGithubOidcStack` and `BgrDevStack` (Node 22 Lambda behind API Gateway HTTP API, private S3 site bucket, CloudFront distribution with OAC, dedicated CloudWatch log group). CDK unit tests.
   - GitHub Actions: `ci.yml`, `deploy-dev.yml`, `security.yml`, `dependabot.yml`.
   - Repository: `marcuslowhuiyu/board-game-rules-rag` (private). CI green, Deploy dev green.
-  - AWS: account `<AWS_ACCOUNT_ID>`, region `ap-southeast-1`.
-  - GitHub Environment `dev` created; `AWS_DEPLOY_ROLE_ARN` secret set to `arn:aws:iam::<AWS_ACCOUNT_ID>:role/bgr-github-deploy-dev`.
+  - AWS: region `ap-southeast-1` (account id deliberately not recorded in the repo; `aws sts get-caller-identity`).
+  - GitHub Environment `dev` created; `AWS_DEPLOY_ROLE_ARN` secret set to the `bgr-github-deploy-dev` role ARN.
 
 - **Milestone 1 — Domain Model, Game Catalog & Sessions.** Complete. Merged to `main` as commit `6b50738` (PR [#6](https://github.com/marcuslowhuiyu/board-game-rules-rag/pull/6)); `Deploy dev` run `35078588409` succeeded end-to-end; the deployed dev environment passed every M1 acceptance check.
 
