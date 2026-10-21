@@ -103,47 +103,39 @@ function buildBlocks(
         .map((l) => l.trim())
         .filter((l) => l.length > 0);
       if (lines.length === 0) continue;
-      // If the first line is a heading, emit heading + rest as separate blocks.
-      const firstHeading = isHeading(lines[0]!);
-      if (firstHeading && lines.length === 1) {
-        popTo(headingStack, firstHeading.depth - 1);
-        headingStack.push({ depth: firstHeading.depth, text: lines[0]! });
+      // Every line can be a heading: real extractors (unpdf) separate lines
+      // with single newlines, so one "paragraph" often spans several
+      // sections. Body lines accumulate until the next heading flushes them.
+      let body: string[] = [];
+      const flushBody = () => {
+        if (body.length === 0) return;
+        blocks.push({
+          headingPath: currentPath(),
+          pageStart: pageNumber,
+          pageEnd: pageNumber,
+          text: body.join(' '),
+        });
+        body = [];
+      };
+      for (const line of lines) {
+        const heading = isHeading(line);
+        if (!heading) {
+          body.push(line);
+          continue;
+        }
+        flushBody();
+        popTo(headingStack, heading.depth - 1);
+        headingStack.push({ depth: heading.depth, text: line });
         blocks.push({
           headingPath: currentPath(),
           isHeading: true,
-          headingDepth: firstHeading.depth,
+          headingDepth: heading.depth,
           pageStart: pageNumber,
           pageEnd: pageNumber,
-          text: lines[0]!,
+          text: line,
         });
-        continue;
       }
-      if (firstHeading && lines.length > 1) {
-        popTo(headingStack, firstHeading.depth - 1);
-        headingStack.push({ depth: firstHeading.depth, text: lines[0]! });
-        blocks.push({
-          headingPath: currentPath(),
-          isHeading: true,
-          headingDepth: firstHeading.depth,
-          pageStart: pageNumber,
-          pageEnd: pageNumber,
-          text: lines[0]!,
-        });
-        blocks.push({
-          headingPath: currentPath(),
-          pageStart: pageNumber,
-          pageEnd: pageNumber,
-          text: lines.slice(1).join(' '),
-        });
-        continue;
-      }
-      // Plain paragraph.
-      blocks.push({
-        headingPath: currentPath(),
-        pageStart: pageNumber,
-        pageEnd: pageNumber,
-        text: lines.join(' '),
-      });
+      flushBody();
     }
   }
   return blocks;

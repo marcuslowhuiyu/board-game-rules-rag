@@ -1,6 +1,6 @@
 # ADR-0008: Document ingestion — Step Functions + S3 + DynamoDB, deterministic PDF first
 
-- **Status:** Accepted (revised 2026-09-17 after PR #7 review; revised 2026-10-21 for M2-R1, M2-R2 and M2-R2b review fixes)
+- **Status:** Accepted (revised 2026-09-17 after PR #7 review; revised 2026-10-21 for M2-R1, M2-R2, M2-R2b and M2-R3 review fixes)
 - **Date:** 2026-09-17
 - **Deciders:** Marcus Low, Claude Code (M2)
 - **Related:** `MASTER_PLAN.md` §13, §14, §15, §16, §17, §18, §19, §46, §47, §48, §49, §51; Milestone 2; ADR-0001
@@ -67,16 +67,18 @@ M2's private-beta volume is small; storage-cost pressure comes later.
 ### Parsing
 
 - PDF: deterministic text-layer extraction via [`unpdf`](https://github.com/unjs/unpdf) (Node/serverless-friendly wrapper around `pdfjs-dist`). Real integration tested in `packages/ingestion/src/parsers/unpdf-extractor.test.ts` against a `pdf-lib`-generated fixture; the unit tests inject a stub extractor.
+- PDF headings are detected **on every line**, not only on the first line of a blank-line-separated paragraph. `unpdf` joins a page's lines with single newlines and rarely emits blank lines, so first-line-only detection flattened every later heading on a page into body text (M2-R3 §5a). Body lines accumulate until the next heading line. Known trade-off: a body line that happens to match the heading heuristic (e.g. starting `2 players …`) now becomes a heading. Tune the heuristic against the real-rulebook acceptance run.
 - HTML: `cheerio`, strips scripts/nav/aside/footer, prefers `<main>` / `[role=main]`.
 - Fallback: `createStubFallbackParser()` — declared, throws. Concrete OCR/AI implementation deferred until we have real failure data (§16).
 
 ### Quality gate
 
-`PARSE` fails the job (not FINALIZE) when the deterministic extractor cannot produce usable text:
+`PARSE` fails the job (not FINALIZE) when the deterministic extractor cannot produce usable text. The gate is **format-appropriate** (M2-R3 §1–2):
 
-- zero blocks emitted;
-- `quality.isLikelyScan === true` (heuristic: >50 % empty pages or <40 avg chars per page);
-- `> 70 %` of pages emitted no text.
+- all formats: zero blocks emitted (`EMPTY_PARSE`), or `garbledCharRatio > 0.05` (`GARBLED_EXTRACTION`: replacement or control glyphs from a broken text layer; the 5 % starting value is to be tuned after real-rulebook acceptance);
+- PDF only: `quality.isLikelyScan === true` (`LIKELY_SCAN`; heuristic: >50 % empty pages or <40 avg chars per page), or `> 70 %` of pages emitted no text (`HIGH_EMPTY_PAGE_RATIO`).
+
+Scan and empty-page heuristics assume a paged text layer. A short, valid HTML rules page (one virtual page, little text) would trip them, so they apply only when the PDF parser ran. `analyzeQuality` still computes every metric for every format; only the gate differs. The stored report can therefore show `isLikelyScan: true` for an HTML source that was accepted.
 
 The full quality report is persisted on `IngestionJob.qualityReport` and returned by `GET /ingestion/{jobId}` so an operator can see why. `knowledgeRevision` is untouched — no authoritative state changes on a quality-gate failure.
 
@@ -128,7 +130,13 @@ Rewritten from the pre-review draft. The old order mutated authoritative state b
 
 Redirects are handled **manually** (`redirect: 'manual'` on every hop). An initially safe public URL cannot redirect to a private target — every `Location` is validated through `assertUrlSafeForFetch` before the next request. Bounded at 5 redirects. `SourceDocument.canonicalUrl` records the FINAL URL after redirects, not the initial one.
 
+The 25 MiB response cap is enforced **while streaming**: the body is read incrementally and cancelled as soon as the running total passes the cap. `Content-Length` is only a fast-path rejection, because chunked responses omit it (M2-R3 §5c).
+
 **Residual risk (DNS rebinding):** `assertUrlSafeForFetch` resolves the hostname and re-checks the resolved IPs, but the subsequent `fetch()` performs its own DNS lookup, which could in principle return a different IP. Node's `fetch` (undici) does not currently accept a "pin to this IP" hint. Mitigating fully requires a custom `undici.Agent` with a pinned resolver; tracked as a follow-up. Impact: an adversary controlling DNS for their hostname could theoretically flip the returned IP between validation and connection. Not remediated in M2.
+
+### Default content package for new games
+
+Ingestion jobs are keyed by `(game, edition, contentId)`, and no HTTP route creates content packages. A game created through `POST /games` with an `initialEdition` therefore also gets a READY `BASE` package (`slug: base`, `name: Base Game`) for that edition. Otherwise a game added in the app could never ingest a source (M2-R3 §5d). Games without an edition get no content. Seeded games keep their explicitly seeded packages.
 
 ### `POST /ingestion` public schema
 
@@ -139,6 +147,8 @@ Does NOT accept `forceFailureStage`. That field lives on `IngestionJobSchema` fo
 Ingestion bucket `AllowedOrigins` is pinned to the CloudFront distribution's `distributionDomainName` in dev (via the L1 CfnBucket escape hatch since the distribution is constructed later). Never `*`. Consistent with ADR-0007 same-origin routing.
 
 ### BatchWrite retry
+
+`listChunksForDocument` and `deleteChunksForDocument` follow `LastEvaluatedKey`: one Query returns at most 1 MiB, which a large rulebook's chunk metadata exceeds, and reading only the first page would fail FINALIZE's chunk-count check (M2-R3 §5b).
 
 `DynamoChunksRepository.putChunks` and `deleteChunksForDocument` loop over `UnprocessedItems` with capped exponential backoff (up to 6 attempts, 100 ms base with jitter). Throws if items remain after `maxAttempts` — the write must not silently drop chunks or the `SourceDocument.chunkCount` claim would exceed reality.
 

@@ -93,4 +93,41 @@ describe('DynamoChunksRepository.listChunksForDocument', () => {
     }).listChunksForDocument(asSourceDocumentId('doc_1'));
     expect(docMock.commandCalls(QueryCommand)[0]!.args[0].input.ConsistentRead).toBe(true);
   });
+
+  it('follows LastEvaluatedKey so documents over one 1 MiB query page are read in full', async () => {
+    const [a, b, c] = [makeChunk(0), makeChunk(1), makeChunk(2)];
+    docMock
+      .on(QueryCommand)
+      .resolvesOnce({
+        Items: [a, b],
+        LastEvaluatedKey: { documentId: 'doc_1', chunkId: b.chunkId },
+      })
+      .resolvesOnce({ Items: [c] });
+    const chunks = await new DynamoChunksRepository(new DynamoDBClient({}), {
+      chunksTable: 'chunks',
+    }).listChunksForDocument(asSourceDocumentId('doc_1'));
+    expect(chunks.map((x) => x.ordinal)).toEqual([0, 1, 2]);
+    const second = docMock.commandCalls(QueryCommand)[1]!.args[0].input;
+    expect(second.ExclusiveStartKey).toEqual({ documentId: 'doc_1', chunkId: b.chunkId });
+  });
+
+  it('deleteChunksForDocument deletes chunks from every query page', async () => {
+    const [a, b] = [makeChunk(0), makeChunk(1)];
+    docMock
+      .on(QueryCommand)
+      .resolvesOnce({
+        Items: [{ documentId: 'doc_1', chunkId: a.chunkId }],
+        LastEvaluatedKey: { documentId: 'doc_1', chunkId: a.chunkId },
+      })
+      .resolvesOnce({ Items: [{ documentId: 'doc_1', chunkId: b.chunkId }] });
+    docMock.on(BatchWriteCommand).resolves({});
+    await new DynamoChunksRepository(new DynamoDBClient({}), {
+      chunksTable: 'chunks',
+    }).deleteChunksForDocument(asSourceDocumentId('doc_1'));
+    const deleted = docMock
+      .commandCalls(BatchWriteCommand)
+      .flatMap((call) => call.args[0].input.RequestItems!['chunks']!)
+      .map((r) => r.DeleteRequest!.Key!['chunkId']);
+    expect(deleted).toEqual([a.chunkId, b.chunkId]);
+  });
 });

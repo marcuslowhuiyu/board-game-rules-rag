@@ -1,10 +1,10 @@
 # Current State
 
-_Last updated: 2026-10-21 (M2-R2b review-fix slice)_
+_Last updated: 2026-10-21 (M2-R3 review-fix slice)_
 
 ## Current milestone
 
-**Milestone 2 — Document Ingestion** (feature branch `feature/m02-document-ingestion`; PR #7 open). Second-round review fixes are tracked in `docs/milestones/M2-REVIEW-FIXES.md` as three slices: **M2-R1 done and reviewed**, **M2-R2 done**, **M2-R2b done (awaiting human review)**, M2-R3 not started. R2b was added after an independent Codex review of R1+R2 found four P1 defects, including a stage-runner bundle that could not load. Do not advance to M3 until PR #7 merges AND the post-merge real-document acceptance checks pass on dev.
+**Milestone 2 — Document Ingestion** (feature branch `feature/m02-document-ingestion`; PR #7 open). Second-round review fixes are tracked in `docs/milestones/M2-REVIEW-FIXES.md` as three slices: R1, R2 and R2b are done and reviewed; **M2-R3 is done (awaiting human review)**. After R3 review, PR #1 needs a final review before it can leave draft and merge. R2b was added after an independent Codex review of R1+R2 found four P1 defects, including a stage-runner bundle that could not load. Do not advance to M3 until PR #7 merges AND the post-merge real-document acceptance checks pass on dev.
 
 Spec: `docs/milestones/M2-document-ingestion.md`.
 Architecture decision: `docs/adr/0008-document-ingestion-pipeline.md` (revised 2026-09-17).
@@ -63,7 +63,18 @@ Tests: Dynamo publisher (4-item transaction, `JOB_STALE` mapping), `MarkJobFaile
 
 **M2-R2b — Deployability and consistency (done, awaiting review).** Fixes the four Codex P1 findings. The stage-runner bundle could not load (`Dynamic require of "buffer"`); fixed with a shared `createRequire` banner, and a new CDK test imports every real bundle. Pipeline-driving DynamoDB reads are now strongly consistent. Failure writes go through an atomic `markFailedIfActive` conditional write, closing the downgrade race the R1 guard left open. 233 tests total.
 
-**M2-R3** (parse quality + final cleanup, now also the Codex P2 findings) not started.
+**M2-R3 — Parse quality and final cleanup (done, awaiting review).** Each item has a test that failed first.
+
+1. PARSE fails on `garbledCharRatio > 0.05` (`GARBLED_EXTRACTION`) for every format.
+2. The scan and empty-page gates apply only to PDF. A short, valid HTML page is accepted, and a short PDF is still rejected as `LIKELY_SCAN`.
+3. PDF headings are detected on every line (unpdf's single-newline output had flattened all but the first heading per page).
+4. Chunk queries follow `LastEvaluatedKey` for listing and deletion.
+5. The URL fetcher enforces the size cap while streaming and cancels the body.
+6. `POST /games` with an initial edition also creates a READY base content package.
+7. SourcesScreen resets the content package when the edition changes; the old code sent the previous edition's `contentId`.
+8. SourcesScreen cancels the previous job's poll loop when a new job starts, and on unmount.
+
+251 tests total. `main` was merged into the branch (CI-minimisation and repo-recreation changes).
 
 ### What still MUST happen post-merge before M2 is closed
 
@@ -93,11 +104,12 @@ Full tracker: `docs/CONTRADICTIONS_AND_GAPS.md`.
 - **No GSI on the documents table** — dev-scale scan with FilterExpression is fine at M2. Upgrade path noted.
 - **Fallback parser is a stub** — `createStubFallbackParser` throws. OCR/AI deferred.
 - **`InMemorySessionsRepository`'s TTL check uses wall-clock time** — tests that hardcode a past NOW would falsely see sessions as expired; worked around by using a far-future NOW. Consider clock-injecting in a later cleanup.
-- **CodeQL is not enabled on the private repo** (pre-existing).
+- **No static security analysis.** CodeQL was removed in ADR-0009 while the repo was private. The repo is now public (recreated 2026-10-21), so CodeQL is free and can be reinstated.
+- **PDF heading heuristic vs. real rulebooks.** Line-level heading detection can promote a body line that matches the heuristic. Tune it during the real-rulebook acceptance run, along with the 5 % garbled threshold.
 
 ## Requires operator decision, if you want them
 
-- **Branch protection on `main`.** Same options as previously (upgrade to GitHub Pro, or make the repo public).
+- **Branch protection on `main`.** Now available for free, because the repo is public. Requiring the `Lint / Typecheck / Test / Synth` check before merge would enforce the PR-and-CI workflow.
 - **`AWS_REGION` for a possible second region** for S3 Vectors or AgentCore — pending G3 / G4 verification.
 
 ## Next expected work

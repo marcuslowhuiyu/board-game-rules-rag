@@ -162,4 +162,49 @@ describe('games handlers', () => {
     const body = bodyAs<{ content: unknown[] }>(res);
     expect(body.content).toHaveLength(1);
   });
+
+  const postGame = (handler: ReturnType<typeof build>['handler'], body: unknown) =>
+    handler(
+      makeEvent({
+        rawPath: '/games',
+        requestContext: {
+          http: {
+            method: 'POST',
+            path: '/games',
+            protocol: 'HTTP/1.1',
+            sourceIp: '127.0.0.1',
+            userAgent: 'vitest',
+          },
+        } as never,
+        body: JSON.stringify(body),
+      }),
+    );
+
+  it('POST /games with an initial edition also creates a READY base content package for it', async () => {
+    // Without one, a game added through the app cannot ingest any sources:
+    // ingestion requires a contentId and no endpoint creates content.
+    const { ctx, handler } = build();
+    const res = await postGame(handler, {
+      name: 'Cascadia',
+      initialEdition: { name: 'First Edition' },
+    });
+    const game = bodyAs<Game>(res);
+    const content = await ctx.games.listContent(game.gameId);
+    expect(content).toEqual([
+      expect.objectContaining({
+        gameId: game.gameId,
+        editionId: game.editions[0]!.editionId,
+        slug: 'base',
+        name: 'Base Game',
+        contentType: 'BASE',
+        status: 'READY',
+      }),
+    ]);
+  });
+
+  it('POST /games without an edition creates no content', async () => {
+    const { ctx, handler } = build();
+    const game = bodyAs<Game>(await postGame(handler, { name: 'Azul' }));
+    expect(await ctx.games.listContent(game.gameId)).toEqual([]);
+  });
 });

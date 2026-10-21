@@ -844,4 +844,79 @@ describe('ingestion pipeline (M2 acceptance)', () => {
     expect(after?.status).toBe('SUCCEEDED');
     expect(after?.error).toBeUndefined();
   });
+
+  // -------------------------------------------------------------------------
+  // M2-R3: format-appropriate quality gate
+  // -------------------------------------------------------------------------
+
+  async function createHtmlJob(html: string, url: string) {
+    const fetched = {
+      bytes: new TextEncoder().encode(html),
+      contentType: 'text/html; charset=utf-8',
+      canonicalUrl: url,
+    };
+    const stageCtx = makeStageContext(ctx, { urlFetcher: { fetch: async () => fetched } });
+    const nowIso = ctx.clock.now().toISOString();
+    const job = IngestionJobSchema.parse({
+      jobId: asIngestionJobId(ctx.ids.ingestionJobId()),
+      gameId,
+      editionId,
+      contentId,
+      title: 'Living Rules',
+      sourceType: 'LIVING_RULES',
+      authority: 'OFFICIAL_RULES',
+      source: { kind: 'URL', url },
+      status: 'PENDING',
+      stage: 'VALIDATE',
+      completedStages: [],
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    });
+    await ctx.ingestionJobs.createJob(job);
+    return { job, stageCtx };
+  }
+
+  async function expectParseFailure(jobId: string, code: string) {
+    const failed = await ctx.ingestionJobs.getJob(asIngestionJobId(jobId));
+    expect(failed?.status).toBe('FAILED');
+    expect(failed?.error).toMatchObject({ stage: 'PARSE', code });
+    expect(await ctx.documents.listDocumentsForEdition(gameId, editionId)).toEqual([]);
+    const game = await ctx.games.getGame(gameId);
+    expect(game?.editions[0]?.knowledgeRevision).toBe(0);
+  }
+
+  it('rejects a PDF whose text layer is mostly replacement characters (GARBLED_EXTRACTION)', async () => {
+    // Two healthy pages plus one page of U+FFFD: enough text per page that
+    // the scan and empty-page gates both pass.
+    const pages = [...RULEBOOK_V1_PAGES, '�'.repeat(600)];
+    const stageCtx = makeStageContext(ctx, { pdfExtractor: makeExtractor(pages) });
+    const job = await createPdfJob(ctx, 'raw/garbled.pdf', new Uint8Array([3, 0, 1]));
+    await expect(runFullPipeline(job.jobId, stageCtx)).rejects.toBeInstanceOf(StageError);
+    await expectParseFailure(job.jobId, 'GARBLED_EXTRACTION');
+  });
+
+  it('rejects garbled HTML too (GARBLED_EXTRACTION)', async () => {
+    const { job, stageCtx } = await createHtmlJob(
+      `<html><body><main><h1>Rules</h1><p>${'�'.repeat(300)} Draw two cards.</p></main></body></html>`,
+      'https://publisher.example.com/garbled',
+    );
+    await expect(runFullPipeline(job.jobId, stageCtx)).rejects.toBeInstanceOf(StageError);
+    await expectParseFailure(job.jobId, 'GARBLED_EXTRACTION');
+  });
+
+  it('accepts a short but valid HTML rules page (scan detection is PDF-only)', async () => {
+    const { job, stageCtx } = await createHtmlJob(
+      '<html><body><main><p>Draw two cards.</p></main></body></html>',
+      'https://publisher.example.com/short',
+    );
+    const result = await runFullPipeline(job.jobId, stageCtx);
+    expect(result.status).toBe('SUCCEEDED');
+  });
+
+  it('still rejects a PDF with too little text per page as a likely scan', async () => {
+    const stageCtx = makeStageContext(ctx, { pdfExtractor: makeExtractor(['Draw two cards.']) });
+    const job = await createPdfJob(ctx, 'raw/short.pdf', new Uint8Array([3, 0, 2]));
+    await expect(runFullPipeline(job.jobId, stageCtx)).rejects.toBeInstanceOf(StageError);
+    await expectParseFailure(job.jobId, 'LIKELY_SCAN');
+  });
 });

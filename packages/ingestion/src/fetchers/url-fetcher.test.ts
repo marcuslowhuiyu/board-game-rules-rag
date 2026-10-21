@@ -99,3 +99,45 @@ describe('createUrlFetcher redirect handling', () => {
     });
   });
 });
+
+describe('createUrlFetcher size limit', () => {
+  /** A body with no Content-Length, produced lazily 100 bytes per pull. */
+  function lazyBody(totalChunks: number) {
+    let pulled = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (pulled >= totalChunks) return controller.close();
+        pulled += 1;
+        controller.enqueue(new Uint8Array(100));
+      },
+    });
+    return { stream, pulled: () => pulled };
+  }
+
+  it('aborts a body without Content-Length as soon as it exceeds maxBytes', async () => {
+    const body = lazyBody(1000); // 100 KB on offer; limit is 1 KB
+    const fetcher = createUrlFetcher({
+      resolveDns: publicResolver,
+      maxBytes: 1000,
+      fetchImpl: async () =>
+        new Response(body.stream, { status: 200, headers: { 'content-type': 'text/html' } }),
+    });
+    await expect(fetcher.fetch({ kind: 'URL', url: 'https://a.example.com/big' })).rejects.toThrow(
+      /too large/,
+    );
+    // Stopped just past the limit instead of buffering all 1000 chunks.
+    expect(body.pulled()).toBeLessThanOrEqual(12);
+  });
+
+  it('returns a body under maxBytes intact', async () => {
+    const body = lazyBody(5);
+    const fetcher = createUrlFetcher({
+      resolveDns: publicResolver,
+      maxBytes: 1000,
+      fetchImpl: async () =>
+        new Response(body.stream, { status: 200, headers: { 'content-type': 'text/html' } }),
+    });
+    const result = await fetcher.fetch({ kind: 'URL', url: 'https://a.example.com/small' });
+    expect(result.bytes.byteLength).toBe(500);
+  });
+});

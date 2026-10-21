@@ -51,6 +51,9 @@ export const SourcesScreen = ({ api, gameId, onBack }: Props): JSX.Element => {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Bumped whenever a new job starts or the screen unmounts; a poll loop
+  // whose generation is stale stops and ignores any in-flight response.
+  const pollGeneration = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -70,6 +73,7 @@ export const SourcesScreen = ({ api, gameId, onBack }: Props): JSX.Element => {
       });
     return () => {
       cancelled = true;
+      pollGeneration.current += 1;
       if (pollRef.current) clearTimeout(pollRef.current);
     };
   }, [api, gameId]);
@@ -80,19 +84,35 @@ export const SourcesScreen = ({ api, gameId, onBack }: Props): JSX.Element => {
   }, [game, editionId]);
 
   const pollJob = useCallback(
-    async (jobId: string) => {
+    async (jobId: string, generation: number) => {
       try {
         const fresh = await api.getIngestion(jobId);
+        if (generation !== pollGeneration.current) return;
         setJob(fresh);
         if (fresh.status === 'RUNNING' || fresh.status === 'PENDING') {
-          pollRef.current = setTimeout(() => void pollJob(jobId), 2000);
+          pollRef.current = setTimeout(() => void pollJob(jobId, generation), 2000);
         }
       } catch (err) {
+        if (generation !== pollGeneration.current) return;
         setError(err instanceof Error ? err.message : 'poll failed');
       }
     },
     [api],
   );
+
+  /** Show a newly created job and poll it, abandoning any previous job's loop. */
+  const trackJob = (created: IngestionJobView): void => {
+    pollGeneration.current += 1;
+    if (pollRef.current) clearTimeout(pollRef.current);
+    setJob(created);
+    void pollJob(created.jobId, pollGeneration.current);
+  };
+
+  const selectEdition = (nextEditionId: string): void => {
+    setEditionId(nextEditionId);
+    const first = game?.content.find((c) => c.editionId === nextEditionId);
+    setContentId(first?.contentId ?? '');
+  };
 
   const startFile = async (): Promise<void> => {
     if (!file || !editionId || !contentId || !title.trim()) return;
@@ -120,8 +140,7 @@ export const SourcesScreen = ({ api, gameId, onBack }: Props): JSX.Element => {
           sizeBytes: file.size,
         },
       });
-      setJob(created);
-      void pollJob(created.jobId);
+      trackJob(created);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'ingestion failed');
     } finally {
@@ -143,8 +162,7 @@ export const SourcesScreen = ({ api, gameId, onBack }: Props): JSX.Element => {
         authority: AUTHORITY_FOR_TYPE[sourceType],
         source: { kind: 'URL', url: urlValue.trim() },
       });
-      setJob(created);
-      void pollJob(created.jobId);
+      trackJob(created);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'ingestion failed');
     } finally {
@@ -173,7 +191,7 @@ export const SourcesScreen = ({ api, gameId, onBack }: Props): JSX.Element => {
           id="src-edition"
           className="select"
           value={editionId}
-          onChange={(e) => setEditionId(e.target.value)}
+          onChange={(e) => selectEdition(e.target.value)}
         >
           {game.editions.map((e) => (
             <option key={e.editionId} value={e.editionId}>

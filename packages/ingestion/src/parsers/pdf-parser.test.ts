@@ -55,4 +55,40 @@ describe('createPdfTextLayerParser', () => {
     expect(doc.quality.isLikelyScan).toBe(true);
     expect(doc.quality.warnings.some((w) => /PDF parse failed/.test(w))).toBe(true);
   });
+
+  it('detects headings on any line when the extractor separates lines with single newlines', async () => {
+    // unpdf joins a page's lines with "\n" and rarely emits blank lines, so a
+    // whole page arrives as one paragraph.
+    const parser = createPdfTextLayerParser({
+      extract: async () => ({
+        pages: [
+          'COMBAT\nCombat resolves in rounds.\nMOVEMENT\nShips move up to their speed.\nPRODUCTION\nBuild units at a space dock.',
+        ],
+      }),
+    });
+    const doc = await parser.parse(new Uint8Array(), { contentType: 'application/pdf' });
+    const body = (start: string) =>
+      doc.blocks.find((b) => !b.isHeading && b.text.startsWith(start));
+    expect(doc.blocks.filter((b) => b.isHeading).map((b) => b.text)).toEqual([
+      'COMBAT',
+      'MOVEMENT',
+      'PRODUCTION',
+    ]);
+    expect(body('Combat resolves')?.headingPath).toEqual(['COMBAT']);
+    expect(body('Ships move')?.headingPath).toEqual(['MOVEMENT']);
+    expect(body('Build units')?.headingPath).toEqual(['PRODUCTION']);
+  });
+
+  it('joins wrapped body lines under one heading into a single block', async () => {
+    const parser = createPdfTextLayerParser({
+      extract: async () => ({
+        pages: ['COMBAT\nThe attacker assigns hits\nto their own units, one at a time.'],
+      }),
+    });
+    const doc = await parser.parse(new Uint8Array(), { contentType: 'application/pdf' });
+    const bodies = doc.blocks.filter((b) => !b.isHeading);
+    expect(bodies.map((b) => b.text)).toEqual([
+      'The attacker assigns hits to their own units, one at a time.',
+    ]);
+  });
 });

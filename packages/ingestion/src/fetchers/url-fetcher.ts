@@ -84,10 +84,7 @@ export function createUrlFetcher(options: UrlFetcherOptions = {}): DocumentFetch
           if (declared > maxBytes) {
             throw new Error(`response too large: ${declared} > ${maxBytes}`);
           }
-          const buf = new Uint8Array(await res.arrayBuffer());
-          if (buf.byteLength > maxBytes) {
-            throw new Error(`response too large: ${buf.byteLength} > ${maxBytes}`);
-          }
+          const buf = await readCapped(res, maxBytes);
           return {
             bytes: buf,
             contentType: res.headers.get('content-type') ?? 'application/octet-stream',
@@ -103,4 +100,33 @@ export function createUrlFetcher(options: UrlFetcherOptions = {}): DocumentFetch
       }
     },
   };
+}
+
+/**
+ * Read a response body, cancelling it once more than `maxBytes` arrive.
+ * Content-Length is advisory (absent for chunked responses), so the cap has
+ * to be enforced while streaming rather than after buffering everything.
+ */
+async function readCapped(res: Response, maxBytes: number): Promise<Uint8Array> {
+  if (!res.body) return new Uint8Array(0);
+  const reader = res.body.getReader();
+  const parts: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      throw new Error(`response too large: more than ${maxBytes} bytes`);
+    }
+    parts.push(value);
+  }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.byteLength;
+  }
+  return out;
 }

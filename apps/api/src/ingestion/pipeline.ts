@@ -61,6 +61,13 @@ export interface StageContext {
   logger?: Logger;
 }
 
+/**
+ * PARSE fails when more than this share of extracted characters are
+ * replacement/control glyphs (broken text layer). Initial value from the
+ * M2-R3 spec; tune after real-rulebook acceptance.
+ */
+const GARBLED_CHAR_RATIO_LIMIT = 0.05;
+
 /** Ordered list of stages that run in M2 (EMBED / INDEX skipped until M3). */
 export const M2_STAGE_ORDER: IngestionStage[] = [
   'VALIDATE',
@@ -348,19 +355,30 @@ async function stageParse(ctx: StageContext, job: IngestionJob): Promise<Ingesti
       'EMPTY_PARSE',
     );
   }
-  if (parsed.quality.isLikelyScan) {
+  if (parsed.quality.garbledCharRatio > GARBLED_CHAR_RATIO_LIMIT) {
     throw new StageError(
       'PARSE',
-      `deterministic PDF extraction inadequate: ${qualityReport.warnings.join('; ') || 'likely scan'}`,
-      'LIKELY_SCAN',
+      `${(parsed.quality.garbledCharRatio * 100).toFixed(1)}% of extracted characters are garbled/replacement`,
+      'GARBLED_EXTRACTION',
     );
   }
-  if (parsed.quality.emptyPageRatio > 0.7) {
-    throw new StageError(
-      'PARSE',
-      `${(parsed.quality.emptyPageRatio * 100).toFixed(0)}% of pages produced no text`,
-      'HIGH_EMPTY_PAGE_RATIO',
-    );
+  // Scan and empty-page heuristics only mean something for paged PDF text
+  // layers; a short HTML page is legitimately low-density (ADR-0008 §Quality gate).
+  if (parser === ctx.pdfParser) {
+    if (parsed.quality.isLikelyScan) {
+      throw new StageError(
+        'PARSE',
+        `deterministic PDF extraction inadequate: ${qualityReport.warnings.join('; ') || 'likely scan'}`,
+        'LIKELY_SCAN',
+      );
+    }
+    if (parsed.quality.emptyPageRatio > 0.7) {
+      throw new StageError(
+        'PARSE',
+        `${(parsed.quality.emptyPageRatio * 100).toFixed(0)}% of pages produced no text`,
+        'HIGH_EMPTY_PAGE_RATIO',
+      );
+    }
   }
 
   await writeState(ctx, job.jobId, 'parsed', parsed);

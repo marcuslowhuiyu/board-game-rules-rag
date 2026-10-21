@@ -5,6 +5,7 @@ import {
   DynamoDBDocumentClient,
   QueryCommand,
   type BatchWriteCommandInput,
+  type QueryCommandInput,
 } from '@aws-sdk/lib-dynamodb';
 import type { ChunksRepository } from './chunks-repository.js';
 
@@ -63,29 +64,18 @@ export class DynamoChunksRepository implements ChunksRepository {
   }
 
   async listChunksForDocument(documentId: SourceDocumentId): Promise<Chunk[]> {
-    const res = await this.doc.send(
-      new QueryCommand({
-        TableName: this.tables.chunksTable,
-        // FINALIZE counts the chunks CHUNK just wrote.
-        ConsistentRead: true,
-        KeyConditionExpression: 'documentId = :d',
-        ExpressionAttributeValues: { ':d': documentId },
-      }),
+    // FINALIZE counts the chunks CHUNK just wrote, hence ConsistentRead.
+    const items = (await this.queryAllForDocument(documentId, { ConsistentRead: true })).map((i) =>
+      ChunkSchema.parse(i),
     );
-    const items = (res.Items ?? []).map((i) => ChunkSchema.parse(i));
     return items.sort((a, b) => a.ordinal - b.ordinal);
   }
 
   async deleteChunksForDocument(documentId: SourceDocumentId): Promise<void> {
-    const res = await this.doc.send(
-      new QueryCommand({
-        TableName: this.tables.chunksTable,
-        KeyConditionExpression: 'documentId = :d',
-        ExpressionAttributeValues: { ':d': documentId },
-        ProjectionExpression: 'documentId, chunkId',
-      }),
-    );
-    const keys = (res.Items ?? []).map((i) => ({
+    const rows = await this.queryAllForDocument(documentId, {
+      ProjectionExpression: 'documentId, chunkId',
+    });
+    const keys = rows.map((i) => ({
       documentId: i['documentId'] as string,
       chunkId: i['chunkId'] as string,
     }));
@@ -93,6 +83,32 @@ export class DynamoChunksRepository implements ChunksRepository {
       const requests: WriteRequest[] = batch.map((k) => ({ DeleteRequest: { Key: k } }));
       await this.runBatchWithRetries(requests, keys.length);
     }
+  }
+
+  /**
+   * Every item for a document, following `LastEvaluatedKey`: a single Query
+   * returns at most 1 MiB, which a large rulebook's chunk metadata exceeds.
+   */
+  private async queryAllForDocument(
+    documentId: SourceDocumentId,
+    extra: Partial<Pick<QueryCommandInput, 'ConsistentRead' | 'ProjectionExpression'>>,
+  ): Promise<Record<string, unknown>[]> {
+    const items: Record<string, unknown>[] = [];
+    let start: Record<string, unknown> | undefined;
+    do {
+      const res = await this.doc.send(
+        new QueryCommand({
+          TableName: this.tables.chunksTable,
+          KeyConditionExpression: 'documentId = :d',
+          ExpressionAttributeValues: { ':d': documentId },
+          ...extra,
+          ...(start ? { ExclusiveStartKey: start } : {}),
+        }),
+      );
+      items.push(...(res.Items ?? []));
+      start = res.LastEvaluatedKey;
+    } while (start);
+    return items;
   }
 
   /**
