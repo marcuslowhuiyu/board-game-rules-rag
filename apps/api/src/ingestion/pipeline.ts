@@ -682,23 +682,21 @@ async function failJob(
   code: string,
 ): Promise<void> {
   try {
-    // Never downgrade a finished job: FINALIZE's transaction may have
-    // committed SUCCEEDED before a later error (e.g. a lost response) reached
-    // this handler.
-    const current = await ctx.jobs.getJob(job.jobId);
-    if (current?.status === 'SUCCEEDED') {
-      ctx.logger?.warn('not marking SUCCEEDED job as FAILED', { jobId: job.jobId, stage, code });
-      return;
-    }
-    await ctx.jobs.updateJob(
+    // Conditional write: never downgrade a finished job. FINALIZE's
+    // transaction may have committed SUCCEEDED before a later error (e.g. a
+    // lost response) reached this handler.
+    const outcome = await ctx.jobs.markFailedIfActive(
       job.jobId,
-      {
-        status: 'FAILED',
-        stage,
-        error: { stage, message, code },
-      },
+      { stage, message, code },
       ctx.now().toISOString(),
     );
+    if (outcome === 'NOT_APPLIED') {
+      ctx.logger?.warn('job already terminal; failure not recorded', {
+        jobId: job.jobId,
+        stage,
+        code,
+      });
+    }
   } catch (err) {
     ctx.logger?.error('failed to persist failure', {
       jobId: job.jobId,

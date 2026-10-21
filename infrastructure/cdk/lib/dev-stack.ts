@@ -45,6 +45,19 @@ import type { Construct } from 'constructs';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Shared by every Lambda. The ESM output has no `require`, but bundled
+// CommonJS dependencies (e.g. the HTML parser's iconv-lite → safer-buffer)
+// call `require` for Node built-ins; without this banner the bundle throws
+// `Dynamic require of "buffer" is not supported` on load.
+const LAMBDA_BUNDLING = {
+  format: OutputFormat.ESM,
+  target: 'node22',
+  sourceMap: true,
+  minify: false,
+  banner:
+    "import { createRequire as __bgrCreateRequire } from 'node:module'; const require = __bgrCreateRequire(import.meta.url);",
+};
+
 const M2_STAGES = [
   'VALIDATE',
   'FETCH',
@@ -174,12 +187,7 @@ export class DevStack extends Stack {
         uploadMaxBytes,
         presignExpirySeconds,
       }),
-      bundling: {
-        format: OutputFormat.ESM,
-        target: 'node22',
-        sourceMap: true,
-        minify: false,
-      },
+      bundling: LAMBDA_BUNDLING,
     });
 
     // ------ Ingestion stage-runner Lambda -------------------------------
@@ -205,12 +213,7 @@ export class DevStack extends Stack {
         INGESTION_JOBS_TABLE: ingestionJobsTable.tableName,
         INGESTION_BUCKET: ingestionBucket.bucketName,
       },
-      bundling: {
-        format: OutputFormat.ESM,
-        target: 'node22',
-        sourceMap: true,
-        minify: false,
-      },
+      bundling: LAMBDA_BUNDLING,
     });
 
     gamesTable.grantReadWriteData(stageRunnerFn);
@@ -241,12 +244,7 @@ export class DevStack extends Stack {
         NODE_OPTIONS: '--enable-source-maps',
         INGESTION_JOBS_TABLE: ingestionJobsTable.tableName,
       },
-      bundling: {
-        format: OutputFormat.ESM,
-        target: 'node22',
-        sourceMap: true,
-        minify: false,
-      },
+      bundling: LAMBDA_BUNDLING,
     });
     ingestionJobsTable.grantReadWriteData(markJobFailedFn);
 

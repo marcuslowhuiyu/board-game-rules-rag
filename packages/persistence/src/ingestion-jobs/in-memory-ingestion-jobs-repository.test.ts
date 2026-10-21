@@ -55,4 +55,32 @@ describe('InMemoryIngestionJobsRepository', () => {
       repo.updateJob(asIngestionJobId('job_missing'), { status: 'FAILED' }, iso),
     ).rejects.toThrow(/not found/);
   });
+
+  describe('markFailedIfActive', () => {
+    const error = { stage: 'PARSE' as const, message: 'boom', code: 'X' };
+    const later = '2026-09-17T00:05:00.000Z';
+
+    it('marks a RUNNING job FAILED with the error', async () => {
+      const repo = new InMemoryIngestionJobsRepository();
+      await repo.createJob(makeJob({ status: 'RUNNING', stage: 'PARSE' }));
+      expect(await repo.markFailedIfActive(asIngestionJobId('job_1'), error, later)).toBe('FAILED');
+      const job = await repo.getJob(asIngestionJobId('job_1'));
+      expect(job).toMatchObject({ status: 'FAILED', stage: 'PARSE', error, updatedAt: later });
+    });
+
+    it.each(['SUCCEEDED', 'FAILED'] as const)('leaves a %s job untouched', async (status) => {
+      const repo = new InMemoryIngestionJobsRepository();
+      const prior = { stage: 'CHUNK' as const, message: 'earlier', code: 'EARLIER' };
+      await repo.createJob(
+        makeJob({ status, stage: 'CHUNK', ...(status === 'FAILED' ? { error: prior } : {}) }),
+      );
+      expect(await repo.markFailedIfActive(asIngestionJobId('job_1'), error, later)).toBe(
+        'NOT_APPLIED',
+      );
+      const job = await repo.getJob(asIngestionJobId('job_1'));
+      expect(job?.status).toBe(status);
+      expect(job?.updatedAt).toBe(iso);
+      expect(job?.error).toEqual(status === 'FAILED' ? prior : undefined);
+    });
+  });
 });

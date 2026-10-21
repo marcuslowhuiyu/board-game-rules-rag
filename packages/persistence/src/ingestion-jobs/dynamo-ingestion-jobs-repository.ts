@@ -12,7 +12,7 @@ import {
   PutCommand,
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
-import type { IngestionJobsRepository } from './ingestion-jobs-repository.js';
+import type { IngestionJobError, IngestionJobsRepository } from './ingestion-jobs-repository.js';
 
 export interface DynamoIngestionJobsTables {
   ingestionJobsTable: string;
@@ -49,7 +49,12 @@ export class DynamoIngestionJobsRepository implements IngestionJobsRepository {
 
   async getJob(jobId: IngestionJobId): Promise<IngestionJob | null> {
     const res = await this.doc.send(
-      new GetCommand({ TableName: this.tables.ingestionJobsTable, Key: { jobId } }),
+      // Strongly consistent: each stage consumes the previous stage's write.
+      new GetCommand({
+        TableName: this.tables.ingestionJobsTable,
+        Key: { jobId },
+        ConsistentRead: true,
+      }),
     );
     if (!res.Item) return null;
     return IngestionJobSchema.parse(res.Item);
@@ -101,5 +106,34 @@ export class DynamoIngestionJobsRepository implements IngestionJobsRepository {
       throw err;
     }
     return merged;
+  }
+
+  async markFailedIfActive(
+    jobId: IngestionJobId,
+    error: IngestionJobError,
+    updatedAt: string,
+  ): Promise<'FAILED' | 'NOT_APPLIED'> {
+    try {
+      await this.doc.send(
+        new UpdateCommand({
+          TableName: this.tables.ingestionJobsTable,
+          Key: { jobId },
+          UpdateExpression: 'SET #s = :failed, #st = :stage, #e = :error, updatedAt = :u',
+          ConditionExpression: 'attribute_exists(jobId) AND #s <> :succeeded AND #s <> :failed',
+          ExpressionAttributeNames: { '#s': 'status', '#st': 'stage', '#e': 'error' },
+          ExpressionAttributeValues: {
+            ':failed': 'FAILED',
+            ':succeeded': 'SUCCEEDED',
+            ':stage': error.stage,
+            ':error': error,
+            ':u': updatedAt,
+          },
+        }),
+      );
+      return 'FAILED';
+    } catch (err) {
+      if (err instanceof ConditionalCheckFailedException) return 'NOT_APPLIED';
+      throw err;
+    }
   }
 }

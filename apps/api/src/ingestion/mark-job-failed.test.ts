@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { asIngestionJobId, type IngestionJob } from '@bgr/domain';
-import { InMemoryIngestionJobsRepository } from '@bgr/persistence';
+import { InMemoryIngestionJobsRepository, type IngestionJobsRepository } from '@bgr/persistence';
 import { handler, overrideRepoForTests, resetRepoForTests } from './mark-job-failed.js';
 import { seedJob } from './pipeline.js';
 
@@ -61,5 +61,32 @@ describe('MarkJobFailed handler', () => {
     expect(job?.status).toBe('SUCCEEDED');
     expect(job?.error).toBeUndefined();
     expect(job?.updatedAt).toBe(LATER);
+  });
+
+  it('does not downgrade a job that SUCCEEDED after the handler read it', async () => {
+    // The store already holds SUCCEEDED, but every read returns the stale
+    // RUNNING snapshot: FINALIZE committed between the handler's read and
+    // its write. Only an atomic conditional write can refuse here.
+    await seed({ status: 'SUCCEEDED', stage: 'FINALIZE', updatedAt: LATER });
+    const stale = seedJob({
+      jobId: asIngestionJobId('job_1'),
+      status: 'RUNNING',
+      stage: 'FINALIZE',
+    });
+    const racing: IngestionJobsRepository = Object.assign(Object.create(repo), {
+      getJob: async () => stale,
+    });
+    overrideRepoForTests(racing);
+
+    await handler({
+      jobId: 'job_1',
+      stage: 'FINALIZE',
+      cause: 'timeout',
+      errorName: 'States.Timeout',
+    });
+
+    const job = await repo.getJob(asIngestionJobId('job_1'));
+    expect(job?.status).toBe('SUCCEEDED');
+    expect(job?.error).toBeUndefined();
   });
 });

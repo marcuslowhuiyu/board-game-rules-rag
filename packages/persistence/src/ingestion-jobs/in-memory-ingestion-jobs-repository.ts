@@ -5,7 +5,7 @@ import {
   type IngestionJob,
   type IngestionJobId,
 } from '@bgr/domain';
-import type { IngestionJobsRepository } from './ingestion-jobs-repository.js';
+import type { IngestionJobError, IngestionJobsRepository } from './ingestion-jobs-repository.js';
 
 export class InMemoryIngestionJobsRepository implements IngestionJobsRepository {
   private readonly byId = new Map<IngestionJobId, IngestionJob>();
@@ -31,5 +31,27 @@ export class InMemoryIngestionJobsRepository implements IngestionJobsRepository 
     const merged = IngestionJobSchema.parse({ ...current, ...patch, updatedAt });
     this.byId.set(jobId, merged);
     return merged;
+  }
+
+  async markFailedIfActive(
+    jobId: IngestionJobId,
+    error: IngestionJobError,
+    updatedAt: string,
+  ): Promise<'FAILED' | 'NOT_APPLIED'> {
+    const current = this.byId.get(jobId);
+    if (!current || current.status === 'SUCCEEDED' || current.status === 'FAILED') {
+      return 'NOT_APPLIED';
+    }
+    this.byId.set(
+      jobId,
+      IngestionJobSchema.parse({
+        ...current,
+        status: 'FAILED',
+        stage: error.stage,
+        error,
+        updatedAt,
+      }),
+    );
+    return 'FAILED';
   }
 }

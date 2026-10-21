@@ -66,6 +66,8 @@ export class DynamoChunksRepository implements ChunksRepository {
     const res = await this.doc.send(
       new QueryCommand({
         TableName: this.tables.chunksTable,
+        // FINALIZE counts the chunks CHUNK just wrote.
+        ConsistentRead: true,
         KeyConditionExpression: 'documentId = :d',
         ExpressionAttributeValues: { ':d': documentId },
       }),

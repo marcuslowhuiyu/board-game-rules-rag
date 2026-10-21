@@ -62,7 +62,11 @@ export class DynamoDocumentsRepository implements DocumentsRepository {
 
   async getDocument(documentId: SourceDocumentId): Promise<SourceDocument | null> {
     const res = await this.doc.send(
-      new GetCommand({ TableName: this.tables.documentsTable, Key: { documentId } }),
+      new GetCommand({
+        TableName: this.tables.documentsTable,
+        Key: { documentId },
+        ConsistentRead: true,
+      }),
     );
     if (!res.Item) return null;
     return SourceDocumentSchema.parse(res.Item);
@@ -77,8 +81,11 @@ export class DynamoDocumentsRepository implements DocumentsRepository {
     let start: Record<string, unknown> | undefined;
     do {
       const res = await this.doc.send(
+        // Strongly consistent: FINALIZE decides dedup and supersede from
+        // these reads; a stale miss could leave two CURRENT documents.
         new ScanCommand({
           TableName: this.tables.documentsTable,
+          ConsistentRead: true,
           FilterExpression: filter,
           ExpressionAttributeValues: values,
           ...(names ? { ExpressionAttributeNames: names } : {}),

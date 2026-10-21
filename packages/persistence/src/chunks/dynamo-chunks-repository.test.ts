@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { mockClient } from 'aws-sdk-client-mock';
-import { DynamoDBDocumentClient, BatchWriteCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, BatchWriteCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import {
   asChunkId,
@@ -79,5 +79,18 @@ describe('DynamoChunksRepository.putChunks', () => {
     await makeRepo().putChunks(chunks);
     // 30 / 25 = 2 batches.
     expect(docMock.commandCalls(BatchWriteCommand)).toHaveLength(2);
+  });
+});
+
+describe('DynamoChunksRepository.listChunksForDocument', () => {
+  const docMock = mockClient(DynamoDBDocumentClient);
+  beforeEach(() => docMock.reset());
+
+  it('queries with strong consistency (FINALIZE counts chunks CHUNK just wrote)', async () => {
+    docMock.on(QueryCommand).resolves({ Items: [] });
+    await new DynamoChunksRepository(new DynamoDBClient({}), {
+      chunksTable: 'chunks',
+    }).listChunksForDocument(asSourceDocumentId('doc_1'));
+    expect(docMock.commandCalls(QueryCommand)[0]!.args[0].input.ConsistentRead).toBe(true);
   });
 });

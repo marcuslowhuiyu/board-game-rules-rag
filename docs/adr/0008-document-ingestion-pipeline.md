@@ -1,6 +1,6 @@
 # ADR-0008: Document ingestion — Step Functions + S3 + DynamoDB, deterministic PDF first
 
-- **Status:** Accepted (revised 2026-09-17 after PR #7 review; revised 2026-10-21 for M2-R1 and M2-R2 review fixes)
+- **Status:** Accepted (revised 2026-09-17 after PR #7 review; revised 2026-10-21 for M2-R1, M2-R2 and M2-R2b review fixes)
 - **Date:** 2026-09-17
 - **Deciders:** Marcus Low, Claude Code (M2)
 - **Related:** `MASTER_PLAN.md` §13, §14, §15, §16, §17, §18, §19, §46, §47, §48, §49, §51; Milestone 2; ADR-0001
@@ -33,7 +33,11 @@ Non-terminal results continue to the next stage.
 
 Every stage Task has a `Catch` to a per-stage `MarkJobFailed_<STAGE>` Lambda Task. That Lambda writes `status = FAILED`, `error.stage`, `error.message`, `error.code` to the job row before the `PipelineFailed` Fail state ends the execution — so a Lambda infrastructure failure (`Lambda.ServiceException`, `SdkClientException`, timeout) cannot leave a job stuck `RUNNING`. The retry policy is deliberately narrow (`Lambda.ServiceException`, `Lambda.AWSLambdaException`, `Lambda.SdkClientException`, `Lambda.TooManyRequestsException`, two attempts, 5 s/exp backoff) — application-level errors from the stage runner are NOT retried at the Step Functions level; the runner already writes its own `FAILED` record for those. The one exception is `RetryableStageError` on the FINALIZE task (see FINALIZE below): three attempts, 1 s/exp backoff, and the runner deliberately does not write `FAILED` for it.
 
-`MarkJobFailed` is idempotent on `FAILED` (keeps the runner's more specific error) and **never overwrites `SUCCEEDED`**: if the runner's own write landed but Step Functions still took the Catch path (e.g. the invocation timed out after the commit), it logs the skip and leaves the job alone. The runner's own `failJob` has the same guard.
+`MarkJobFailed` is idempotent on `FAILED` (keeps the runner's more specific error) and **never overwrites `SUCCEEDED`**: if the runner's own write landed but Step Functions still took the Catch path (e.g. the invocation timed out after the commit), the job is left alone. Both `MarkJobFailed` and the runner's `failJob` record failures through `IngestionJobsRepository.markFailedIfActive()`, a single conditional write (`status <> SUCCEEDED AND status <> FAILED`). A read-then-write guard is not enough, because a FINALIZE commit can land between the read and the write (M2-R2b §4).
+
+**Read consistency.** Every read that drives a pipeline decision is strongly consistent (`ConsistentRead`): job reads between stages, the chunk query FINALIZE uses to count chunks, and the document reads and scans behind dedup and supersede. An eventually consistent miss there can cause spurious terminal failures or two CURRENT documents. The cost is double read capacity on small, low-volume tables (M2-R2b §2–3).
+
+**Bundling.** All Lambdas share one esbuild config with a `createRequire` banner, because bundled CommonJS dependencies call `require` inside the ESM output. A CDK test imports every synthesized bundle in plain Node, so packaging faults that unit tests (which import sources) cannot see fail CI (M2-R2b §1).
 
 ### Stage runner idempotency + already-terminal jobs
 

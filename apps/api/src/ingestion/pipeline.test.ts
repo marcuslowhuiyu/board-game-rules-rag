@@ -654,9 +654,9 @@ describe('ingestion pipeline (M2 acceptance)', () => {
     return {
       createJob: (j) => inner.createJob(j),
       getJob: (id) => inner.getJob(id),
-      updateJob: async (id, patch, at) => {
-        if (patch.status === 'FAILED') throw new Error('process died before failJob');
-        return inner.updateJob(id, patch, at);
+      updateJob: (id, patch, at) => inner.updateJob(id, patch, at),
+      markFailedIfActive: async () => {
+        throw new Error('process died before failJob');
       },
     };
   }
@@ -823,5 +823,25 @@ describe('ingestion pipeline (M2 acceptance)', () => {
     const chunks = await ctx.chunks.listChunksForDocument(asSourceDocumentId(result.documentId!));
     expect(chunks.length).toBeGreaterThan(0);
     for (const c of chunks) expect('isCurrent' in c).toBe(false);
+  });
+
+  it('failJob does not downgrade a job that SUCCEEDED after the stage read it', async () => {
+    const stageCtx = makeStageContext(ctx, { pdfExtractor: makeExtractor(RULEBOOK_V1_PAGES) });
+    const job = await createPdfJob(ctx, 'raw/race.pdf', new Uint8Array([1, 2, 9]), {
+      forceFailureStage: 'PARSE',
+    });
+    // Real row: SUCCEEDED. Reads: a stale RUNNING snapshot at PARSE.
+    await ctx.ingestionJobs.updateJob(job.jobId, { status: 'SUCCEEDED' }, NOW);
+    const stale = { ...job, status: 'RUNNING' as const, stage: 'PARSE' as const };
+    const racingJobs: IngestionJobsRepository = Object.assign(Object.create(ctx.ingestionJobs), {
+      getJob: async () => stale,
+    });
+
+    await expect(runStage(job.jobId, 'PARSE', { ...stageCtx, jobs: racingJobs })).rejects.toThrow(
+      'forced failure',
+    );
+    const after = await ctx.ingestionJobs.getJob(job.jobId);
+    expect(after?.status).toBe('SUCCEEDED');
+    expect(after?.error).toBeUndefined();
   });
 });

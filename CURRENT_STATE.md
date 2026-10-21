@@ -1,10 +1,10 @@
 # Current State
 
-_Last updated: 2026-10-21 (M2-R2 review-fix slice)_
+_Last updated: 2026-10-21 (M2-R2b review-fix slice)_
 
 ## Current milestone
 
-**Milestone 2 — Document Ingestion** (feature branch `feature/m02-document-ingestion`; PR #7 open). Second-round review fixes are tracked in `docs/milestones/M2-REVIEW-FIXES.md` as three slices: **M2-R1 done and reviewed**, **M2-R2 done (awaiting human review)**, M2-R3 not started. Do not advance to M3 until PR #7 merges AND the post-merge real-document acceptance checks pass on dev.
+**Milestone 2 — Document Ingestion** (feature branch `feature/m02-document-ingestion`; PR #7 open). Second-round review fixes are tracked in `docs/milestones/M2-REVIEW-FIXES.md` as three slices: **M2-R1 done and reviewed**, **M2-R2 done**, **M2-R2b done (awaiting human review)**, M2-R3 not started. R2b was added after an independent Codex review of R1+R2 found four P1 defects, including a stage-runner bundle that could not load. Do not advance to M3 until PR #7 merges AND the post-merge real-document acceptance checks pass on dev.
 
 Spec: `docs/milestones/M2-document-ingestion.md`.
 Architecture decision: `docs/adr/0008-document-ingestion-pipeline.md` (revised 2026-09-17).
@@ -61,7 +61,9 @@ Tests: Dynamo publisher (4-item transaction, `JOB_STALE` mapping), `MarkJobFaile
 
 219 tests total.
 
-**M2-R3** (parse quality + final cleanup) not started.
+**M2-R2b — Deployability and consistency (done, awaiting review).** Fixes the four Codex P1 findings. The stage-runner bundle could not load (`Dynamic require of "buffer"`); fixed with a shared `createRequire` banner, and a new CDK test imports every real bundle. Pipeline-driving DynamoDB reads are now strongly consistent. Failure writes go through an atomic `markFailedIfActive` conditional write, closing the downgrade race the R1 guard left open. 233 tests total.
+
+**M2-R3** (parse quality + final cleanup, now also the Codex P2 findings) not started.
 
 ### What still MUST happen post-merge before M2 is closed
 

@@ -74,36 +74,25 @@ export const handler = async (event: MarkJobFailedEvent): Promise<MarkJobFailedO
   const code =
     typeof event.errorName === 'string' ? event.errorName.slice(0, 80) : 'STEPFUNCTIONS_FAILURE';
 
-  const current = await repo().getJob(jobId);
-  if (!current) {
-    logger.warn('mark-job-failed: job not found', { jobId, stage });
+  // One conditional write: a job that is already terminal is left alone, so
+  // a FINALIZE commit racing this handler is never downgraded and the stage
+  // runner's more specific error is kept.
+  const outcome = await repo().markFailedIfActive(
+    jobId,
+    { stage, message: message.slice(0, 2000), code },
+    new Date().toISOString(),
+  );
+  if (outcome === 'FAILED') {
+    logger.info('mark-job-failed: FAILED persisted', { jobId, stage, code });
     return { jobId, status: 'FAILED', stage };
   }
-  if (current.status === 'FAILED') {
-    // Already marked by the stage runner — keep its more specific error.
-    logger.info('mark-job-failed: job already FAILED', { jobId });
-    return { jobId, status: 'FAILED', stage: current.stage };
-  }
-  if (current.status === 'SUCCEEDED') {
-    logger.warn('mark-job-failed: job already SUCCEEDED, not overwriting', {
-      jobId,
-      stage,
-      code,
-    });
+  const current = await repo().getJob(jobId);
+  if (current?.status === 'SUCCEEDED') {
+    logger.warn('mark-job-failed: job already SUCCEEDED, not overwriting', { jobId, stage, code });
     return { jobId, status: 'SUCCEEDED', stage: current.stage };
   }
-  const now = new Date().toISOString();
-  await repo().updateJob(
-    jobId,
-    {
-      status: 'FAILED',
-      stage,
-      error: { stage, message: message.slice(0, 2000), code },
-    },
-    now,
-  );
-  logger.info('mark-job-failed: FAILED persisted', { jobId, stage, code });
-  return { jobId, status: 'FAILED', stage };
+  logger.info('mark-job-failed: job already FAILED or missing', { jobId, stage });
+  return { jobId, status: 'FAILED', stage: current?.stage ?? stage };
 };
 
 function formatCause(cause: unknown): string {

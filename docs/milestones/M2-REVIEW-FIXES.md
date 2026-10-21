@@ -33,13 +33,27 @@ The initial M2 PR received two rounds of review; the second round surfaced a fur
 
 ---
 
+## M2-R2b — Deployability and consistency (from the Codex review of R1+R2)
+
+Added 2026-10-21 after an independent Codex review of the branch (`CLAUDE.md` §Independent review) found four P1 defects. Each was verified against the code before fixing.
+
+1. **Stage-runner bundle crashes on load.** The ESM Lambda bundle had no `require`, but bundled CommonJS dependencies (the HTML parser's `iconv-lite` → `safer-buffer`) call `require('buffer')`. Every stage invocation would have failed at import with `Dynamic require of "buffer" is not supported`. Unit tests import the TypeScript sources, so they could not see it. Fix: a shared `LAMBDA_BUNDLING` config with a `createRequire` banner for all three Lambdas. Regression: `infrastructure/cdk/test/lambda-bundles.test.ts` synthesizes the real stack and imports every bundle in a plain Node process.
+2. **Eventually consistent job reads between stages.** `getJob` (and therefore `updateJob`'s read) now uses `ConsistentRead`, as does the chunk query FINALIZE uses to count freshly written chunks.
+3. **Eventually consistent publication lookups.** Document `GetItem` and the scans behind `findCurrentByKey` / `findByContentHash` now use `ConsistentRead`, so FINALIZE cannot miss the previous CURRENT document and publish a second one.
+4. **Failure writes could still downgrade a SUCCEEDED job.** The M2-R1 guard checked first and wrote second, and `updateJob` re-reads, so a FINALIZE commit landing in between was overwritten. New `IngestionJobsRepository.markFailedIfActive()` does one conditional write (`status` not SUCCEEDED/FAILED). `failJob` and `MarkJobFailed` both use it. Regression tests feed a stale RUNNING read while the stored row is SUCCEEDED.
+
+The review's P2 findings are folded into M2-R3 below.
+
+---
+
 ## M2-R3 — Parse quality and final cleanup
 
 1. **Add a garbled-text rejection threshold.** `analyzeQuality` computes `garbledCharRatio` and surfaces it in `warnings`, but the PARSE stage does not currently fail on it — only `isLikelyScan`, zero blocks, and `emptyPageRatio > 0.7` trigger `EMPTY_PARSE`/`LIKELY_SCAN`/`HIGH_EMPTY_PAGE_RATIO`. A high garbled ratio (broken text-layer extraction that yields lots of replacement characters) can slip through and become CURRENT. Add a threshold (start at `> 0.05`, tune after real-PDF acceptance) that fails the PARSE stage with `GARBLED_EXTRACTION`. Regression test with an extractor that returns a page of `�` characters.
 2. **Keep PDF scan-specific quality checks separate from HTML quality validation.** `analyzeQuality` runs against both PDFs and HTML pages via `createHtmlParser` → `analyzeQuality({ pageCount: 1, pageTexts: [combined] })`. The `isLikelyScan` heuristic (`>50% empty pages OR <40 avg chars per page`) is meaningless for HTML — a very short living-rules page could trip it. Split the quality-report application in the pipeline: PDF ingestion runs the full quality gate (scan + empty pages + garbled); HTML ingestion runs a narrower gate (zero blocks, garbled). Route on the parser choice (`pickParser`) or on `fetchState.contentType`. Regression tests for both paths.
 3. **Add regression tests.** Beyond the item-specific tests called out above, add explicit tests for: (a) M2-R1 §3 both Choice branches; (b) M2-R2 §5 `pageCount` preservation when the last page is empty; (c) M2-R3 §2 an HTML page that would trip `isLikelyScan` under PDF rules but passes under HTML rules.
 4. **Update `ADR-0008` and `CURRENT_STATE.md` if any decision changed.** In particular the transaction scope for M2-R1 §1, the storage-lifecycle restructure for M2-R2 §3, the `Chunk.isCurrent` removal for M2-R2 §4, and the split quality gate for M2-R3 §2 all warrant a paragraph in ADR-0008. Update `CURRENT_STATE.md` known-issues and Milestone-2-what-landed sections to reflect the state of the branch. Update the PR #7 description and test counts.
-5. **Run the complete M2 quality gates.** `pnpm typecheck`, `pnpm lint`, `pnpm format:check`, `pnpm test`, `pnpm synth`, then verify PR #7 CI is green. Do not merge.
+5. **Remaining Codex P2 findings (2026-10-21 review).** (a) The PDF parser only checks a paragraph's first line for a heading; unpdf separates lines with single newlines, so later headings on a page are flattened (would break real-rulebook heading paths). (b) `listChunksForDocument` / `deleteChunksForDocument` ignore `LastEvaluatedKey` (1 MiB query pages). (c) The URL fetcher buffers the whole body before enforcing `maxBytes`; enforce while streaming. (d) Frontend: games created via Add Game have no content package, so ingestion can't start; changing edition leaves a stale `contentId`; starting a second job leaves the first poll loop running. Items 1 and 2 above already cover the review's garbled-text and HTML-scan findings.
+6. **Run the complete M2 quality gates.** `pnpm typecheck`, `pnpm lint`, `pnpm format:check`, `pnpm test`, `pnpm synth`, then verify PR #7 CI is green. Do not merge.
 
 ---
 
