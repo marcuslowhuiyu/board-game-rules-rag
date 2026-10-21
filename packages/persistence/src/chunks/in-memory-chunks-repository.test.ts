@@ -27,7 +27,6 @@ const makeChunk = (over: Partial<Chunk> = {}): Chunk => ({
   tokenCount: 1,
   authority: 'OFFICIAL_RULES',
   sourceType: 'RULEBOOK',
-  isCurrent: true,
   createdAt: iso,
   ...over,
 });

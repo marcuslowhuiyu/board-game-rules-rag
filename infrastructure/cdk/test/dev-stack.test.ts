@@ -130,44 +130,56 @@ describe('DevStack', () => {
     template.resourceCountIs('AWS::S3::Bucket', 2);
   });
 
-  it('retains raw/ and normalized/, expires temporary/ingestion/ after 7 days', () => {
-    // raw/ and normalized/ carry finalized authoritative bytes and canonical
-    // chunk bodies — they must never be silently expired (ADR-0008 §R9).
-    // temporary/ingestion/{jobId}/state/*.json is per-job scratch; expire
-    // after a week. Multipart cleanup on every prefix.
-    template.hasResourceProperties('AWS::S3::Bucket', {
-      LifecycleConfiguration: Match.objectLike({
-        Rules: Match.arrayWith([
-          Match.objectLike({
-            Id: 'expire-temporary-ingestion-7d',
-            Status: 'Enabled',
-            Prefix: 'temporary/ingestion/',
-            ExpirationInDays: 7,
-          }),
-          Match.objectLike({
-            Id: 'abort-orphan-multipart-raw',
-            Status: 'Enabled',
-            Prefix: 'raw/',
-            AbortIncompleteMultipartUpload: Match.objectLike({ DaysAfterInitiation: 3 }),
-          }),
-        ]),
-      }),
-    });
+  it('ingestion bucket lifecycle: effective TTL per prefix is what ADR-0008 intends', () => {
+    // S3 applies every rule whose prefix matches a key and the shortest
+    // expiration wins, so assert the EFFECTIVE expiry for representative keys
+    // rather than the presence of individual rules (overlapping prefixes are
+    // what silently cut stage state from 7 days to 1 before M2-R2).
+    type Rule = {
+      Id?: string;
+      Status?: string;
+      Prefix?: string;
+      ExpirationInDays?: number;
+      AbortIncompleteMultipartUpload?: { DaysAfterInitiation?: number };
+    };
     const buckets = template.findResources('AWS::S3::Bucket');
-    for (const b of Object.values(buckets)) {
-      const rules =
-        (
-          b.Properties as {
-            LifecycleConfiguration?: {
-              Rules?: Array<{ Id?: string; ExpirationInDays?: number; Prefix?: string }>;
-            };
-          }
-        ).LifecycleConfiguration?.Rules ?? [];
-      for (const r of rules) {
-        if (r.Prefix === 'raw/' || r.Prefix === 'normalized/') {
-          expect(r.ExpirationInDays).toBeUndefined();
-        }
+    const rules = Object.values(buckets)
+      .map(
+        (b) =>
+          (b.Properties as { LifecycleConfiguration?: { Rules?: Rule[] } }).LifecycleConfiguration
+            ?.Rules,
+      )
+      .find((r) => r !== undefined)!;
+    expect(rules).toBeDefined();
+
+    const effectiveExpiry = (key: string): number | undefined => {
+      const days = rules
+        .filter((r) => r.Status === 'Enabled' && key.startsWith(r.Prefix ?? ''))
+        .map((r) => r.ExpirationInDays)
+        .filter((d): d is number => d !== undefined);
+      return days.length > 0 ? Math.min(...days) : undefined;
+    };
+
+    // Authoritative bytes and canonical chunk bodies are never expired.
+    expect(effectiveExpiry('raw/uploads/abc.pdf')).toBeUndefined();
+    expect(effectiveExpiry('raw/url/abc.snapshot')).toBeUndefined();
+    expect(effectiveExpiry('normalized/doc_1/ch_1_0000.txt')).toBeUndefined();
+    // Per-job stage state: exactly 7 days.
+    expect(effectiveExpiry('stage-state/ingestion/job_1/parsed.json')).toBe(7);
+    // Scratch space: 1 day.
+    expect(effectiveExpiry('temporary/anything.bin')).toBe(1);
+
+    // No rule's prefix nests inside another's.
+    const prefixes = rules.map((r) => r.Prefix ?? '');
+    for (const a of prefixes) {
+      for (const b of prefixes) {
+        if (a !== b) expect(a.startsWith(b)).toBe(false);
       }
+    }
+
+    // Multipart cleanup on every prefix.
+    for (const r of rules) {
+      expect(r.AbortIncompleteMultipartUpload?.DaysAfterInitiation).toBe(3);
     }
   });
 

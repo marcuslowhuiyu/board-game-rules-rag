@@ -30,7 +30,6 @@ const makeChunk = (ordinal: number): Chunk => ({
   tokenCount: 1,
   authority: 'OFFICIAL_RULES',
   sourceType: 'RULEBOOK',
-  isCurrent: true,
   createdAt: iso,
 });
 

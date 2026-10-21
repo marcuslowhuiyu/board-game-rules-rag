@@ -50,7 +50,7 @@ export interface StageContext {
   /**
    * Bucket for chunk bodies and transient per-stage state.
    * Chunk bodies live at `normalized/{documentId}/{chunkId}.txt` (persistent).
-   * Transient stage state lives at `temporary/ingestion/{jobId}/state/*.json`.
+   * Transient stage state lives at `stage-state/ingestion/{jobId}/*.json`.
    */
   normalizedStore: ObjectStore;
   urlFetcher: DocumentFetcher;
@@ -407,19 +407,24 @@ async function stageNormalize(ctx: StageContext, job: IngestionJob): Promise<Ing
   return advanceStage(ctx, job, 'NORMALIZE', { status: 'RUNNING' });
 }
 
-async function stageChunk(ctx: StageContext, job: IngestionJob): Promise<IngestionJob> {
+async function stageChunk(ctx: StageContext, jobIn: IngestionJob): Promise<IngestionJob> {
+  let job = jobIn;
   const normalized = await readState<ParsedDocument>(ctx, job.jobId, 'normalized');
   const chunkOutputs = chunkDocument(normalized, ctx.chunkerOptions ?? {});
   if (chunkOutputs.length === 0) {
     throw new StageError('CHUNK', 'chunker produced zero chunks', 'ZERO_CHUNKS');
   }
 
-  // Reserve the destination document id once, on the first CHUNK attempt.
-  // Chunks are keyed deterministically by (plannedDocumentId, ordinal) so
-  // retries are idempotent (an existing chunk row is overwritten with the
-  // same content). This is what makes it safe for FINALIZE to trust the
-  // chunk rows without a race window.
-  const plannedDocumentId = job.plannedDocumentId ?? asSourceDocumentId(ctx.ids.sourceDocumentId());
+  // Reserve the destination document id once, and persist it on the job
+  // BEFORE any chunk artifact is written. A retry after a crash anywhere
+  // below then reuses the same id, so S3 bodies and DDB rows (keyed
+  // deterministically by (plannedDocumentId, ordinal)) are overwritten rather
+  // than orphaned under a fresh id.
+  let plannedDocumentId = job.plannedDocumentId;
+  if (plannedDocumentId === undefined) {
+    plannedDocumentId = asSourceDocumentId(ctx.ids.sourceDocumentId());
+    job = await ctx.jobs.updateJob(job.jobId, { plannedDocumentId }, ctx.now().toISOString());
+  }
 
   const nowIso = ctx.now().toISOString();
   const chunkRecords: Chunk[] = [];
@@ -444,7 +449,6 @@ async function stageChunk(ctx: StageContext, job: IngestionJob): Promise<Ingesti
         tokenCount: c.tokenCount,
         authority: job.authority,
         sourceType: job.sourceType,
-        isCurrent: true,
         createdAt: nowIso,
         ...(job.version !== undefined ? { documentVersion: job.version } : {}),
       }),
@@ -454,8 +458,8 @@ async function stageChunk(ctx: StageContext, job: IngestionJob): Promise<Ingesti
 
   return advanceStage(ctx, job, 'CHUNK', {
     status: 'RUNNING',
-    plannedDocumentId: asSourceDocumentId(plannedDocumentId),
     chunkCount: chunkRecords.length,
+    pageCount: normalized.pageCount,
   });
 }
 
@@ -534,7 +538,10 @@ async function stageFinalize(ctx: StageContext, job: IngestionJob): Promise<Inge
   );
 
   const nowIso = ctx.now().toISOString();
-  const parsedPageCount = persistedChunks.reduce((max, c) => Math.max(max, c.pageEnd), 0);
+  // Fall back to the chunk-derived page count only for jobs that reached
+  // CHUNK before `pageCount` was recorded on the job.
+  const pageCount =
+    job.pageCount ?? persistedChunks.reduce((max, c) => Math.max(max, c.pageEnd), 0);
 
   const newDoc: SourceDocument = SourceDocumentSchema.parse({
     documentId: job.plannedDocumentId,
@@ -547,7 +554,7 @@ async function stageFinalize(ctx: StageContext, job: IngestionJob): Promise<Inge
     origin: job.source.kind === 'S3' ? 'UPLOAD' : 'URL',
     contentHash: fetchState.contentHash,
     rawObjectUri: fetchState.rawUri,
-    pageCount: parsedPageCount,
+    pageCount,
     chunkCount: persistedChunks.length,
     status: 'CURRENT',
     supersedes: superseded ? [superseded.documentId] : [],
@@ -709,18 +716,26 @@ function pickParser(ctx: StageContext, contentType: string): DocumentParser {
   return createHtmlParser();
 }
 
+/**
+ * Per-job transient state. Its own top-level prefix so exactly one S3
+ * lifecycle rule (7-day expiry) applies — see ADR-0008 §Storage lifecycle.
+ */
+export function stageStateKey(jobId: IngestionJobId, key: string): string {
+  return `stage-state/ingestion/${jobId}/${key}.json`;
+}
+
 async function writeState<T>(
   ctx: StageContext,
   jobId: IngestionJobId,
   key: string,
   data: T,
 ): Promise<void> {
-  const path = `temporary/ingestion/${jobId}/state/${key}.json`;
+  const path = stageStateKey(jobId, key);
   await ctx.normalizedStore.putBytes(path, JSON.stringify(data), 'application/json');
 }
 
 async function readState<T>(ctx: StageContext, jobId: IngestionJobId, key: string): Promise<T> {
-  const uri = ctx.normalizedStore.toUri(`temporary/ingestion/${jobId}/state/${key}.json`);
+  const uri = ctx.normalizedStore.toUri(stageStateKey(jobId, key));
   const text = await ctx.normalizedStore.getText(uri);
   return JSON.parse(text) as T;
 }

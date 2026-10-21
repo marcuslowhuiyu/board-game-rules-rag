@@ -201,7 +201,6 @@ describe('domain schemas', () => {
       tokenCount: 12,
       authority: 'OFFICIAL_RULES',
       sourceType: 'RULEBOOK',
-      isCurrent: true,
       createdAt: iso,
     });
     expect(parsed.headingPath).toEqual(['Space Combat', 'Assign Hits']);

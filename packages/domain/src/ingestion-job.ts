@@ -121,6 +121,12 @@ export const IngestionJobSchema = z.object({
    */
   documentId: SourceDocumentIdSchema.optional(),
   chunkCount: z.number().int().nonnegative().optional(),
+  /**
+   * Page count reported by the parser (`ParsedDocument.pageCount`), recorded
+   * at CHUNK so FINALIZE can publish it without re-reading stage state. Not
+   * derivable from chunks: trailing pages with no text produce none.
+   */
+  pageCount: z.number().int().nonnegative().optional(),
   duplicateOf: SourceDocumentIdSchema.optional(),
   supersededDocumentId: SourceDocumentIdSchema.optional(),
   qualityReport: IngestionQualityReportSchema.optional(),

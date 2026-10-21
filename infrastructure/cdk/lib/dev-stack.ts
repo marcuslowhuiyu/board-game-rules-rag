@@ -134,7 +134,7 @@ export class DevStack extends Stack {
       removalPolicy: RemovalPolicy.DESTROY,
     });
 
-    // ------ Ingestion S3 bucket (raw/ + normalized/ + temporary/) --------
+    // ------ Ingestion S3 bucket (raw/ + normalized/ + stage-state/ + temporary/)
     // CORS is left unset here and applied after the CloudFront distribution
     // is constructed (bottom of the constructor) so `allowedOrigins` can pin
     // to the distribution's domain instead of `*`.
@@ -549,15 +549,18 @@ function buildIngestionLifecycle(): LifecycleRule[] {
   //                                 reference these objects. Reprocessing an
   //                                 uploaded rulebook must remain possible.
   //   normalized/                — retained; canonical chunk bodies.
-  //   temporary/ingestion/       — 7 day expiry; per-job intermediate stage
+  //   stage-state/ingestion/     — 7 day expiry; per-job intermediate stage
   //                                 state (parsed.json, normalized.json, …).
   //   temporary/                 — 1 day expiry catch-all for scratch space.
+  // S3 applies EVERY rule whose prefix matches and the shortest expiration
+  // wins, so no rule's prefix may nest inside another's — stage state has its
+  // own top-level prefix rather than living under temporary/.
   // Multipart uploads under any prefix are aborted after 3 days to avoid
   // orphaned parts.
   return [
     {
-      id: 'expire-temporary-ingestion-7d',
-      prefix: 'temporary/ingestion/',
+      id: 'expire-stage-state-ingestion-7d',
+      prefix: 'stage-state/ingestion/',
       enabled: true,
       expiration: Duration.days(7),
       abortIncompleteMultipartUploadAfter: Duration.days(3),

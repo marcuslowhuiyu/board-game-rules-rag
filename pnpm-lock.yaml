@@ -63,9 +63,15 @@ importers:
         specifier: ^3.23.8
         version: 3.25.76
     devDependencies:
+      '@aws-sdk/lib-dynamodb':
+        specifier: ^3.679.0
+        version: 3.1133.0(@aws-sdk/client-dynamodb@3.1133.0)
       '@types/aws-lambda':
         specifier: ^8.10.145
         version: 8.10.163
+      aws-sdk-client-mock:
+        specifier: ^4.1.0
+        version: 4.1.0
       typescript:
         specifier: ^5.6.2
         version: 5.9.3

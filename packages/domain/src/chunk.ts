@@ -39,7 +39,6 @@ export const ChunkSchema = z.object({
   authority: AuthoritySchema,
   sourceType: SourceTypeSchema,
   documentVersion: z.string().max(80).optional(),
-  isCurrent: z.boolean(),
   createdAt: z.string().datetime(),
 });
 export type Chunk = z.infer<typeof ChunkSchema>;

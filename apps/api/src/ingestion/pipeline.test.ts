@@ -1,4 +1,12 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { mockClient } from 'aws-sdk-client-mock';
+import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import {
+  BatchWriteCommand,
+  DynamoDBDocumentClient,
+  QueryCommand,
+  type BatchWriteCommandInput,
+} from '@aws-sdk/lib-dynamodb';
 import {
   asContentId,
   asEditionId,
@@ -11,12 +19,15 @@ import {
   type IngestionJob,
   type IngestionSourceRef,
 } from '@bgr/domain';
-import { sha256Hex, type PdfExtractor } from '@bgr/ingestion';
+import { sha256Hex, type ObjectStore, type PdfExtractor } from '@bgr/ingestion';
 import { makeTestContext } from '../test-support.js';
 import type { AppContext } from '../lib/context.js';
 import {
+  DynamoChunksRepository,
   PublishConflictError,
   type AtomicPublisher,
+  type ChunksRepository,
+  type IngestionJobsRepository,
   type InMemoryDocumentsRepository,
   type InMemoryGamesRepository,
   type InMemoryIngestionJobsRepository,
@@ -618,5 +629,199 @@ describe('ingestion pipeline (M2 acceptance)', () => {
     await expect(runFullPipeline(job.jobId, stageCtx)).rejects.toBeInstanceOf(StageError);
     const again = await runStage(job.jobId, 'CLASSIFY', stageCtx);
     expect(again).toMatchObject({ terminal: true, alreadyTerminal: true, status: 'FAILED' });
+  });
+
+  // -------------------------------------------------------------------------
+  // M2-R2: CHUNK idempotency
+  // -------------------------------------------------------------------------
+
+  const BEFORE_CHUNK = [
+    'VALIDATE',
+    'FETCH',
+    'PARSE',
+    'CLASSIFY',
+    'DISCOVER_ERRATA',
+    'NORMALIZE',
+  ] as const;
+  const SMALL_CHUNKS = { minTokens: 20, targetTokens: 60, maxTokens: 120 };
+
+  /**
+   * Simulates the process dying mid-stage: the stage's own `failJob` write
+   * never lands, so the job stays RUNNING and Step Functions may re-invoke
+   * the stage.
+   */
+  function crashingJobs(inner: IngestionJobsRepository): IngestionJobsRepository {
+    return {
+      createJob: (j) => inner.createJob(j),
+      getJob: (id) => inner.getJob(id),
+      updateJob: async (id, patch, at) => {
+        if (patch.status === 'FAILED') throw new Error('process died before failJob');
+        return inner.updateJob(id, patch, at);
+      },
+    };
+  }
+
+  /** Records every key written; optionally throws on a chosen write. */
+  function recordingStore(
+    inner: ObjectStore,
+    failWhen: (key: string) => boolean = () => false,
+  ): ObjectStore & { keys: string[] } {
+    const keys: string[] = [];
+    return {
+      keys,
+      toUri: (k) => inner.toUri(k),
+      getBytes: (u) => inner.getBytes(u),
+      getText: (u) => inner.getText(u),
+      putBytes: async (k, body, ct) => {
+        if (failWhen(k)) throw new Error(`simulated crash writing ${k}`);
+        keys.push(k);
+        return inner.putBytes(k, body, ct);
+      },
+    };
+  }
+
+  it('CHUNK persists plannedDocumentId before any chunk write; a retry reuses it (no orphans)', async () => {
+    let crashed = false;
+    const store = recordingStore(ctx.normalizedStore, (k) => {
+      if (!crashed && k.startsWith('normalized/')) {
+        crashed = true;
+        return true;
+      }
+      return false;
+    });
+    const base = makeStageContext(ctx, {
+      pdfExtractor: makeExtractor(RULEBOOK_V1_PAGES),
+      chunkerOptions: SMALL_CHUNKS,
+    });
+    const stageCtx = { ...base, normalizedStore: store };
+    const job = await createPdfJob(ctx, 'raw/r2a.pdf', new Uint8Array([1, 0, 1]));
+    for (const s of BEFORE_CHUNK) await runStage(job.jobId, s, stageCtx);
+
+    await expect(
+      runStage(job.jobId, 'CHUNK', { ...stageCtx, jobs: crashingJobs(ctx.ingestionJobs) }),
+    ).rejects.toThrow('simulated crash');
+    const crashedJob = await ctx.ingestionJobs.getJob(job.jobId);
+    expect(crashedJob?.status).toBe('RUNNING');
+    const planned = crashedJob?.plannedDocumentId;
+    expect(planned).toBeDefined();
+    expect(await ctx.chunks.listChunksForDocument(planned!)).toEqual([]);
+
+    await runStage(job.jobId, 'CHUNK', stageCtx);
+    const afterRetry = await ctx.ingestionJobs.getJob(job.jobId);
+    expect(afterRetry?.plannedDocumentId).toBe(planned);
+    const chunkKeys = store.keys.filter((k) => k.startsWith('normalized/'));
+    expect(chunkKeys.length).toBeGreaterThan(0);
+    for (const k of chunkKeys) expect(k.startsWith(`normalized/${planned}/`)).toBe(true);
+
+    const fin = await runStage(job.jobId, 'FINALIZE', stageCtx);
+    expect(fin.status).toBe('SUCCEEDED');
+    expect(fin.documentId).toBe(planned);
+  });
+
+  it('CHUNK crash between S3 body writes and DDB putChunks: retry rewrites the same keys and FINALIZE counts match', async () => {
+    let failOnce = true;
+    const chunks: ChunksRepository = {
+      putChunks: async (c) => {
+        if (failOnce) {
+          failOnce = false;
+          throw new Error('simulated crash before putChunks');
+        }
+        return ctx.chunks.putChunks(c);
+      },
+      listChunksForDocument: (id) => ctx.chunks.listChunksForDocument(id),
+      deleteChunksForDocument: (id) => ctx.chunks.deleteChunksForDocument(id),
+    };
+    const store = recordingStore(ctx.normalizedStore);
+    const base = makeStageContext(ctx, {
+      pdfExtractor: makeExtractor(RULEBOOK_V1_PAGES),
+      chunkerOptions: SMALL_CHUNKS,
+    });
+    const stageCtx = { ...base, chunks, normalizedStore: store };
+    const job = await createPdfJob(ctx, 'raw/r2b.pdf', new Uint8Array([1, 0, 2]));
+    for (const s of BEFORE_CHUNK) await runStage(job.jobId, s, stageCtx);
+
+    await expect(
+      runStage(job.jobId, 'CHUNK', { ...stageCtx, jobs: crashingJobs(ctx.ingestionJobs) }),
+    ).rejects.toThrow('simulated crash before putChunks');
+    const firstKeys = store.keys.filter((k) => k.startsWith('normalized/'));
+    expect(firstKeys.length).toBeGreaterThan(0);
+
+    await runStage(job.jobId, 'CHUNK', stageCtx);
+    const allKeys = store.keys.filter((k) => k.startsWith('normalized/'));
+    // Second attempt wrote exactly the same keys again — overwrite, not orphan.
+    expect(allKeys.slice(firstKeys.length)).toEqual(firstKeys);
+
+    const fin = await runStage(job.jobId, 'FINALIZE', stageCtx);
+    expect(fin.status).toBe('SUCCEEDED');
+    expect(fin.chunkCount).toBe(firstKeys.length);
+  });
+
+  it('CHUNK against DynamoDB with UnprocessedItems: the R6 retry loop persists every chunk and FINALIZE counts match', async () => {
+    const table = new Map<string, Record<string, unknown>>();
+    let batchCalls = 0;
+    const docMock = mockClient(DynamoDBDocumentClient);
+    try {
+      docMock.on(BatchWriteCommand).callsFake((input: BatchWriteCommandInput) => {
+        batchCalls++;
+        const reqs = input.RequestItems!['chunks']!;
+        // First call: DynamoDB accepts only the first half.
+        const accepted = batchCalls === 1 ? reqs.slice(0, Math.ceil(reqs.length / 2)) : reqs;
+        for (const r of accepted) {
+          const item = r.PutRequest!.Item as Record<string, unknown>;
+          table.set(item['chunkId'] as string, item);
+        }
+        const rest = reqs.slice(accepted.length);
+        return rest.length > 0 ? { UnprocessedItems: { chunks: rest } } : {};
+      });
+      docMock.on(QueryCommand).callsFake((input) => ({
+        Items: [...table.values()].filter(
+          (i) => i['documentId'] === input.ExpressionAttributeValues[':d'],
+        ),
+      }));
+      const chunks = new DynamoChunksRepository(
+        new DynamoDBClient({ region: 'ap-southeast-1' }),
+        { chunksTable: 'chunks' },
+        { sleep: async () => {}, jitter: () => 0 },
+      );
+      const base = makeStageContext(ctx, {
+        pdfExtractor: makeExtractor(RULEBOOK_V1_PAGES),
+        chunkerOptions: SMALL_CHUNKS,
+      });
+      const stageCtx = { ...base, chunks };
+      const job = await createPdfJob(ctx, 'raw/r2c.pdf', new Uint8Array([1, 0, 3]));
+      for (const s of BEFORE_CHUNK) await runStage(job.jobId, s, stageCtx);
+
+      const chunk = await runStage(job.jobId, 'CHUNK', stageCtx);
+      expect(chunk.chunkCount).toBeGreaterThan(1);
+      expect(batchCalls).toBeGreaterThan(1);
+      expect(table.size).toBe(chunk.chunkCount);
+
+      const fin = await runStage(job.jobId, 'FINALIZE', stageCtx);
+      expect(fin.status).toBe('SUCCEEDED');
+      expect(fin.chunkCount).toBe(table.size);
+    } finally {
+      docMock.restore();
+    }
+  });
+
+  it('SourceDocument.pageCount is the parser page count, not max(chunk.pageEnd), when the last page is empty', async () => {
+    const pages = [...RULEBOOK_V2_PAGES, ''];
+    const stageCtx = makeStageContext(ctx, { pdfExtractor: makeExtractor(pages) });
+    const job = await createPdfJob(ctx, 'raw/r2-pages.pdf', new Uint8Array([1, 0, 4]));
+    const result = await runFullPipeline(job.jobId, stageCtx);
+    expect(result.status).toBe('SUCCEEDED');
+    const doc = await ctx.documents.getDocument(asSourceDocumentId(result.documentId!));
+    const chunks = await ctx.chunks.listChunksForDocument(asSourceDocumentId(result.documentId!));
+    expect(Math.max(...chunks.map((c) => c.pageEnd))).toBe(pages.length - 1);
+    expect(doc?.pageCount).toBe(pages.length);
+  });
+
+  it('chunks carry no isCurrent flag (currency comes from SourceDocument.status)', async () => {
+    const stageCtx = makeStageContext(ctx, { pdfExtractor: makeExtractor(RULEBOOK_V1_PAGES) });
+    const job = await createPdfJob(ctx, 'raw/r2-cur.pdf', new Uint8Array([1, 0, 5]));
+    const result = await runFullPipeline(job.jobId, stageCtx);
+    const chunks = await ctx.chunks.listChunksForDocument(asSourceDocumentId(result.documentId!));
+    expect(chunks.length).toBeGreaterThan(0);
+    for (const c of chunks) expect('isCurrent' in c).toBe(false);
   });
 });

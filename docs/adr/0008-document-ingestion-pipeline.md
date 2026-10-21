@@ -1,6 +1,6 @@
 # ADR-0008: Document ingestion — Step Functions + S3 + DynamoDB, deterministic PDF first
 
-- **Status:** Accepted (revised 2026-09-17 after PR #7 review; revised 2026-10-21 for M2-R1 review fixes)
+- **Status:** Accepted (revised 2026-09-17 after PR #7 review; revised 2026-10-21 for M2-R1 and M2-R2 review fixes)
 - **Date:** 2026-09-17
 - **Deciders:** Marcus Low, Claude Code (M2)
 - **Related:** `MASTER_PLAN.md` §13, §14, §15, §16, §17, §18, §19, §46, §47, §48, §49, §51; Milestone 2; ADR-0001
@@ -42,7 +42,7 @@ The runner checks `job.status` first. If the job is already `SUCCEEDED` or `FAIL
 ### State layout
 
 - Job state: DynamoDB `IngestionJobs` table (partition key `jobId`).
-- Intermediate stage artifacts: S3 under `temporary/ingestion/{jobId}/state/*.json` (`fetch.json`, `parsed.json`, `normalized.json`, ...). This was moved out of `normalized/` (which the pre-review draft used) so the shared lifecycle rule can actually clean it up.
+- Intermediate stage artifacts: S3 under `stage-state/ingestion/{jobId}/*.json` (`fetch.json`, `parsed.json`, `normalized.json`, ...). Originally under `normalized/`, then `temporary/ingestion/…`; it now has its own top-level prefix so exactly one lifecycle rule applies (see Storage lifecycle).
 - Chunk bodies: `normalized/{documentId}/{chunkId}.txt` (retained; the DDB chunk row references it).
 - Raw sources: `raw/{yyyy-mm-dd}/{uuid}.{ext}` for uploads, `raw/url/{sha256}.snapshot` for URL snapshots. Retained.
 
@@ -52,9 +52,11 @@ Revised from the initial draft:
 
 - `raw/` — retained. Finalized `SourceDocument.rawObjectUri` points here; expiring these would leave dangling references and block reprocessing.
 - `normalized/` — retained. Canonical chunk bodies.
-- `temporary/ingestion/{jobId}/state/` — expire after 7 days. Per-job scratch that FINALIZE no longer needs.
+- `stage-state/ingestion/` — expire after 7 days. Per-job scratch that FINALIZE no longer needs once the job is terminal.
 - `temporary/` (catch-all) — expire after 1 day.
 - Multipart uploads under every prefix — abort after 3 days.
+
+**No rule prefix may nest inside another (M2-R2 §3).** S3 applies every lifecycle rule whose prefix matches a key, and the earliest expiration wins. The previous layout put stage state at `temporary/ingestion/` (7 days) under the `temporary/` catch-all (1 day), so stage state actually expired after 1 day. Stage state moved to a separate top-level prefix rather than splitting the catch-all into one rule per known transient prefix, because a catch-all that silently stops covering new scratch prefixes is the worse failure. The CDK test asserts the *effective* TTL for representative keys and that no prefix nests inside another.
 
 M2's private-beta volume is small; storage-cost pressure comes later.
 
@@ -92,7 +94,7 @@ Scope: `(gameId, editionId, contentId, contentHash)`. `contentId` is part of the
 
 Rewritten from the pre-review draft. The old order mutated authoritative state before the new document was durable; the revised order guarantees "the previous CURRENT document and the edition knowledgeRevision remain unchanged until the replacement document and all required chunk artifacts are durably prepared":
 
-1. `CHUNK` reserves `plannedDocumentId` (if not already set on retry), writes every chunk body to S3 and every chunk metadata row to DynamoDB against that reserved id. Chunk ids are deterministic so retries overwrite. Fails if the chunker produced zero chunks.
+1. `CHUNK` reserves `plannedDocumentId` (if not already set on retry) and **persists it on the job before writing any chunk artifact** (M2-R2 §1), then writes every chunk body to S3 and every chunk metadata row to DynamoDB against that id. Previously the id was persisted only after the writes, so a crash in between made the retry pick a fresh id and orphan the first attempt's chunks. Chunk ids are deterministic, so a retry overwrites. CHUNK also records the parser's `pageCount` on the job (M2-R2 §5); FINALIZE publishes that rather than `max(chunk.pageEnd)`, which undercounts when trailing pages yield no text. Fails if the chunker produced zero chunks.
 2. `FINALIZE` first does the dedup lookup by `(game, edition, contentId, contentHash)`.
    - Real duplicate (existing doc that is not our `plannedDocumentId`) → success with `duplicateOf` set. No mutations.
    - Existing doc equals `plannedDocumentId` → defensive recovery (see step 5: a landed transaction normally means the job is already SUCCEEDED and the runner exits before FINALIZE runs). Success without `duplicateOf`.
@@ -112,9 +114,9 @@ Rewritten from the pre-review draft. The old order mutated authoritative state b
 - `DOC_EXISTS` — defensive: the planned document is already present. Recover as success (not duplicate).
 - `PREV_NOT_CURRENT` / `GAME_STALE` / `JOB_STALE` — optimistic-concurrency conflicts that a fresh read can resolve. FINALIZE throws `RetryableStageError` (Lambda `errorType` = `RetryableStageError`); the runner does **not** persist `FAILED`, the job stays `RUNNING`, and the FINALIZE task's Retry policy re-runs it. Only after retries are exhausted does the Catch path record `FAILED` via `MarkJobFailed`. (Before M2-R1 these were persisted as `FAILED` by the runner, which made the documented "retry" impossible.)
 
-### `Chunk.isCurrent` invariant
+### Chunk currency
 
-`SourceDocument.status` is the authoritative source of truth for currency. `Chunk.isCurrent` is a creation-time snapshot; the retriever (M3) MUST join to `SourceDocument.status` rather than trust `Chunk.isCurrent` for filtering. Documented here so M3 does not build on the wrong invariant.
+`SourceDocument.status` is the only source of truth for currency. Chunks carry no currency flag: the earlier `Chunk.isCurrent` field was a creation-time snapshot that was always `true` and never updated on supersede, so it was removed (M2-R2 §4) rather than left as a footgun. The retriever (M3) MUST filter by joining chunks to their `SourceDocument` and checking `status = CURRENT`. Chunk rows written before the removal still carry the attribute in DynamoDB; `ChunkSchema` strips unknown keys on read, so they parse without it.
 
 ### SSRF guard + redirect handling
 
