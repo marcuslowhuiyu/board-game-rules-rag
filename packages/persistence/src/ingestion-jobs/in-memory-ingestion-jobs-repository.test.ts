@@ -68,6 +68,16 @@ describe('InMemoryIngestionJobsRepository', () => {
       expect(job).toMatchObject({ status: 'FAILED', stage: 'PARSE', error, updatedAt: later });
     });
 
+    it('records an oversized error truncated to the schema limits', async () => {
+      const repo = new InMemoryIngestionJobsRepository();
+      await repo.createJob(makeJob({ status: 'RUNNING', stage: 'FETCH' }));
+      const huge = { stage: 'FETCH' as const, message: 'x'.repeat(5000), code: 'C'.repeat(200) };
+      expect(await repo.markFailedIfActive(asIngestionJobId('job_1'), huge, later)).toBe('FAILED');
+      const job = await repo.getJob(asIngestionJobId('job_1'));
+      expect(job?.error?.message).toHaveLength(2000);
+      expect(job?.error?.code).toHaveLength(80);
+    });
+
     it.each(['SUCCEEDED', 'FAILED'] as const)('leaves a %s job untouched', async (status) => {
       const repo = new InMemoryIngestionJobsRepository();
       const prior = { stage: 'CHUNK' as const, message: 'earlier', code: 'EARLIER' };

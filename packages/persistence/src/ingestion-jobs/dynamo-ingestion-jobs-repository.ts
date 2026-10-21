@@ -12,7 +12,11 @@ import {
   PutCommand,
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
-import type { IngestionJobError, IngestionJobsRepository } from './ingestion-jobs-repository.js';
+import {
+  boundJobError,
+  type IngestionJobError,
+  type IngestionJobsRepository,
+} from './ingestion-jobs-repository.js';
 
 export interface DynamoIngestionJobsTables {
   ingestionJobsTable: string;
@@ -125,7 +129,7 @@ export class DynamoIngestionJobsRepository implements IngestionJobsRepository {
             ':failed': 'FAILED',
             ':succeeded': 'SUCCEEDED',
             ':stage': error.stage,
-            ':error': error,
+            ':error': boundJobError(error),
             ':u': updatedAt,
           },
         }),

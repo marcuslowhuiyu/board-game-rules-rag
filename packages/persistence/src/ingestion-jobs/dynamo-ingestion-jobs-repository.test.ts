@@ -48,6 +48,23 @@ describe('DynamoIngestionJobsRepository', () => {
       ).toHaveLength(2);
     });
 
+    it('bounds the stored error to what IngestionJobSchema accepts, so the job stays readable', async () => {
+      docMock.on(UpdateCommand).resolves({});
+      await repo.markFailedIfActive(
+        jobId,
+        { stage: 'FETCH', message: 'x'.repeat(5000), code: 'C'.repeat(200) },
+        at,
+      );
+      const values =
+        docMock.commandCalls(UpdateCommand)[0]!.args[0].input.ExpressionAttributeValues!;
+      const stored = Object.values(values).find(
+        (v): v is { message: string; code: string } =>
+          typeof v === 'object' && v !== null && 'message' in v,
+      )!;
+      expect(stored.message).toHaveLength(2000);
+      expect(stored.code).toHaveLength(80);
+    });
+
     it('reports NOT_APPLIED when DynamoDB rejects the condition (job already terminal)', async () => {
       docMock
         .on(UpdateCommand)

@@ -5,7 +5,11 @@ import {
   type IngestionJob,
   type IngestionJobId,
 } from '@bgr/domain';
-import type { IngestionJobError, IngestionJobsRepository } from './ingestion-jobs-repository.js';
+import {
+  boundJobError,
+  type IngestionJobError,
+  type IngestionJobsRepository,
+} from './ingestion-jobs-repository.js';
 
 export class InMemoryIngestionJobsRepository implements IngestionJobsRepository {
   private readonly byId = new Map<IngestionJobId, IngestionJob>();
@@ -48,7 +52,7 @@ export class InMemoryIngestionJobsRepository implements IngestionJobsRepository 
         ...current,
         status: 'FAILED',
         stage: error.stage,
-        error,
+        error: boundJobError(error),
         updatedAt,
       }),
     );

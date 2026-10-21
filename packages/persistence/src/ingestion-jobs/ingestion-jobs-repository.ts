@@ -2,6 +2,19 @@ import type { IngestionJob, IngestionJobId } from '@bgr/domain';
 
 export type IngestionJobError = NonNullable<IngestionJob['error']>;
 
+/**
+ * Clamp an error to the lengths `IngestionJobSchema` accepts (message 2000,
+ * code 80). `markFailedIfActive` writes without a schema round-trip, and an
+ * over-long stored error would make every later `getJob` fail validation.
+ */
+export function boundJobError(error: IngestionJobError): IngestionJobError {
+  return {
+    stage: error.stage,
+    message: error.message.slice(0, 2000),
+    ...(error.code !== undefined ? { code: error.code.slice(0, 80) } : {}),
+  };
+}
+
 export interface IngestionJobsRepository {
   createJob(job: IngestionJob): Promise<void>;
   getJob(jobId: IngestionJobId): Promise<IngestionJob | null>;
