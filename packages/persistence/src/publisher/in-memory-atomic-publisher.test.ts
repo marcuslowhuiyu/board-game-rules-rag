@@ -11,7 +11,7 @@ import {
 import { InMemoryDocumentsRepository } from '../documents/in-memory-documents-repository.js';
 import { InMemoryGamesRepository } from '../games/in-memory-games-repository.js';
 import { InMemoryIngestionJobsRepository } from '../ingestion-jobs/in-memory-ingestion-jobs-repository.js';
-import type { PublishConflictError, PublishDocumentArgs } from './atomic-publisher.js';
+import { PublishConflictError, type PublishDocumentArgs } from './atomic-publisher.js';
 import { InMemoryAtomicPublisher } from './in-memory-atomic-publisher.js';
 
 const iso = '2026-09-17T00:00:00.000Z';
@@ -123,6 +123,23 @@ describe('InMemoryAtomicPublisher', () => {
 
     expect((await documents.getDocument(asSourceDocumentId('doc_v1')))?.status).toBe('CURRENT');
     expect((await documents.getDocument(asSourceDocumentId('doc_v2')))?.status).toBe('SUPERSEDED');
+  });
+
+  it('rejects a transaction that touches the same document twice, like DynamoDB (not a conflict)', async () => {
+    const { documents, jobs, publisher, argsFor } = await setup();
+    await documents.createDocument(doc('doc_v1', 'SUPERSEDED'));
+    await jobs.createJob(job('job_r', 'RUNNING'));
+
+    const err = await publisher
+      .publishDocument({
+        ...argsFor('doc_v1', 'job_r'),
+        reinstate: true,
+        supersedeDocumentId: asSourceDocumentId('doc_v1'),
+      })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(PublishConflictError);
+    expect((err as Error).name).toBe('ValidationException');
   });
 
   it('refuses to reinstate a document that is not SUPERSEDED', async () => {

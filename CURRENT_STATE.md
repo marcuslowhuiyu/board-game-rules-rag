@@ -87,7 +87,7 @@ Tests: Dynamo publisher (4-item transaction, `JOB_STALE` mapping), `MarkJobFaile
 7. The in-memory publisher is genuinely atomic.
 8. The SSRF guard classifies bracketed IPv6 literals and hex-mapped IPv4.
 
-273 tests total. Deferred minor findings are listed in `docs/milestones/M2-REVIEW-FIXES.md` §M2-R4.
+The R4 Codex review caught two more problems, both fixed: a concurrent-reinstate race that would have failed the job, and layout tables whose cell paragraphs were fused together. 276 tests total. Deferred minor findings are listed in `docs/milestones/M2-REVIEW-FIXES.md` §M2-R4.
 
 ### What still MUST happen post-merge before M2 is closed
 

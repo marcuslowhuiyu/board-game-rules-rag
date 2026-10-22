@@ -719,6 +719,17 @@ async function reinstateDocument(
     doc.contentId,
     doc.sourceType,
   );
+  if (current?.documentId === doc.documentId) {
+    // Another job reinstated it after our dedup lookup. Publishing now would
+    // put and supersede the same item in one transaction, which DynamoDB
+    // rejects as invalid (not as a retryable conflict). Retry instead: the
+    // fresh lookup sees it CURRENT and reports a duplicate.
+    throw new RetryableStageError(
+      'FINALIZE',
+      `document ${doc.documentId} was reinstated concurrently`,
+      'DOC_NOT_SUPERSEDED',
+    );
+  }
   const nowIso = ctx.now().toISOString();
   const edition = game.editions[editionIdx]!;
   const newRev = edition.knowledgeRevision + 1;

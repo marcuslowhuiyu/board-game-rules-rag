@@ -26,6 +26,13 @@ export class InMemoryAtomicPublisher implements AtomicPublisher {
 
   async publishDocument(args: PublishDocumentArgs): Promise<void> {
     // --- Check (no awaits) ---
+    if (args.supersedeDocumentId === args.newDocument.documentId) {
+      // DynamoDB rejects a transaction with two operations on one item as a
+      // request validation error — before any condition is evaluated.
+      const err = new Error('Transaction request cannot include multiple operations on one item');
+      err.name = 'ValidationException';
+      throw err;
+    }
     const game = this.games.peekGame(args.gameId);
     if (!game) {
       throw new PublishConflictError(`game not found: ${args.gameId}`, 'GAME_STALE');

@@ -70,7 +70,12 @@ The final review ran a Claude reviewer and Codex over the whole branch. Both jud
 7. **The in-memory publisher was not atomic** (both). Checks use synchronous reads and every write starts before the first await. The reviewer's related point, that in-memory `updateJob` lacks the `updatedAt` condition, needs no change: that condition only guards the gap between DynamoDB's read and write, which the in-memory version does not have.
 8. **SSRF IPv6 literals** (both). Brackets are stripped before classifying, and hex IPv4-mapped addresses are checked.
 
-273 tests total.
+The per-slice Codex review of R4 found two more P2s, both fixed test-first:
+
+- **Reinstate race.** If another job reinstates the same document between the dedup lookup and `findCurrentByKey`, the publish would put and supersede the same item. DynamoDB rejects that as a validation error, not a retryable conflict, so the job would have failed. FINALIZE now retries instead. The in-memory publisher now mirrors DynamoDB's validation error, which had hidden the bug.
+- **Layout tables.** Rows whose cells hold paragraphs or headings are walked structurally; only plain data rows are joined with ` | `.
+
+276 tests total.
 
 **Deferred to a follow-up PR (minor findings, user decision):**
 - `POST /ingestion` accepts any bucket key and downloads it to check existence; it should require the `raw/` prefix and use HeadObject.

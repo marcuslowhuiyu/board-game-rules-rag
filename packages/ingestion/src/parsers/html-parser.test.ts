@@ -75,6 +75,21 @@ describe('createHtmlParser', () => {
     ]);
   });
 
+  it('walks layout tables structurally — paragraphs and headings inside cells keep their boundaries', async () => {
+    const parser = createHtmlParser();
+    const html = `<html><body><main>
+      <h1>Economy</h1>
+      <table><tr><td><h2>Gold</h2><p>Gain 1 gold.</p><p>Lose 2 gold.</p></td></tr></table>
+    </main></body></html>`;
+    const doc = await parser.parse(encode(html), { contentType: 'text/html' });
+    expect(doc.blocks.map((b) => ({ path: b.headingPath, t: b.text }))).toEqual([
+      { path: ['Economy'], t: 'Economy' },
+      { path: ['Economy', 'Gold'], t: 'Gold' },
+      { path: ['Economy', 'Gold'], t: 'Gain 1 gold.' },
+      { path: ['Economy', 'Gold'], t: 'Lose 2 gold.' },
+    ]);
+  });
+
   it('falls back to body when no <main>', async () => {
     const parser = createHtmlParser();
     const html = `<html><body><h1>Root</h1><p>Body only.</p></body></html>`;

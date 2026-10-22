@@ -954,6 +954,36 @@ describe('ingestion pipeline (M2 acceptance)', () => {
     expect(await ctx.documents.listDocumentsForEdition(gameId, editionId)).toHaveLength(2);
   });
 
+  it('reinstate retries (never FAILS) when another job reinstated the same document first', async () => {
+    const v1Bytes = new Uint8Array([5, 1, 5]);
+    const one = await runFullPipeline(
+      (await createPdfJob(ctx, 'raw/r1.pdf', v1Bytes)).jobId,
+      makeStageContext(ctx, { pdfExtractor: makeExtractor(RULEBOOK_V1_PAGES) }),
+    );
+    await runFullPipeline(
+      (await createPdfJob(ctx, 'raw/r2.pdf', new Uint8Array([5, 2, 5]))).jobId,
+      makeStageContext(ctx, { pdfExtractor: makeExtractor(RULEBOOK_V2_PAGES) }),
+    );
+    const v1Id = asSourceDocumentId(one.job.documentId!);
+    const stageCtx = makeStageContext(ctx, { pdfExtractor: makeExtractor(RULEBOOK_V1_PAGES) });
+    const job = await createPdfJob(ctx, 'raw/r1-again.pdf', v1Bytes);
+    for (const stage of ['VALIDATE', 'FETCH'] as const) await runStage(job.jobId, stage, stageCtx);
+
+    // Race: after FINALIZE's dedup lookup saw v1 SUPERSEDED, another job
+    // reinstated it — so the CURRENT document for the key is v1 itself.
+    const docs = ctx.documents as InMemoryDocumentsRepository;
+    const findCurrent = docs.findCurrentByKey.bind(docs);
+    docs.findCurrentByKey = async () => ({
+      ...(await docs.getDocument(v1Id))!,
+      status: 'CURRENT' as const,
+    });
+    const err = await runStage(job.jobId, 'FINALIZE', stageCtx).catch((e: unknown) => e);
+    docs.findCurrentByKey = findCurrent;
+
+    expect(err).toBeInstanceOf(RetryableStageError);
+    expect((await ctx.ingestionJobs.getJob(job.jobId))?.status).toBe('RUNNING');
+  });
+
   it('parses and retains the uploaded bytes FETCH hashed, even if the upload key is overwritten later', async () => {
     const original = new Uint8Array([7, 7, 7, 7]);
     const seen: Uint8Array[] = [];

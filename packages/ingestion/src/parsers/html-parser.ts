@@ -130,14 +130,22 @@ export function createHtmlParser(): DocumentParser {
           return;
         }
         if (tag === 'tr') {
-          // One block per row keeps a table's columns associated.
-          flush();
-          const cells = (node.children ?? [])
-            .filter((c) => c.type === 'tag' && (c.name === 'td' || c.name === 'th'))
-            .map((c) => collapseWhitespace($(c as never).text()))
-            .filter((t) => t.length > 0);
-          emitParagraph(cells.join(' | '));
-          return;
+          const cells = (node.children ?? []).filter(
+            (c) => c.type === 'tag' && (c.name === 'td' || c.name === 'th'),
+          );
+          // A data row (cells of inline text) becomes one block, keeping the
+          // columns associated. A layout row — cells holding paragraphs or
+          // headings — falls through to the structural walk below.
+          if (!cells.some(hasBlockDescendant)) {
+            flush();
+            emitParagraph(
+              cells
+                .map((c) => collapseWhitespace($(c as never).text()))
+                .filter((t) => t.length > 0)
+                .join(' | '),
+            );
+            return;
+          }
         }
         const isBlock = BLOCK_TAGS.has(tag);
         if (isBlock) flush();
@@ -160,6 +168,16 @@ function pickRoot($: cheerio.CheerioAPI): cheerio.Cheerio<never> | null {
     if ($node.length > 0) return $node as unknown as cheerio.Cheerio<never>;
   }
   return null;
+}
+
+function hasBlockDescendant(node: DomNode): boolean {
+  return (node.children ?? []).some(
+    (c) =>
+      c.type === 'tag' &&
+      (BLOCK_TAGS.has(c.name?.toLowerCase() ?? '') ||
+        /^h[1-6]$/.test(c.name?.toLowerCase() ?? '') ||
+        hasBlockDescendant(c)),
+  );
 }
 
 function popTo(stack: { depth: number; text: string }[], depth: number): void {
