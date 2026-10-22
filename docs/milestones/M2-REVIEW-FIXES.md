@@ -1,6 +1,6 @@
 # M2 — Remaining Review Fixes (Handoff)
 
-**Status:** open review work on PR #7. **PR #7 must not be merged yet.** **Do not begin Milestone 3.**
+**Status:** all slices (R1–R4) done and reviewed; PR #1 (formerly PR #7, before the repo was recreated) is ready to merge. **Do not begin Milestone 3** until the post-merge real-document acceptance passes.
 
 The initial M2 PR received two rounds of review; the second round surfaced a further set of issues that outgrew a single working session. This document captures only the remaining work, divided into ordered slices (R1, R2, R2b, R3, then R4 from the final review).
 
@@ -8,8 +8,8 @@ The initial M2 PR received two rounds of review; the second round surfaced a fur
 
 - Complete and commit each slice **separately** (one commit per slice, on `feature/m02-document-ingestion`).
 - **Stop for human review after each slice** before starting the next.
-- After all three slices are merged into the branch, a **final PR review** is required before PR #7 can merge.
-- Even after PR #7 merges, **M2 is not closed** — the post-merge real-document acceptance in dev (two structurally different real rulebook PDFs + one real URL ingestion + version supersede + `knowledgeRevision` increment) still has to run before M2 is declared done and M3 may begin.
+- After all three slices are merged into the branch, a **final PR review** is required before PR #1 can merge.
+- Even after PR #1 merges, **M2 is not closed** — the post-merge real-document acceptance in dev (two structurally different real rulebook PDFs + one real URL ingestion + version supersede + `knowledgeRevision` increment) still has to run before M2 is declared done and M3 may begin.
 - Keep the architectural choices already established: single stage-runner Lambda, `unpdf` as PDF extractor, OCR/AI fallback deferred, embeddings deferred to M3. Any deviation requires a new ADR.
 
 ---
@@ -53,7 +53,7 @@ The review's P2 findings are folded into M2-R3 below.
 3. **Add regression tests.** Beyond the item-specific tests called out above, add explicit tests for: (a) M2-R1 §3 both Choice branches; (b) M2-R2 §5 `pageCount` preservation when the last page is empty; (c) M2-R3 §2 an HTML page that would trip `isLikelyScan` under PDF rules but passes under HTML rules.
 4. **Update `ADR-0008` and `CURRENT_STATE.md` if any decision changed.** In particular the transaction scope for M2-R1 §1, the storage-lifecycle restructure for M2-R2 §3, the `Chunk.isCurrent` removal for M2-R2 §4, and the split quality gate for M2-R3 §2 all warrant a paragraph in ADR-0008. Update `CURRENT_STATE.md` known-issues and Milestone-2-what-landed sections to reflect the state of the branch. Update the PR #7 description and test counts.
 5. **Remaining Codex P2 findings (2026-10-21 review).** (a) The PDF parser only checks a paragraph's first line for a heading; unpdf separates lines with single newlines, so later headings on a page are flattened (would break real-rulebook heading paths). (b) `listChunksForDocument` / `deleteChunksForDocument` ignore `LastEvaluatedKey` (1 MiB query pages). (c) The URL fetcher buffers the whole body before enforcing `maxBytes`; enforce while streaming. (d) Frontend: games created via Add Game have no content package, so ingestion can't start; changing edition leaves a stale `contentId`; starting a second job leaves the first poll loop running. Items 1 and 2 above already cover the review's garbled-text and HTML-scan findings.
-6. **Run the complete M2 quality gates.** `pnpm typecheck`, `pnpm lint`, `pnpm format:check`, `pnpm test`, `pnpm synth`, then verify PR #7 CI is green. Do not merge.
+6. **Run the complete M2 quality gates.** `pnpm typecheck`, `pnpm lint`, `pnpm format:check`, `pnpm test`, `pnpm synth`, then verify PR #1 CI is green. Do not merge.
 
 ---
 
@@ -96,7 +96,7 @@ The per-slice Codex review of R4 found two more P2s, both fixed test-first:
 
 ## Reference
 
-- PR #7: https://github.com/marcuslowhuiyu/board-game-rules-rag/pull/7
+- PR #1: https://github.com/marcuslowhuiyu/board-game-rules-rag/pull/1 (PR #7 in the archived pre-recreation repo)
 - ADR-0008 (revised in the second review): `docs/adr/0008-document-ingestion-pipeline.md`
 - Milestone spec: `docs/milestones/M2-document-ingestion.md`
 - Current state: `CURRENT_STATE.md`

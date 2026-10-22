@@ -1,6 +1,6 @@
 # ADR-0008: Document ingestion — Step Functions + S3 + DynamoDB, deterministic PDF first
 
-- **Status:** Accepted (revised 2026-09-17 after PR #7 review; revised 2026-10-21 for M2-R1, M2-R2, M2-R2b and M2-R3 review fixes; revised 2026-10-22 for M2-R4, the final-review fixes)
+- **Status:** Accepted (revised 2026-09-17 after the PR #7 review in the archived pre-recreation repo — now PR #1; revised 2026-10-21 for M2-R1, M2-R2, M2-R2b and M2-R3 review fixes; revised 2026-10-22 for M2-R4, the final-review fixes)
 - **Date:** 2026-09-17
 - **Deciders:** Marcus Low, Claude Code (M2)
 - **Related:** `MASTER_PLAN.md` §13, §14, §15, §16, §17, §18, §19, §46, §47, §48, §49, §51; Milestone 2; ADR-0001

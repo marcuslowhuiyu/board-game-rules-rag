@@ -4,7 +4,7 @@ _Last updated: 2026-10-22 (M2-R4 final-review fixes)_
 
 ## Current milestone
 
-**Milestone 2 — Document Ingestion** (feature branch `feature/m02-document-ingestion`; PR #7 open). Second-round review fixes are tracked in `docs/milestones/M2-REVIEW-FIXES.md` as slices: R1, R2, R2b and R3 are done and reviewed. The final whole-PR review (Claude reviewer + Codex) judged it ready to merge with fixes; **M2-R4 fixes those findings (done, awaiting human review)**. After R4 review, PR #7 can leave draft and merge. R2b was added after an independent Codex review of R1+R2 found four P1 defects, including a stage-runner bundle that could not load. Do not advance to M3 until PR #7 merges AND the post-merge real-document acceptance checks pass on dev.
+**Milestone 2 — Document Ingestion** (feature branch `feature/m02-document-ingestion`; PR #1 open — it was PR #7 before the repo was recreated). Second-round review fixes are tracked in `docs/milestones/M2-REVIEW-FIXES.md` as slices: R1, R2, R2b and R3 are done and reviewed. The final whole-PR review (Claude reviewer + Codex) judged it ready to merge with fixes; M2-R4 fixed those findings and has been reviewed. PR #1 is ready to leave draft and merge. R2b was added after an independent Codex review of R1+R2 found four P1 defects, including a stage-runner bundle that could not load. Do not advance to M3 until PR #1 merges AND the post-merge real-document acceptance checks pass on dev.
 
 Spec: `docs/milestones/M2-document-ingestion.md`.
 Architecture decision: `docs/adr/0008-document-ingestion-pipeline.md` (revised 2026-09-17).
@@ -76,7 +76,7 @@ Tests: Dynamo publisher (4-item transaction, `JOB_STALE` mapping), `MarkJobFaile
 
 254 tests total. `main` was merged into the branch (CI-minimisation and repo-recreation changes).
 
-**M2-R4 — Final-review fixes (done, awaiting review).** Each item has a test that failed first.
+**M2-R4 — Final-review fixes (done, reviewed).** Each item has a test that failed first.
 
 1. Presigned uploads no longer embed an empty-body checksum. Before this fix, S3 would have rejected every real upload.
 2. A StartExecution error can no longer downgrade a finished job.
@@ -127,4 +127,4 @@ Full tracker: `docs/CONTRADICTIONS_AND_GAPS.md`.
 
 ## Next expected work
 
-Real-document acceptance in dev after PR #7 merges. Once those checks pass, advance to Milestone 3 — Embeddings, Retrieval & Evaluation Foundation. See `docs/milestones/M3-embeddings-retrieval.md`.
+Real-document acceptance in dev after PR #1 merges. Once those checks pass, advance to Milestone 3 — Embeddings, Retrieval & Evaluation Foundation. See `docs/milestones/M3-embeddings-retrieval.md`.
