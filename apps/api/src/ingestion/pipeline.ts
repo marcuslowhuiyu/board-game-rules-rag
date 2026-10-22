@@ -8,6 +8,7 @@ import {
   asSourceDocumentId,
   type Chunk,
   type Edition,
+  type Game,
   type IngestionJob,
   type IngestionJobId,
   type IngestionStage,
@@ -161,6 +162,19 @@ export async function runStage(
     };
   }
 
+  // A stage already recorded as done is a no-op: a redelivered invocation,
+  // or a stage FETCH skipped because a superseded document is being
+  // reinstated. FINALIZE always runs — it decides the terminal outcome.
+  if (stage !== 'FINALIZE' && job.completedStages.includes(stage)) {
+    return {
+      job,
+      ranStage: stage,
+      nextStage: nextStage(stage),
+      terminal: false,
+      status: job.status,
+    };
+  }
+
   // Synthetic failure — internal test-only affordance. `forceFailureStage`
   // is not accepted from the public `POST /ingestion` schema; tests set it
   // via the InternalCreateIngestionJobInputSchema.
@@ -292,34 +306,23 @@ async function stageFetch(ctx: StageContext, job: IngestionJob): Promise<Ingesti
     job.contentId,
     contentHash,
   );
-  if (dup) {
+  if (dup && dup.status !== 'SUPERSEDED') {
     ctx.logger?.info('duplicate upload — reusing existing document', {
       jobId: job.jobId,
       documentId: dup.documentId,
     });
-    return ctx.jobs.updateJob(
-      job.jobId,
-      {
-        status: 'SUCCEEDED',
-        stage: 'FINALIZE',
-        completedStages: appendStage(job.completedStages, ...M2_STAGE_ORDER),
-        documentId: dup.documentId,
-        duplicateOf: dup.documentId,
-        chunkCount: dup.chunkCount,
-      },
-      ctx.now().toISOString(),
-    );
+    return markDuplicate(ctx, job, dup);
   }
 
-  // Persist raw bytes for URL sources — S3 uploads already sit at their key.
-  let rawUri: string;
-  if (job.source.kind === 'S3') {
-    rawUri = ctx.rawStore.toUri(job.source.s3Key);
-  } else {
-    const key = `raw/url/${contentHash}.snapshot`;
-    const put = await ctx.rawStore.putBytes(key, fetched.bytes, fetched.contentType);
-    rawUri = put.uri;
-  }
+  // Snapshot the exact bytes we hashed under a content-addressed key, for
+  // uploads too: a presigned PUT URL stays valid until expiry, so the upload
+  // key may be overwritten before PARSE reads it.
+  const snapshotKey =
+    job.source.kind === 'S3'
+      ? `raw/upload/${contentHash}${uploadExtension(job.source.s3Key)}`
+      : `raw/url/${contentHash}.snapshot`;
+  const put = await ctx.rawStore.putBytes(snapshotKey, fetched.bytes, fetched.contentType);
+  const rawUri = put.uri;
 
   const state: FetchState = {
     contentHash,
@@ -329,6 +332,27 @@ async function stageFetch(ctx: StageContext, job: IngestionJob): Promise<Ingesti
     ...(fetched.filename !== undefined ? { filename: fetched.filename } : {}),
   };
   await writeState(ctx, job.jobId, 'fetch', state);
+  if (dup) {
+    // Bytes of a SUPERSEDED document: nothing to parse or chunk — its chunks
+    // still exist. Skip to FINALIZE, which reinstates it (and, unlike FETCH,
+    // retries on a conflicting concurrent publish).
+    ctx.logger?.info('re-upload of a superseded document — will reinstate', {
+      jobId: job.jobId,
+      documentId: dup.documentId,
+    });
+    return ctx.jobs.updateJob(
+      job.jobId,
+      {
+        status: 'RUNNING',
+        stage: 'FINALIZE',
+        completedStages: appendStage(
+          job.completedStages,
+          ...M2_STAGE_ORDER.filter((s) => s !== 'FINALIZE'),
+        ),
+      },
+      ctx.now().toISOString(),
+    );
+  }
   return advanceStage(ctx, job, 'FETCH', { status: 'RUNNING' });
 }
 
@@ -483,13 +507,19 @@ async function stageChunk(ctx: StageContext, jobIn: IngestionJob): Promise<Inges
 
 async function stageFinalize(ctx: StageContext, job: IngestionJob): Promise<IngestionJob> {
   const fetchState = await readState<FetchState>(ctx, job.jobId, 'fetch');
-  if (!job.plannedDocumentId) {
-    throw new StageError(
-      'FINALIZE',
-      'plannedDocumentId is missing — CHUNK did not run',
-      'NO_PLANNED_DOC',
-    );
+
+  // Read the game BEFORE the dedup lookup. Its `updatedAt` guards the publish
+  // transaction, so if a concurrent job publishes the same bytes after our
+  // lookup missed, our publish fails as GAME_STALE and the retry finds the
+  // duplicate — instead of publishing the same hash twice.
+  const game = await ctx.games.getGame(job.gameId);
+  if (!game) throw new StageError('FINALIZE', `game vanished: ${job.gameId}`, 'GAME_MISSING');
+  const editionIdx = game.editions.findIndex((e) => e.editionId === job.editionId);
+  if (editionIdx === -1) {
+    throw new StageError('FINALIZE', `edition vanished: ${job.editionId}`, 'EDITION_MISSING');
   }
+  const currentEdition = game.editions[editionIdx]!;
+  const newRev = currentEdition.knowledgeRevision + 1;
 
   // Duplicate short-circuit (also serves as retry-recovery — see below).
   const dup = await ctx.documents.findByContentHash(
@@ -514,18 +544,18 @@ async function stageFinalize(ctx: StageContext, job: IngestionJob): Promise<Inge
         ctx.now().toISOString(),
       );
     }
+    if (dup.status === 'SUPERSEDED') {
+      return reinstateDocument(ctx, job, dup, game, editionIdx);
+    }
     // Real duplicate — some other document already carries these bytes.
-    return ctx.jobs.updateJob(
-      job.jobId,
-      {
-        status: 'SUCCEEDED',
-        stage: 'FINALIZE',
-        completedStages: appendStage(job.completedStages, ...M2_STAGE_ORDER),
-        documentId: dup.documentId,
-        duplicateOf: dup.documentId,
-        chunkCount: dup.chunkCount,
-      },
-      ctx.now().toISOString(),
+    return markDuplicate(ctx, job, dup);
+  }
+
+  if (!job.plannedDocumentId) {
+    throw new StageError(
+      'FINALIZE',
+      'plannedDocumentId is missing — CHUNK did not run',
+      'NO_PLANNED_DOC',
     );
   }
 
@@ -538,15 +568,6 @@ async function stageFinalize(ctx: StageContext, job: IngestionJob): Promise<Inge
       'CHUNK_COUNT_MISMATCH',
     );
   }
-
-  const game = await ctx.games.getGame(job.gameId);
-  if (!game) throw new StageError('FINALIZE', `game vanished: ${job.gameId}`, 'GAME_MISSING');
-  const editionIdx = game.editions.findIndex((e) => e.editionId === job.editionId);
-  if (editionIdx === -1) {
-    throw new StageError('FINALIZE', `edition vanished: ${job.editionId}`, 'EDITION_MISSING');
-  }
-  const currentEdition = game.editions[editionIdx]!;
-  const newRev = currentEdition.knowledgeRevision + 1;
 
   const superseded = await ctx.documents.findCurrentByKey(
     job.gameId,
@@ -658,9 +679,104 @@ async function stageFinalize(ctx: StageContext, job: IngestionJob): Promise<Inge
   return completedJob;
 }
 
+/** Bytes already published as the CURRENT document: report it, change nothing. */
+function markDuplicate(
+  ctx: StageContext,
+  job: IngestionJob,
+  dup: SourceDocument,
+): Promise<IngestionJob> {
+  return ctx.jobs.updateJob(
+    job.jobId,
+    {
+      status: 'SUCCEEDED',
+      stage: 'FINALIZE',
+      completedStages: appendStage(job.completedStages, ...M2_STAGE_ORDER),
+      documentId: dup.documentId,
+      duplicateOf: dup.documentId,
+      chunkCount: dup.chunkCount,
+    },
+    ctx.now().toISOString(),
+  );
+}
+
+/**
+ * Re-uploaded bytes match a SUPERSEDED document: uploading means "make this
+ * the live version" (ADR-0008 §Reinstating a superseded version). The old
+ * document returns to CURRENT with its existing chunks, the present CURRENT
+ * one is superseded and the revision bumps — the same atomic publish as a
+ * new version, conditional on the document still being SUPERSEDED.
+ */
+async function reinstateDocument(
+  ctx: StageContext,
+  job: IngestionJob,
+  doc: SourceDocument,
+  game: Game,
+  editionIdx: number,
+): Promise<IngestionJob> {
+  const current = await ctx.documents.findCurrentByKey(
+    doc.gameId,
+    doc.editionId,
+    doc.contentId,
+    doc.sourceType,
+  );
+  const nowIso = ctx.now().toISOString();
+  const edition = game.editions[editionIdx]!;
+  const newRev = edition.knowledgeRevision + 1;
+  const nextEditions: Edition[] = game.editions.slice();
+  nextEditions[editionIdx] = { ...edition, knowledgeRevision: newRev, updatedAt: nowIso };
+
+  const reinstated: SourceDocument = SourceDocumentSchema.parse({
+    ...doc,
+    status: 'CURRENT',
+    knowledgeRevision: newRev,
+    supersedes:
+      current && !doc.supersedes.includes(current.documentId)
+        ? [...doc.supersedes, current.documentId]
+        : doc.supersedes,
+    updatedAt: nowIso,
+  });
+  const completedJob: IngestionJob = IngestionJobSchema.parse({
+    ...job,
+    status: 'SUCCEEDED',
+    stage: 'FINALIZE',
+    completedStages: appendStage(job.completedStages, ...M2_STAGE_ORDER),
+    documentId: doc.documentId,
+    chunkCount: doc.chunkCount,
+    ...(current ? { supersededDocumentId: current.documentId } : {}),
+    updatedAt: nowIso,
+  });
+
+  try {
+    await ctx.publisher.publishDocument({
+      newDocument: reinstated,
+      reinstate: true,
+      ...(current ? { supersedeDocumentId: current.documentId } : {}),
+      gameId: job.gameId,
+      nextEditions,
+      expectedGameUpdatedAt: game.updatedAt,
+      completedJob,
+      expectedJobUpdatedAt: job.updatedAt,
+      now: nowIso,
+    });
+  } catch (err) {
+    if (err instanceof PublishConflictError) {
+      // Something moved (another publish, or the document was reinstated
+      // already) — the retry re-reads and may land on the duplicate path.
+      throw new RetryableStageError('FINALIZE', err.message, err.reason);
+    }
+    throw err;
+  }
+  return completedJob;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/** Extension of an upload key (`.pdf`, `.html`), kept on its snapshot. */
+function uploadExtension(s3Key: string): string {
+  return /\.[A-Za-z0-9]{1,8}$/.exec(s3Key)?.[0]?.toLowerCase() ?? '';
+}
 
 interface FetchState {
   contentHash: string;

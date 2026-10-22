@@ -121,4 +121,24 @@ describe('DynamoAtomicPublisher.publishDocument', () => {
     const err = await publisher.publishDocument(args()).catch((e: unknown) => e);
     expect((err as PublishConflictError).reason).toBe('GAME_STALE');
   });
+
+  it('reinstates an existing SUPERSEDED document, conditional on it still being SUPERSEDED', async () => {
+    docMock.on(TransactWriteCommand).resolves({});
+    await publisher.publishDocument(
+      args({ reinstate: true, supersedeDocumentId: asSourceDocumentId('doc_old') }),
+    );
+    const items = docMock.commandCalls(TransactWriteCommand)[0]!.args[0].input.TransactItems!;
+    expect(items).toHaveLength(4);
+    const docPut = items[0]!.Put!;
+    expect(docPut.Item).toMatchObject({ documentId: 'doc_new', status: 'CURRENT' });
+    expect(docPut.ConditionExpression).toBe('attribute_exists(documentId) AND #s = :superseded');
+    expect(docPut.ExpressionAttributeNames).toEqual({ '#s': 'status' });
+    expect(docPut.ExpressionAttributeValues).toEqual({ ':superseded': 'SUPERSEDED' });
+  });
+
+  it('maps a failed reinstate condition to DOC_NOT_SUPERSEDED', async () => {
+    docMock.on(TransactWriteCommand).rejects(cancelled(['ConditionalCheckFailed', 'None', 'None']));
+    const err = await publisher.publishDocument(args({ reinstate: true })).catch((e: unknown) => e);
+    expect((err as PublishConflictError).reason).toBe('DOC_NOT_SUPERSEDED');
+  });
 });

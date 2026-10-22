@@ -1,8 +1,5 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { S3Client } from '@aws-sdk/client-s3';
 import { SFNClient, StartExecutionCommand } from '@aws-sdk/client-sfn';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { PutObjectCommand } from '@aws-sdk/client-s3';
 import {
   DynamoChunksRepository,
   DynamoDocumentsRepository,
@@ -22,6 +19,7 @@ import {
   type SessionsRepository,
 } from '@bgr/persistence';
 import type { IngestionJobId } from '@bgr/domain';
+import { createS3UploadPresigner } from './presigner.js';
 import { S3ObjectStore } from './s3-object-store.js';
 
 export interface AppConfig {
@@ -121,31 +119,16 @@ export function getContext(): AppContext {
   if (cached) return cached;
   const config = loadConfigFromEnv();
   const ddb = new DynamoDBClient({});
-  const s3 = new S3Client({ region: config.region });
   const sfn = new SFNClient({ region: config.region });
   const rawStore = new S3ObjectStore({ bucket: config.ingestionBucket, region: config.region });
   const normalizedStore = rawStore;
 
-  const presigner: UploadPresigner = {
-    async createPut({ contentType, sizeBytes, filename }) {
-      const dateKey = new Date().toISOString().slice(0, 10);
-      const rand = cryptoIdGenerator.sourceDocumentId().replace(/^doc_/, '');
-      const ext = pickExtension(contentType, filename);
-      const key = `raw/${dateKey}/${rand}${ext}`;
-      const url = await getSignedUrl(
-        s3,
-        new PutObjectCommand({
-          Bucket: config.ingestionBucket,
-          Key: key,
-          ContentType: contentType,
-          ContentLength: sizeBytes,
-        }),
-        { expiresIn: config.presignExpirySeconds },
-      );
-      const expiresAt = new Date(Date.now() + config.presignExpirySeconds * 1000).toISOString();
-      return { url, key, contentType, expiresAt, maxBytes: config.uploadMaxBytes };
-    },
-  };
+  const presigner = createS3UploadPresigner({
+    bucket: config.ingestionBucket,
+    region: config.region,
+    expirySeconds: config.presignExpirySeconds,
+    maxBytes: config.uploadMaxBytes,
+  });
 
   const executor: IngestionExecutor = {
     async start(jobId) {
@@ -186,20 +169,6 @@ export function getContext(): AppContext {
     executor,
   };
   return cached;
-}
-
-function pickExtension(contentType: string, filename?: string): string {
-  const fromFile = filename?.match(/\.[a-zA-Z0-9]+$/)?.[0];
-  if (fromFile) return fromFile.toLowerCase();
-  switch (contentType.toLowerCase()) {
-    case 'application/pdf':
-      return '.pdf';
-    case 'text/html':
-    case 'application/xhtml+xml':
-      return '.html';
-    default:
-      return '.bin';
-  }
 }
 
 export function overrideContextForTests(ctx: AppContext): void {

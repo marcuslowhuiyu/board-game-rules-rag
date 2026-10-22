@@ -24,10 +24,49 @@ const STRIP_SELECTORS = [
 
 const MAIN_CANDIDATES = ['main', 'article', '[role="main"]', '#main', '#content', '.content'];
 
+// Elements that start a new text block. Anything else (span, a, strong, …)
+// is inline and stays within the surrounding block.
+const BLOCK_TAGS = new Set([
+  'p',
+  'div',
+  'section',
+  'article',
+  'main',
+  'li',
+  'ul',
+  'ol',
+  'dl',
+  'dt',
+  'dd',
+  'table',
+  'thead',
+  'tbody',
+  'tfoot',
+  'caption',
+  'td',
+  'th',
+  'pre',
+  'blockquote',
+  'figure',
+  'figcaption',
+  'details',
+  'summary',
+  'hr',
+]);
+
+/** Minimal structural view of a domhandler node — enough for the walk. */
+interface DomNode {
+  type: string;
+  name?: string;
+  data?: string;
+  children?: DomNode[];
+}
+
 /**
  * Web / living-rules parser (MASTER_PLAN §17). Strips scripts, nav, and
  * boilerplate; then walks the DOM in document order emitting headings and
- * paragraph blocks with the heading path stack that led to them.
+ * text blocks (paragraphs, list items, table rows, definition terms, bare
+ * div text) with the heading path stack that led to them.
  *
  * Web pages have no meaningful "page number", so we assign the virtual page
  * `1` to every block. Retrieval still surfaces the heading path.
@@ -54,14 +93,25 @@ export function createHtmlParser(): DocumentParser {
         });
       };
 
-      $root.find('h1, h2, h3, h4, h5, h6, p, li').each((_, el) => {
-        const $el = $(el);
-        const tag = (el as { tagName?: string }).tagName?.toLowerCase() ?? '';
-        const text = $el.text();
-        if (!text) return;
+      // Walk in document order. Inline content accumulates into `pending`;
+      // every block-level boundary flushes it, so each run of text is emitted
+      // exactly once — no matter how lists, tables and divs nest.
+      let pending = '';
+      const flush = () => {
+        emitParagraph(pending);
+        pending = '';
+      };
+      const walk = (node: DomNode): void => {
+        if (node.type === 'text') {
+          pending += node.data ?? '';
+          return;
+        }
+        if (node.type !== 'tag') return;
+        const tag = node.name?.toLowerCase() ?? '';
         if (/^h[1-6]$/.test(tag)) {
+          flush();
           const depth = Number(tag.slice(1));
-          const cleaned = collapseWhitespace(text);
+          const cleaned = collapseWhitespace($(node as never).text());
           if (cleaned.length === 0) return;
           popTo(headingStack, depth - 1);
           headingStack.push({ depth, text: cleaned });
@@ -75,8 +125,27 @@ export function createHtmlParser(): DocumentParser {
           });
           return;
         }
-        emitParagraph(text);
-      });
+        if (tag === 'br') {
+          pending += ' ';
+          return;
+        }
+        if (tag === 'tr') {
+          // One block per row keeps a table's columns associated.
+          flush();
+          const cells = (node.children ?? [])
+            .filter((c) => c.type === 'tag' && (c.name === 'td' || c.name === 'th'))
+            .map((c) => collapseWhitespace($(c as never).text()))
+            .filter((t) => t.length > 0);
+          emitParagraph(cells.join(' | '));
+          return;
+        }
+        const isBlock = BLOCK_TAGS.has(tag);
+        if (isBlock) flush();
+        for (const child of node.children ?? []) walk(child);
+        if (isBlock) flush();
+      };
+      for (const child of ($root.get(0) as DomNode | undefined)?.children ?? []) walk(child);
+      flush();
 
       const combined = blocks.map((b) => b.text).join('\n');
       const quality = analyzeQuality({ pageCount: 1, pageTexts: [combined] });

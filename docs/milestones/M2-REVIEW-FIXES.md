@@ -2,7 +2,7 @@
 
 **Status:** open review work on PR #7. **PR #7 must not be merged yet.** **Do not begin Milestone 3.**
 
-The initial M2 PR received two rounds of review; the second round surfaced a further set of issues that outgrew a single working session. This document captures only the remaining work, divided into three ordered slices.
+The initial M2 PR received two rounds of review; the second round surfaced a further set of issues that outgrew a single working session. This document captures only the remaining work, divided into ordered slices (R1, R2, R2b, R3, then R4 from the final review).
 
 **Rules for whoever picks this up:**
 
@@ -54,6 +54,38 @@ The review's P2 findings are folded into M2-R3 below.
 4. **Update `ADR-0008` and `CURRENT_STATE.md` if any decision changed.** In particular the transaction scope for M2-R1 §1, the storage-lifecycle restructure for M2-R2 §3, the `Chunk.isCurrent` removal for M2-R2 §4, and the split quality gate for M2-R3 §2 all warrant a paragraph in ADR-0008. Update `CURRENT_STATE.md` known-issues and Milestone-2-what-landed sections to reflect the state of the branch. Update the PR #7 description and test counts.
 5. **Remaining Codex P2 findings (2026-10-21 review).** (a) The PDF parser only checks a paragraph's first line for a heading; unpdf separates lines with single newlines, so later headings on a page are flattened (would break real-rulebook heading paths). (b) `listChunksForDocument` / `deleteChunksForDocument` ignore `LastEvaluatedKey` (1 MiB query pages). (c) The URL fetcher buffers the whole body before enforcing `maxBytes`; enforce while streaming. (d) Frontend: games created via Add Game have no content package, so ingestion can't start; changing edition leaves a stale `contentId`; starting a second job leaves the first poll loop running. Items 1 and 2 above already cover the review's garbled-text and HTML-scan findings.
 6. **Run the complete M2 quality gates.** `pnpm typecheck`, `pnpm lint`, `pnpm format:check`, `pnpm test`, `pnpm synth`, then verify PR #7 CI is green. Do not merge.
+
+---
+
+## M2-R4 — Final-review fixes (from the whole-PR review, 2026-10-22)
+
+The final review ran a Claude reviewer and Codex over the whole branch. Both judged it ready to merge with fixes; the core invariants held. R4 fixes the correctness findings, each test-first:
+
+1. **Presigned uploads carried an empty-body checksum** (Codex P1, reproduced). The SDK default presigned `x-amz-checksum-crc32=AAAAAA==`, so S3 would reject every real upload. The presigner now uses `requestChecksumCalculation: 'WHEN_REQUIRED'`; a test exercises the real SDK presigner.
+2. **A StartExecution error could downgrade a finished job** (Codex P1). `POST /ingestion` now records the failure with `markFailedIfActive`, and reports the job as-is if it already finished.
+3. **HTML parser lost and duplicated text** (both reviewers). Rewritten as a document-order walk: tables, definition lists and bare-div text are kept, nested list items are emitted once, and table rows become one block each.
+4. **Re-uploading a superseded version did nothing** (Claude reviewer; the user chose "re-publish"). The old document is reinstated as CURRENT with its existing chunks, the live one is superseded and `knowledgeRevision` bumps. This uses the same atomic transaction with a `reinstate` mode.
+5. **Upload bytes could change between FETCH and PARSE** (Codex P2). FETCH snapshots uploads to `raw/upload/{sha256}{ext}`.
+6. **Concurrent identical uploads could both publish** (Codex P2). FINALIZE reads the game before the dedup lookup.
+7. **The in-memory publisher was not atomic** (both). Checks use synchronous reads and every write starts before the first await. The reviewer's related point, that in-memory `updateJob` lacks the `updatedAt` condition, needs no change: that condition only guards the gap between DynamoDB's read and write, which the in-memory version does not have.
+8. **SSRF IPv6 literals** (both). Brackets are stripped before classifying, and hex IPv4-mapped addresses are checked.
+
+273 tests total.
+
+**Deferred to a follow-up PR (minor findings, user decision):**
+- `POST /ingestion` accepts any bucket key and downloads it to check existence; it should require the `raw/` prefix and use HeadObject.
+- `quality.ts` contains literal NUL bytes, so git treats it as binary.
+- The deploy smoke test exercises the real transaction only on the first deploy.
+- After MarkJobFailed the execution always ends at `PipelineFailed`.
+- CURRENT_STATE and ADR leftovers.
+
+**Backlog / tuning pass:**
+- automatic retries for transient errors;
+- Sources screen polish (polling stops after one failed request, mixed duplicate messaging, revision display);
+- heading-only chunks and the unused `minTokens`;
+- PDF sniffing by `%PDF-`;
+- an M3 acceptance check that only CURRENT documents' chunks are used;
+- the `reddit.com` suffix match.
 
 ---
 

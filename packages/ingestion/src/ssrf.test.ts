@@ -18,6 +18,8 @@ describe('isDisallowedIp', () => {
     'fc00::1',
     'ff02::1',
     '::ffff:10.0.0.1',
+    '::ffff:7f00:1', // hex form of ::ffff:127.0.0.1, which is what URL produces
+    '::ffff:a9fe:a9fe', // ::ffff:169.254.169.254
   ])('flags %s', (ip) => {
     expect(isDisallowedIp(ip)).toBe(true);
   });
@@ -46,6 +48,24 @@ describe('assertUrlSafeForFetch', () => {
     await expect(
       assertUrlSafeForFetch('http://169.254.169.254/latest/', { resolveDns: publicResolver }),
     ).rejects.toMatchObject({ code: 'DISALLOWED_IP' });
+  });
+
+  it.each(['http://[::1]/', 'http://[fd00::1]/x', 'http://[::ffff:127.0.0.1]/'])(
+    'rejects literal private IPv6 %s (brackets stripped before classifying)',
+    async (input) => {
+      await expect(
+        assertUrlSafeForFetch(input, { resolveDns: publicResolver }),
+      ).rejects.toMatchObject({ code: 'DISALLOWED_IP' });
+    },
+  );
+
+  it('accepts a literal public IPv6 URL without a DNS lookup', async () => {
+    const url = await assertUrlSafeForFetch('https://[2606:4700:4700::1111]/rules', {
+      resolveDns: async () => {
+        throw new Error('literal IPs must not be resolved');
+      },
+    });
+    expect(url.hostname).toBe('[2606:4700:4700::1111]');
   });
 
   it('rejects localhost hostname', async () => {

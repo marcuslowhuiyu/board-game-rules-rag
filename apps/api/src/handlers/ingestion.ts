@@ -68,18 +68,24 @@ export function ingestionRoutes(ctxFactory: () => AppContext) {
         jobId,
         message: err instanceof Error ? err.message : String(err),
       });
-      await app.ingestionJobs.updateJob(
+      // Conditional: StartExecution may have been accepted with only the
+      // response lost, and the execution may already have finished. A job
+      // that reached a terminal state is reported as-is, never downgraded.
+      const outcome = await app.ingestionJobs.markFailedIfActive(
         jobId,
         {
-          status: 'FAILED',
-          error: {
-            stage: 'VALIDATE',
-            message: 'failed to start state machine',
-            code: 'START_EXECUTION_FAILED',
-          },
+          stage: 'VALIDATE',
+          message: 'failed to start state machine',
+          code: 'START_EXECUTION_FAILED',
         },
         app.clock.now().toISOString(),
       );
+      if (outcome === 'NOT_APPLIED') {
+        const current = await app.ingestionJobs.getJob(jobId);
+        if (current && current.status !== 'FAILED') {
+          return created(IngestionJobViewSchema.parse(current));
+        }
+      }
       return badRequest('failed to start ingestion');
     }
     rc.logger.info('ingestion started', { jobId });

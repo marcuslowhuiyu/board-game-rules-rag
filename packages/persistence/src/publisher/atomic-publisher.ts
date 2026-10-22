@@ -6,6 +6,13 @@ import type { Edition, GameId, IngestionJob, SourceDocument, SourceDocumentId } 
  */
 export interface PublishDocumentArgs {
   newDocument: SourceDocument;
+  /**
+   * Re-uploaded bytes match a SUPERSEDED document: `newDocument` is that
+   * existing row (same `documentId`, status flipped back to CURRENT) and the
+   * write is conditional on it still being SUPERSEDED instead of absent.
+   * Its chunks are reused as-is.
+   */
+  reinstate?: boolean;
   /** Previous CURRENT document that must transition to SUPERSEDED. */
   supersedeDocumentId?: SourceDocumentId;
   gameId: GameId;
@@ -37,10 +44,12 @@ export interface PublishDocumentArgs {
 /**
  * - `DOC_EXISTS` — the planned document is already present (an earlier
  *   attempt published it).
- * - `PREV_NOT_CURRENT` / `GAME_STALE` / `JOB_STALE` — something moved
- *   underneath the caller; re-reading state and retrying may succeed.
+ * - `DOC_NOT_SUPERSEDED` / `PREV_NOT_CURRENT` / `GAME_STALE` / `JOB_STALE` —
+ *   something moved underneath the caller; re-reading state and retrying may
+ *   succeed.
  */
-export type PublishConflictReason = 'DOC_EXISTS' | 'PREV_NOT_CURRENT' | 'GAME_STALE' | 'JOB_STALE';
+export type PublishConflictReason =
+  'DOC_EXISTS' | 'DOC_NOT_SUPERSEDED' | 'PREV_NOT_CURRENT' | 'GAME_STALE' | 'JOB_STALE';
 
 export class PublishConflictError extends Error {
   constructor(
@@ -54,7 +63,8 @@ export class PublishConflictError extends Error {
 
 /**
  * Atomically publishes a new authoritative `SourceDocument`:
- *   - the new document appears with `status = CURRENT`,
+ *   - the new document appears with `status = CURRENT` (or, with
+ *     `reinstate`, an existing SUPERSEDED document returns to CURRENT),
  *   - the previous CURRENT document (if any) flips to `SUPERSEDED`,
  *   - the game's edition `knowledgeRevision` is bumped,
  *   - the ingestion job is marked SUCCEEDED,

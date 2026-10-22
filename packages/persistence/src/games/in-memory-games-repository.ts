@@ -34,6 +34,11 @@ export class InMemoryGamesRepository implements GamesRepository {
   }
 
   async getGame(gameId: GameId): Promise<Game | null> {
+    return this.peekGame(gameId);
+  }
+
+  /** Synchronous read for `InMemoryAtomicPublisher`'s yield-free check-and-apply. */
+  peekGame(gameId: GameId): Game | null {
     return this.games.get(gameId) ?? null;
   }
 

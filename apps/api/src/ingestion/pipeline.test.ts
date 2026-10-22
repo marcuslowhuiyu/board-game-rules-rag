@@ -919,4 +919,112 @@ describe('ingestion pipeline (M2 acceptance)', () => {
     await expect(runFullPipeline(job.jobId, stageCtx)).rejects.toBeInstanceOf(StageError);
     await expectParseFailure(job.jobId, 'LIKELY_SCAN');
   });
+
+  it('re-uploading a SUPERSEDED version reinstates it as CURRENT and bumps knowledgeRevision', async () => {
+    const v1Bytes = new Uint8Array([1, 1, 1]);
+    const one = await runFullPipeline(
+      (await createPdfJob(ctx, 'raw/v1.pdf', v1Bytes)).jobId,
+      makeStageContext(ctx, { pdfExtractor: makeExtractor(RULEBOOK_V1_PAGES) }),
+    );
+    const two = await runFullPipeline(
+      (await createPdfJob(ctx, 'raw/v2.pdf', new Uint8Array([2, 2, 2]))).jobId,
+      makeStageContext(ctx, { pdfExtractor: makeExtractor(RULEBOOK_V2_PAGES) }),
+    );
+    const v1Id = asSourceDocumentId(one.job.documentId!);
+    const v2Id = asSourceDocumentId(two.job.documentId!);
+    const v1ChunkCount = (await ctx.documents.getDocument(v1Id))!.chunkCount;
+
+    const three = await runFullPipeline(
+      (await createPdfJob(ctx, 'raw/v1-again.pdf', v1Bytes)).jobId,
+      makeStageContext(ctx, { pdfExtractor: makeExtractor(RULEBOOK_V1_PAGES) }),
+    );
+
+    expect(three.job.status).toBe('SUCCEEDED');
+    expect(three.duplicate).toBeFalsy();
+    expect(three.job.duplicateOf).toBeUndefined();
+    expect(three.job.documentId).toBe(v1Id);
+    expect(three.job.supersededDocumentId).toBe(v2Id);
+    expect(three.job.chunkCount).toBe(v1ChunkCount);
+    const v1 = await ctx.documents.getDocument(v1Id);
+    expect(v1?.status).toBe('CURRENT');
+    expect(v1?.knowledgeRevision).toBe(3);
+    expect(v1?.supersedes).toContain(v2Id);
+    expect((await ctx.documents.getDocument(v2Id))?.status).toBe('SUPERSEDED');
+    expect((await ctx.games.getGame(gameId))!.editions[0]!.knowledgeRevision).toBe(3);
+    expect(await ctx.documents.listDocumentsForEdition(gameId, editionId)).toHaveLength(2);
+  });
+
+  it('parses and retains the uploaded bytes FETCH hashed, even if the upload key is overwritten later', async () => {
+    const original = new Uint8Array([7, 7, 7, 7]);
+    const seen: Uint8Array[] = [];
+    const stageCtx = makeStageContext(ctx, {
+      pdfExtractor: {
+        extract: async (bytes) => {
+          seen.push(bytes);
+          return { pages: RULEBOOK_V1_PAGES };
+        },
+      },
+    });
+    const job = await createPdfJob(ctx, 'raw/reused.pdf', original);
+    await runStage(job.jobId, 'VALIDATE', stageCtx);
+    await runStage(job.jobId, 'FETCH', stageCtx);
+    // The presigned PUT URL is still valid: someone re-uploads to the same key.
+    await ctx.rawStore.putBytes('raw/reused.pdf', new Uint8Array([6, 6]), 'application/pdf');
+
+    const result = await runFullPipeline(job.jobId, stageCtx);
+
+    expect(result.status).toBe('SUCCEEDED');
+    expect(Array.from(seen[0]!)).toEqual(Array.from(original));
+    const doc = await ctx.documents.getDocument(asSourceDocumentId(result.job.documentId!));
+    expect(doc?.contentHash).toBe(sha256Hex(original));
+    expect(Array.from(await ctx.rawStore.getBytes(doc!.rawObjectUri))).toEqual(
+      Array.from(original),
+    );
+  });
+
+  it('two concurrent jobs with identical bytes publish once (game read precedes the FINALIZE dedup lookup)', async () => {
+    const stageCtx = makeStageContext(ctx, { pdfExtractor: makeExtractor(RULEBOOK_V1_PAGES) });
+    const bytes = new Uint8Array([4, 4, 4]);
+    const a = await createPdfJob(ctx, 'raw/a.pdf', bytes);
+    const b = await createPdfJob(ctx, 'raw/b.pdf', bytes);
+    const upToChunk = [
+      'VALIDATE',
+      'FETCH',
+      'PARSE',
+      'CLASSIFY',
+      'DISCOVER_ERRATA',
+      'NORMALIZE',
+      'CHUNK',
+    ] as const;
+    for (const stage of upToChunk) {
+      await runStage(a.jobId, stage, stageCtx);
+      await runStage(b.jobId, stage, stageCtx);
+    }
+
+    // Interleave: B's FINALIZE dedup lookup misses, then A publishes in full,
+    // then B carries on.
+    const docs = ctx.documents as InMemoryDocumentsRepository;
+    const lookup = docs.findByContentHash.bind(docs);
+    let interleaved = false;
+    docs.findByContentHash = async (...args) => {
+      const found = await lookup(...args);
+      if (!interleaved) {
+        interleaved = true;
+        await runStage(a.jobId, 'FINALIZE', stageCtx);
+      }
+      return found;
+    };
+    const firstAttempt = await runStage(b.jobId, 'FINALIZE', stageCtx).catch((e: unknown) => e);
+    docs.findByContentHash = lookup;
+    if (firstAttempt instanceof RetryableStageError) {
+      await runStage(b.jobId, 'FINALIZE', stageCtx); // the state machine's retry
+    }
+
+    const published = await ctx.documents.listDocumentsForEdition(gameId, editionId);
+    expect(published).toHaveLength(1);
+    expect((await ctx.games.getGame(gameId))!.editions[0]!.knowledgeRevision).toBe(1);
+    const jobB = await ctx.ingestionJobs.getJob(b.jobId);
+    expect(jobB?.status).toBe('SUCCEEDED');
+    expect(jobB?.duplicateOf).toBe(published[0]!.documentId);
+  });
 });

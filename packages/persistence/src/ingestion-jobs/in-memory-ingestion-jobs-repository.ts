@@ -22,6 +22,11 @@ export class InMemoryIngestionJobsRepository implements IngestionJobsRepository 
   }
 
   async getJob(jobId: IngestionJobId): Promise<IngestionJob | null> {
+    return this.peekJob(jobId);
+  }
+
+  /** Synchronous read for `InMemoryAtomicPublisher`'s yield-free check-and-apply. */
+  peekJob(jobId: IngestionJobId): IngestionJob | null {
     return this.byId.get(jobId) ?? null;
   }
 

@@ -46,7 +46,13 @@ export class DynamoAtomicPublisher implements AtomicPublisher {
       Put: {
         TableName: this.tables.documentsTable,
         Item: args.newDocument,
-        ConditionExpression: 'attribute_not_exists(documentId)',
+        ...(args.reinstate
+          ? {
+              ConditionExpression: 'attribute_exists(documentId) AND #s = :superseded',
+              ExpressionAttributeNames: { '#s': 'status' },
+              ExpressionAttributeValues: { ':superseded': 'SUPERSEDED' },
+            }
+          : { ConditionExpression: 'attribute_not_exists(documentId)' }),
       },
     });
 
@@ -102,6 +108,12 @@ export class DynamoAtomicPublisher implements AtomicPublisher {
         const supersedeReason = offset === 1 ? reasons[1] : undefined;
         const gameReason = reasons[1 + offset];
         const jobReason = reasons[2 + offset];
+        if (newDocReason?.Code === 'ConditionalCheckFailed' && args.reinstate) {
+          throw new PublishConflictError(
+            `document ${args.newDocument.documentId} is no longer SUPERSEDED`,
+            'DOC_NOT_SUPERSEDED',
+          );
+        }
         if (newDocReason?.Code === 'ConditionalCheckFailed') {
           throw new PublishConflictError(
             `document already exists: ${args.newDocument.documentId}`,

@@ -1,6 +1,6 @@
 # ADR-0008: Document ingestion — Step Functions + S3 + DynamoDB, deterministic PDF first
 
-- **Status:** Accepted (revised 2026-09-17 after PR #7 review; revised 2026-10-21 for M2-R1, M2-R2, M2-R2b and M2-R3 review fixes)
+- **Status:** Accepted (revised 2026-09-17 after PR #7 review; revised 2026-10-21 for M2-R1, M2-R2, M2-R2b and M2-R3 review fixes; revised 2026-10-22 for M2-R4, the final-review fixes)
 - **Date:** 2026-09-17
 - **Deciders:** Marcus Low, Claude Code (M2)
 - **Related:** `MASTER_PLAN.md` §13, §14, §15, §16, §17, §18, §19, §46, §47, §48, §49, §51; Milestone 2; ADR-0001
@@ -43,12 +43,15 @@ Every stage Task has a `Catch` to a per-stage `MarkJobFailed_<STAGE>` Lambda Tas
 
 The runner checks `job.status` first. If the job is already `SUCCEEDED` or `FAILED` (Step Functions redelivery, at-least-once semantics), the runner returns `{ terminal: true }` without any side effects. The Choice state then routes on the job's status: SUCCEEDED to Succeed, FAILED through `MarkJobFailed` to Fail.
 
+A non-FINALIZE stage already listed in `completedStages` is likewise a no-op that just reports the next stage (M2-R4): a redelivered invocation re-runs nothing, and FETCH can skip PARSE…CHUNK when it is reinstating a superseded document (see Deduplication scope). FINALIZE always runs.
+
 ### State layout
 
 - Job state: DynamoDB `IngestionJobs` table (partition key `jobId`).
 - Intermediate stage artifacts: S3 under `stage-state/ingestion/{jobId}/*.json` (`fetch.json`, `parsed.json`, `normalized.json`, ...). Originally under `normalized/`, then `temporary/ingestion/…`; it now has its own top-level prefix so exactly one lifecycle rule applies (see Storage lifecycle).
 - Chunk bodies: `normalized/{documentId}/{chunkId}.txt` (retained; the DDB chunk row references it).
-- Raw sources: `raw/{yyyy-mm-dd}/{uuid}.{ext}` for uploads, `raw/url/{sha256}.snapshot` for URL snapshots. Retained.
+- Raw sources: browsers upload to `raw/{yyyy-mm-dd}/{uuid}.{ext}`; FETCH then snapshots the exact bytes it hashed to `raw/upload/{sha256}{ext}` (uploads) or `raw/url/{sha256}.snapshot` (URLs), and PARSE and `SourceDocument.rawObjectUri` use the snapshot. Retained. Uploads are snapshotted too because a presigned PUT URL stays valid until expiry and the bucket is unversioned: without the copy, an overwrite between FETCH and PARSE would make the recorded hash, the chunks and the retained raw source disagree (M2-R4).
+- Presigned uploads are signed with `requestChecksumCalculation: 'WHEN_REQUIRED'`. The SDK default presigns the CRC32 of the absent body (the empty-content checksum), so S3 rejects every real upload; the presigner test exercises the real SDK presigner (M2-R4).
 
 ### Storage lifecycle
 
@@ -68,7 +71,7 @@ M2's private-beta volume is small; storage-cost pressure comes later.
 
 - PDF: deterministic text-layer extraction via [`unpdf`](https://github.com/unjs/unpdf) (Node/serverless-friendly wrapper around `pdfjs-dist`). Real integration tested in `packages/ingestion/src/parsers/unpdf-extractor.test.ts` against a `pdf-lib`-generated fixture; the unit tests inject a stub extractor.
 - PDF headings are detected **on every line**, not only on the first line of a blank-line-separated paragraph. `unpdf` joins a page's lines with single newlines and rarely emits blank lines, so first-line-only detection flattened every later heading on a page into body text (M2-R3 §5a). Body lines accumulate until the next heading line. Known trade-off: a body line that happens to match the heading heuristic (e.g. starting `2 players …`) now becomes a heading. Tune the heuristic against the real-rulebook acceptance run.
-- HTML: `cheerio`, strips scripts/nav/aside/footer, prefers `<main>` / `[role=main]`.
+- HTML: `cheerio`, strips scripts/nav/aside/footer, prefers `<main>` / `[role=main]`. Walks the DOM in document order: inline content accumulates and every block-level boundary (`p`, `li`, `div`, `dt`/`dd`, `td`, `pre`, `blockquote`, …) flushes it, so each run of text is emitted exactly once however lists, tables and divs nest. Each table row is one block with cells joined by ` | `. The earlier `h1–h6, p, li` selector dropped table, definition-list and bare-div text and duplicated nested list items (M2-R4). Ordered-list numbering is not preserved yet.
 - Fallback: `createStubFallbackParser()` — declared, throws. Concrete OCR/AI implementation deferred until we have real failure data (§16).
 
 ### Quality gate
@@ -96,16 +99,22 @@ Heading-aware chunker with configurable min/target/max token budget (defaults 30
 
 Scope: `(gameId, editionId, contentId, contentHash)`. `contentId` is part of the identity because the same bytes may legitimately be attached to different content packages (a rulebook PDF that also serves as a promo pack's reference). `sourceType` is NOT part of the identity — the same document should not be re-ingested twice for a single content package just because the operator picked a different `sourceType` on the second attempt. Documented and covered by regression tests in both persistence and pipeline.
 
+**What a hash match means depends on the matched document's status (M2-R4):**
+
+- `CURRENT` (or `ARCHIVED`) → duplicate: the job succeeds with `duplicateOf` set and nothing changes.
+- `SUPERSEDED` → **reinstate**. Re-uploading an old version means "make this the live version": the old document returns to `CURRENT` with its existing chunks, the present CURRENT document for its key is superseded, and `knowledgeRevision` bumps. FETCH marks PARSE…CHUNK complete (nothing to re-parse) and FINALIZE performs the publish with `reinstate: true`: the same four-item transaction, except the document `Put` is conditional on `status = SUPERSEDED` instead of `attribute_not_exists`. A failed condition is `DOC_NOT_SUPERSEDED`, retried like the other conflicts; the retry then sees the document CURRENT and reports a duplicate. Before M2-R4 a superseded match reported "duplicate" and left the newer version live, so the operator's revert silently did nothing.
+
 ### FINALIZE — failure-safe publication
 
 Rewritten from the pre-review draft. The old order mutated authoritative state before the new document was durable; the revised order guarantees "the previous CURRENT document and the edition knowledgeRevision remain unchanged until the replacement document and all required chunk artifacts are durably prepared":
 
 1. `CHUNK` reserves `plannedDocumentId` (if not already set on retry) and **persists it on the job before writing any chunk artifact** (M2-R2 §1), then writes every chunk body to S3 and every chunk metadata row to DynamoDB against that id. Previously the id was persisted only after the writes, so a crash in between made the retry pick a fresh id and orphan the first attempt's chunks. Chunk ids are deterministic, so a retry overwrites. CHUNK also records the parser's `pageCount` on the job (M2-R2 §5); FINALIZE publishes that rather than `max(chunk.pageEnd)`, which undercounts when trailing pages yield no text. Fails if the chunker produced zero chunks.
-2. `FINALIZE` first does the dedup lookup by `(game, edition, contentId, contentHash)`.
-   - Real duplicate (existing doc that is not our `plannedDocumentId`) → success with `duplicateOf` set. No mutations.
+2. `FINALIZE` reads the game row, **then** does the dedup lookup by `(game, edition, contentId, contentHash)`. The order matters (M2-R4): the game's `updatedAt` guards the publish, so if a concurrent job publishes identical bytes after this lookup missed, our publish fails `GAME_STALE` and the retry finds the duplicate. Looking up first let both jobs publish the same hash and bump the revision twice.
+   - Real duplicate (an existing CURRENT doc that is not our `plannedDocumentId`) → success with `duplicateOf` set. No mutations.
+   - Existing SUPERSEDED doc → reinstate (see Deduplication scope).
    - Existing doc equals `plannedDocumentId` → defensive recovery (see step 5: a landed transaction normally means the job is already SUCCEEDED and the runner exits before FINALIZE runs). Success without `duplicateOf`.
 3. Verifies persisted chunk count matches `job.chunkCount`. Fails FINALIZE if not (a retry of `CHUNK` will re-establish the invariant).
-4. Reads current game/edition state, computes the new `SourceDocument` and `nextEditions[]` (bumped `knowledgeRevision`).
+4. Using the game/edition state read in step 2, computes the new `SourceDocument` and `nextEditions[]` (bumped `knowledgeRevision`).
 5. **Single atomic publish via `AtomicPublisher.publishDocument()`** — DynamoDB `TransactWriteItems` with four actions:
    - `Put` new `SourceDocument` (condition `attribute_not_exists(documentId)`)
    - `Update` previous CURRENT doc to SUPERSEDED (condition `status = CURRENT`)
@@ -118,7 +127,7 @@ Rewritten from the pre-review draft. The old order mutated authoritative state b
 `PublishConflictError` reasons map to typed recovery:
 
 - `DOC_EXISTS` — defensive: the planned document is already present. Recover as success (not duplicate).
-- `PREV_NOT_CURRENT` / `GAME_STALE` / `JOB_STALE` — optimistic-concurrency conflicts that a fresh read can resolve. FINALIZE throws `RetryableStageError` (Lambda `errorType` = `RetryableStageError`); the runner does **not** persist `FAILED`, the job stays `RUNNING`, and the FINALIZE task's Retry policy re-runs it. Only after retries are exhausted does the Catch path record `FAILED` via `MarkJobFailed`. (Before M2-R1 these were persisted as `FAILED` by the runner, which made the documented "retry" impossible.)
+- `DOC_NOT_SUPERSEDED` / `PREV_NOT_CURRENT` / `GAME_STALE` / `JOB_STALE` — optimistic-concurrency conflicts that a fresh read can resolve. FINALIZE throws `RetryableStageError` (Lambda `errorType` = `RetryableStageError`); the runner does **not** persist `FAILED`, the job stays `RUNNING`, and the FINALIZE task's Retry policy re-runs it. Only after retries are exhausted does the Catch path record `FAILED` via `MarkJobFailed`. (Before M2-R1 these were persisted as `FAILED` by the runner, which made the documented "retry" impossible.)
 
 ### Chunk currency
 
@@ -126,7 +135,7 @@ Rewritten from the pre-review draft. The old order mutated authoritative state b
 
 ### SSRF guard + redirect handling
 
-`assertUrlSafeForFetch` rejects non-http(s), loopback (`127.0.0.0/8`, `::1`), private (`10/8`, `172.16/12`, `192.168/16`, `fc00::/7`), link-local (`169.254/16` + EC2 metadata, `fe80::/10`), multicast, and `.local` / `.internal` hostnames. Resolved IPs are re-checked.
+`assertUrlSafeForFetch` rejects non-http(s), loopback (`127.0.0.0/8`, `::1`), private (`10/8`, `172.16/12`, `192.168/16`, `fc00::/7`), link-local (`169.254/16` + EC2 metadata, `fe80::/10`), multicast, and `.local` / `.internal` hostnames. Resolved IPs are re-checked. IPv6 literals are classified without their URL brackets (`[::1]` → `::1`) and never sent to DNS; IPv4-mapped addresses are checked in both dotted (`::ffff:127.0.0.1`) and hex (`::ffff:7f00:1`, the form WHATWG `URL` produces) form (M2-R4).
 
 Redirects are handled **manually** (`redirect: 'manual'` on every hop). An initially safe public URL cannot redirect to a private target — every `Location` is validated through `assertUrlSafeForFetch` before the next request. Bounded at 5 redirects. `SourceDocument.canonicalUrl` records the FINAL URL after redirects, not the initial one.
 
@@ -165,7 +174,7 @@ Ingestion bucket `AllowedOrigins` is pinned to the CloudFront distribution's `di
 ## Consequences
 
 - **Positive:**
-  - Duplicate short-circuits, quality-gate failures, and FINALIZE crashes all keep authoritative state clean. The invariant is exercised by unit tests in `apps/api/src/ingestion/pipeline.test.ts` (crash-between-CHUNK-and-FINALIZE, crash-after-publish-before-updateJob, forced NORMALIZE failure, SSRF rejection, quality gate).
+  - Duplicate short-circuits, quality-gate failures, and FINALIZE crashes all keep authoritative state clean. The invariant is exercised by unit tests in `apps/api/src/ingestion/pipeline.test.ts` (crash-between-CHUNK-and-FINALIZE, error-after-commit does not downgrade SUCCEEDED, forced NORMALIZE failure, concurrent identical uploads, superseded-version reinstate, SSRF rejection, quality gate).
   - The state machine's `Choice` branches make duplicate/completed jobs skip downstream stages instead of running them for nothing.
   - `MarkJobFailed_<STAGE>` closes the "Lambda infra failure leaves job stuck RUNNING" hole.
   - Real `unpdf` integration is now covered by an automated test against a `pdf-lib` synthetic PDF.

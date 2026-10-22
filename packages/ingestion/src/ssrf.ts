@@ -43,8 +43,16 @@ function isDisallowedIpv6(raw: string): boolean {
   if (ip.startsWith('fc') || ip.startsWith('fd')) return true; // unique local (fc00::/7)
   if (ip.startsWith('ff')) return true; // multicast
   if (ip.startsWith('::ffff:')) {
+    // IPv4-mapped, dotted (`::ffff:127.0.0.1`) or hex (`::ffff:7f00:1` — the
+    // form WHATWG URL normalises to).
     const v4 = ip.slice('::ffff:'.length);
     if (isIP(v4) === 4) return isDisallowedIpv4(v4);
+    const hex = /^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(v4);
+    if (hex) {
+      const hi = parseInt(hex[1]!, 16);
+      const lo = parseInt(hex[2]!, 16);
+      return isDisallowedIpv4(`${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`);
+    }
   }
   return false;
 }
@@ -96,9 +104,11 @@ export async function assertUrlSafeForFetch(
   if (host.endsWith('.internal') || host.endsWith('.local')) {
     throw new SsrfError(`disallowed hostname suffix: ${host}`, 'DISALLOWED_SUFFIX');
   }
-  if (isIP(host) !== 0) {
-    if (isDisallowedIp(host)) {
-      throw new SsrfError(`disallowed literal IP: ${host}`, 'DISALLOWED_IP');
+  // URL keeps IPv6 literals bracketed (`[::1]`); classify the bare address.
+  const literal = host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
+  if (isIP(literal) !== 0) {
+    if (isDisallowedIp(literal)) {
+      throw new SsrfError(`disallowed literal IP: ${literal}`, 'DISALLOWED_IP');
     }
     return url;
   }

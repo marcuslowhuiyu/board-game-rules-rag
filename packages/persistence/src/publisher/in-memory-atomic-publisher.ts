@@ -8,11 +8,14 @@ import {
 } from './atomic-publisher.js';
 
 /**
- * In-memory `AtomicPublisher`. JavaScript is single-threaded, so a
- * check-then-apply block that does not `await` between the reads and the
- * writes is atomic against other operations on the same repos. That
- * property matches the guarantees the DynamoDB implementation gets from
- * `TransactWriteItems`.
+ * In-memory `AtomicPublisher`. JavaScript is single-threaded, so checks and
+ * writes that run without yielding to the event loop are atomic against
+ * every other operation on the same repos — the guarantee the DynamoDB
+ * implementation gets from `TransactWriteItems`.
+ *
+ * Hence the checks use the repos' synchronous `peek*` reads, and every write
+ * is *started* (its body runs synchronously up to its first await, and the
+ * in-memory repos never await) before anything is awaited.
  */
 export class InMemoryAtomicPublisher implements AtomicPublisher {
   constructor(
@@ -22,8 +25,8 @@ export class InMemoryAtomicPublisher implements AtomicPublisher {
   ) {}
 
   async publishDocument(args: PublishDocumentArgs): Promise<void> {
-    // Pre-flight checks.
-    const game = await this.games.getGame(args.gameId);
+    // --- Check (no awaits) ---
+    const game = this.games.peekGame(args.gameId);
     if (!game) {
       throw new PublishConflictError(`game not found: ${args.gameId}`, 'GAME_STALE');
     }
@@ -33,13 +36,21 @@ export class InMemoryAtomicPublisher implements AtomicPublisher {
         'GAME_STALE',
       );
     }
-    if (await this.documents.getDocument(args.newDocument.documentId)) {
+    const existingDoc = this.documents.peekDocument(args.newDocument.documentId);
+    if (args.reinstate) {
+      if (existingDoc?.status !== 'SUPERSEDED') {
+        throw new PublishConflictError(
+          `document ${args.newDocument.documentId} is no longer SUPERSEDED`,
+          'DOC_NOT_SUPERSEDED',
+        );
+      }
+    } else if (existingDoc) {
       throw new PublishConflictError(
         `document already exists: ${args.newDocument.documentId}`,
         'DOC_EXISTS',
       );
     }
-    const job = await this.jobs.getJob(args.completedJob.jobId);
+    const job = this.jobs.peekJob(args.completedJob.jobId);
     if (!job || job.updatedAt !== args.expectedJobUpdatedAt) {
       throw new PublishConflictError(
         `ingestion job ${args.completedJob.jobId} moved (expected updatedAt ${args.expectedJobUpdatedAt})`,
@@ -47,34 +58,32 @@ export class InMemoryAtomicPublisher implements AtomicPublisher {
       );
     }
     if (args.supersedeDocumentId) {
-      const prev = await this.documents.getDocument(args.supersedeDocumentId);
-      if (!prev) {
+      const prev = this.documents.peekDocument(args.supersedeDocumentId);
+      if (prev?.status !== 'CURRENT') {
         throw new PublishConflictError(
-          `supersede target missing: ${args.supersedeDocumentId}`,
-          'PREV_NOT_CURRENT',
-        );
-      }
-      if (prev.status !== 'CURRENT') {
-        throw new PublishConflictError(
-          `supersede target is not CURRENT: ${args.supersedeDocumentId} (${prev.status})`,
+          `supersede target is not CURRENT: ${args.supersedeDocumentId} (${prev?.status ?? 'missing'})`,
           'PREV_NOT_CURRENT',
         );
       }
     }
 
-    // Apply — no awaits between check and apply so this block is atomic in
-    // the JS event loop.
-    await this.documents.createDocument(args.newDocument);
+    // --- Apply (all writes start before the first await) ---
+    const writes: Promise<unknown>[] = [];
+    if (args.reinstate) this.documents.putDocument(args.newDocument);
+    else writes.push(this.documents.createDocument(args.newDocument));
     if (args.supersedeDocumentId) {
-      await this.documents.markSuperseded(args.supersedeDocumentId, args.now);
+      writes.push(this.documents.markSuperseded(args.supersedeDocumentId, args.now));
     }
-    await this.games.replaceEditions(
-      args.gameId,
-      args.nextEditions,
-      args.now,
-      args.expectedGameUpdatedAt,
+    writes.push(
+      this.games.replaceEditions(
+        args.gameId,
+        args.nextEditions,
+        args.now,
+        args.expectedGameUpdatedAt,
+      ),
     );
     const { jobId, createdAt: _createdAt, ...rest } = args.completedJob;
-    await this.jobs.updateJob(jobId, rest, args.completedJob.updatedAt);
+    writes.push(this.jobs.updateJob(jobId, rest, args.completedJob.updatedAt));
+    await Promise.all(writes);
   }
 }

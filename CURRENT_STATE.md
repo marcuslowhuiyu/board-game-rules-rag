@@ -1,10 +1,10 @@
 # Current State
 
-_Last updated: 2026-10-21 (M2-R3 review-fix slice)_
+_Last updated: 2026-10-22 (M2-R4 final-review fixes)_
 
 ## Current milestone
 
-**Milestone 2 — Document Ingestion** (feature branch `feature/m02-document-ingestion`; PR #7 open). Second-round review fixes are tracked in `docs/milestones/M2-REVIEW-FIXES.md` as three slices: R1, R2 and R2b are done and reviewed; **M2-R3 is done (awaiting human review)**. After R3 review, PR #1 needs a final review before it can leave draft and merge. R2b was added after an independent Codex review of R1+R2 found four P1 defects, including a stage-runner bundle that could not load. Do not advance to M3 until PR #7 merges AND the post-merge real-document acceptance checks pass on dev.
+**Milestone 2 — Document Ingestion** (feature branch `feature/m02-document-ingestion`; PR #7 open). Second-round review fixes are tracked in `docs/milestones/M2-REVIEW-FIXES.md` as slices: R1, R2, R2b and R3 are done and reviewed. The final whole-PR review (Claude reviewer + Codex) judged it ready to merge with fixes; **M2-R4 fixes those findings (done, awaiting human review)**. After R4 review, PR #7 can leave draft and merge. R2b was added after an independent Codex review of R1+R2 found four P1 defects, including a stage-runner bundle that could not load. Do not advance to M3 until PR #7 merges AND the post-merge real-document acceptance checks pass on dev.
 
 Spec: `docs/milestones/M2-document-ingestion.md`.
 Architecture decision: `docs/adr/0008-document-ingestion-pipeline.md` (revised 2026-09-17).
@@ -51,7 +51,7 @@ Architecture decision: `docs/adr/0008-document-ingestion-pipeline.md` (revised 2
 
 Tests: Dynamo publisher (4-item transaction, `JOB_STALE` mapping), `MarkJobFailed` handler (RUNNING / FAILED / SUCCEEDED), pipeline (error after commit, rejected publish, each retryable reason, real `JOB_STALE`, FAILED redelivery), and structural CDK assertions on the Choice branches and the FINALIZE retrier.
 
-**M2-R2 — Chunk idempotency and storage invariants (done, awaiting review).**
+**M2-R2 — Chunk idempotency and storage invariants (done, reviewed).**
 
 1. CHUNK persists `plannedDocumentId` on the job before any chunk write; a retry reuses it.
 2. CHUNK crash/retry tests: crash before the first chunk write (same id, no orphans), crash between S3 bodies and DDB `putChunks` (same keys rewritten, counts match), and a real `DynamoChunksRepository` against a mocked client returning `UnprocessedItems` (R6 loop persists every chunk, FINALIZE count matches).
@@ -61,9 +61,9 @@ Tests: Dynamo publisher (4-item transaction, `JOB_STALE` mapping), `MarkJobFaile
 
 219 tests total.
 
-**M2-R2b — Deployability and consistency (done, awaiting review).** Fixes the four Codex P1 findings. The stage-runner bundle could not load (`Dynamic require of "buffer"`); fixed with a shared `createRequire` banner, and a new CDK test imports every real bundle. Pipeline-driving DynamoDB reads are now strongly consistent. Failure writes go through an atomic `markFailedIfActive` conditional write, closing the downgrade race the R1 guard left open. 233 tests total.
+**M2-R2b — Deployability and consistency (done, reviewed).** Fixes the four Codex P1 findings. The stage-runner bundle could not load (`Dynamic require of "buffer"`); fixed with a shared `createRequire` banner, and a new CDK test imports every real bundle. Pipeline-driving DynamoDB reads are now strongly consistent. Failure writes go through an atomic `markFailedIfActive` conditional write, closing the downgrade race the R1 guard left open. 233 tests total.
 
-**M2-R3 — Parse quality and final cleanup (done, awaiting review).** Each item has a test that failed first.
+**M2-R3 — Parse quality and final cleanup (done, reviewed).** Each item has a test that failed first.
 
 1. PARSE fails on `garbledCharRatio > 0.05` (`GARBLED_EXTRACTION`) for every format.
 2. The scan and empty-page gates apply only to PDF. A short, valid HTML page is accepted, and a short PDF is still rejected as `LIKELY_SCAN`.
@@ -75,6 +75,19 @@ Tests: Dynamo publisher (4-item transaction, `JOB_STALE` mapping), `MarkJobFaile
 8. SourcesScreen cancels the previous job's poll loop when a new job starts, and on unmount.
 
 254 tests total. `main` was merged into the branch (CI-minimisation and repo-recreation changes).
+
+**M2-R4 — Final-review fixes (done, awaiting review).** Each item has a test that failed first.
+
+1. Presigned uploads no longer embed an empty-body checksum. Before this fix, S3 would have rejected every real upload.
+2. A StartExecution error can no longer downgrade a finished job.
+3. The HTML parser keeps table, definition-list and bare-div text, and emits nested list items once.
+4. Re-uploading a superseded version reinstates it as CURRENT, reusing its chunks, and bumps `knowledgeRevision`.
+5. FETCH snapshots upload bytes under a content-addressed key.
+6. FINALIZE reads the game before dedup, so concurrent identical uploads publish once.
+7. The in-memory publisher is genuinely atomic.
+8. The SSRF guard classifies bracketed IPv6 literals and hex-mapped IPv4.
+
+273 tests total. Deferred minor findings are listed in `docs/milestones/M2-REVIEW-FIXES.md` §M2-R4.
 
 ### What still MUST happen post-merge before M2 is closed
 
@@ -93,7 +106,7 @@ Load-bearing decisions from `docs/adr/`:
 - **ADR-0005** — Bounded `WebSearchProvider` loop with AgentCore adapter.
 - **ADR-0006** — DynamoDB multi-table design for M1 entities.
 - **ADR-0007** — Same-origin routing via CloudFront `/api/*` + first-party `SameSite=Lax` session cookie.
-- **ADR-0008 (revised 2026-09-17)** — Ingestion pipeline: Step Functions + one stage-runner Lambda + Choice-based short-circuit + `MarkJobFailed` failure path; deterministic PDF-first; `TransactWriteItems`-based atomic publish; content-hash dedup scoped to `(game, edition, contentId, hash)`; manual redirect SSRF handling; quality gate at PARSE; storage lifecycle keeps raw/ + normalized/ retained and expires only `stage-state/ingestion/` (7d) and `temporary/` (1d), with no nested rule prefixes; ingestion-bucket CORS pinned to the CloudFront domain.
+- **ADR-0008 (revised 2026-09-17; review-fix revisions 2026-10-21/22)** — Ingestion pipeline: Step Functions + one stage-runner Lambda + Choice-based short-circuit + `MarkJobFailed` failure path; deterministic PDF-first; `TransactWriteItems`-based atomic publish; content-hash dedup scoped to `(game, edition, contentId, hash)`; manual redirect SSRF handling; quality gate at PARSE; storage lifecycle keeps raw/ + normalized/ retained and expires only `stage-state/ingestion/` (7d) and `temporary/` (1d), with no nested rule prefixes; ingestion-bucket CORS pinned to the CloudFront domain.
 
 ## Known issues / open questions
 

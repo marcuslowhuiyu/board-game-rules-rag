@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { asContentId, asEditionId, asGameId, type ContentPackage, type Game } from '@bgr/domain';
+import {
+  asContentId,
+  asEditionId,
+  asGameId,
+  asIngestionJobId,
+  type ContentPackage,
+  type Game,
+} from '@bgr/domain';
 import { makeHandler } from '../lib/router.js';
 import { bodyAs, makeEvent, makeFakeExecutor, makeTestContext } from '../test-support.js';
 import { ingestionRoutes } from './ingestion.js';
@@ -153,6 +160,39 @@ describe('POST /ingestion', () => {
       }),
     );
     expect(res.statusCode).toBe(400);
+  });
+
+  it('does not downgrade a job that finished although StartExecution reported an error', async () => {
+    // StartExecution accepted, response lost: the pipeline can publish before
+    // the SDK call rejects. The SUCCEEDED job must survive the error path.
+    const { ctx, handler } = build();
+    ctx.executor = {
+      async start(jobId) {
+        await ctx.ingestionJobs.updateJob(
+          jobId,
+          { status: 'SUCCEEDED', stage: 'FINALIZE' },
+          '2026-09-17T00:00:05.000Z',
+        );
+        throw new Error('socket hang up');
+      },
+    };
+    const { gameId, editionId, contentId } = await seedGame(ctx);
+    await ctx.rawStore.putBytes('raw/2026-09-17/z.pdf', new Uint8Array([1]), 'application/pdf');
+    const res = await handler(
+      postJson('/ingestion', {
+        gameId,
+        editionId,
+        contentId,
+        title: 'X',
+        sourceType: 'RULEBOOK',
+        authority: 'OFFICIAL_RULES',
+        source: { kind: 'S3', s3Key: 'raw/2026-09-17/z.pdf', contentType: 'application/pdf' },
+      }),
+    );
+    const job = await ctx.ingestionJobs.getJob(asIngestionJobId('job_test'));
+    expect(job?.status).toBe('SUCCEEDED');
+    expect(res.statusCode).toBe(201);
+    expect(bodyAs<{ status: string }>(res).status).toBe('SUCCEEDED');
   });
 });
 

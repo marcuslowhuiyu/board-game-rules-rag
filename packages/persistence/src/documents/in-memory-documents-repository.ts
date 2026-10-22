@@ -21,7 +21,17 @@ export class InMemoryDocumentsRepository implements DocumentsRepository {
   }
 
   async getDocument(documentId: SourceDocumentId): Promise<SourceDocument | null> {
+    return this.peekDocument(documentId);
+  }
+
+  /** Synchronous read for `InMemoryAtomicPublisher`'s yield-free check-and-apply. */
+  peekDocument(documentId: SourceDocumentId): SourceDocument | null {
     return this.byId.get(documentId) ?? null;
+  }
+
+  /** Unconditional overwrite — the publisher's reinstate path checks first. */
+  putDocument(doc: SourceDocument): void {
+    this.byId.set(doc.documentId, { ...doc });
   }
 
   async listDocumentsForEdition(gameId: GameId, editionId: EditionId): Promise<SourceDocument[]> {
