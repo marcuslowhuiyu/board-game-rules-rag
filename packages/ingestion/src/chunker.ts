@@ -69,16 +69,23 @@ export function chunkDocument(parsed: ParsedDocument, options: ChunkerOptions = 
     // becomes the start of a new bucket so downstream retrieval can still
     // see the heading in the chunk body.
     if (block.isHeading) {
-      if (bucket.length > 0 && bucket.every((b) => b.isHeading)) {
+      const headingTokens = approxTokenCount(block.text);
+      if (
+        bucket.length > 0 &&
+        bucket.every((b) => b.isHeading) &&
+        // Measure the joined text, separators included — that is what the
+        // emitted chunk's tokenCount is computed from.
+        approxTokenCount(joinBlocks([...bucket, block])) <= max
+      ) {
         // Body-less headings so far (a parent straight into its child, or a
         // diagram's labels): fold them into this section rather than emit
         // heading-only chunks. The deepest/latest heading's path wins.
         bucket.push(block);
-        bucketTokens += approxTokenCount(block.text);
+        bucketTokens += headingTokens;
       } else {
         flush();
         bucket = [block];
-        bucketTokens = approxTokenCount(block.text);
+        bucketTokens = headingTokens;
       }
       bucketHeadingPath = block.headingPath.slice();
       continue;

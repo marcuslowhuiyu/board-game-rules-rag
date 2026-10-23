@@ -120,7 +120,7 @@ Each fix has a test that failed first, using real lines from these documents:
 2. **Body-less heading runs fold into the next section.** A parent heading followed directly by a child, or a diagram's labels, no longer produces heading-only chunks.
 3. **HTML icons are read by their accessible name:** `img` alt, `svg` aria-label or title, or the referenced `<symbol>`'s title or id. Rulepop's "[bird] in [forest]" headings had come out as "in".
 
-280 tests total.
+The M2-T1 Codex review caught two more issues, both fixed: a heading run could exceed the token cap, and visible SVG diagram text was dropped. 282 tests total.
 
 ## Active decisions
 

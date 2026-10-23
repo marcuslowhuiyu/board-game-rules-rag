@@ -111,6 +111,15 @@ describe('createHtmlParser', () => {
     ]);
   });
 
+  it('keeps visible text drawn inside an SVG diagram', async () => {
+    const parser = createHtmlParser();
+    const html = `<html><body><main>
+      <p>Reward track: <svg viewBox="0 0 100 20"><rect/><text x="0" y="10">Gain 2 gold.</text><text><tspan>Then draw.</tspan></text></svg></p>
+    </main></body></html>`;
+    const doc = await parser.parse(encode(html), { contentType: 'text/html' });
+    expect(doc.blocks.map((b) => b.text)).toEqual(['Reward track: Gain 2 gold. Then draw.']);
+  });
+
   it('falls back to body when no <main>', async () => {
     const parser = createHtmlParser();
     const html = `<html><body><h1>Root</h1><p>Body only.</p></body></html>`;

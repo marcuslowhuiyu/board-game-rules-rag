@@ -85,6 +85,9 @@ function svgName(svg: DomNode, symbolTitles: Map<string, string>): string {
   if (label) return label;
   const title = (svg.children ?? []).find((c) => c.type === 'tag' && c.name === 'title');
   if (title) return (title.children ?? []).map((c) => c.data ?? '').join('');
+  // A diagram rather than an icon: keep the text it draws.
+  const visible = svgVisibleText(svg).trim();
+  if (visible) return visible;
   const use = findUse(svg);
   const ref = (use?.attribs?.['href'] ?? use?.attribs?.['xlink:href'] ?? '').replace(/^#/, '');
   if (!ref) return '';
@@ -92,6 +95,17 @@ function svgName(svg: DomNode, symbolTitles: Map<string, string>): string {
   return (
     symbolTitles.get(ref) ?? ref.replace(/^(?:[a-z]|icon|ico)[-_]/i, '').replace(/[-_]+/g, ' ')
   );
+}
+
+/** Text of an SVG's `<text>` elements (with their `<tspan>`s), skipping `<symbol>` definitions. */
+function svgVisibleText(node: DomNode, inText = false): string {
+  return (node.children ?? [])
+    .map((c) => {
+      if (c.type === 'text') return inText ? (c.data ?? '') : '';
+      if (c.type !== 'tag' || c.name === 'symbol') return '';
+      return ` ${svgVisibleText(c, inText || c.name === 'text')} `;
+    })
+    .join('');
 }
 
 /** First `<use>` of an icon, ignoring `<symbol>` definitions (sprite sheets). */

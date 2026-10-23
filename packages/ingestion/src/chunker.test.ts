@@ -130,6 +130,17 @@ describe('chunkDocument', () => {
     ]);
   });
 
+  it('keeps the token cap when folding a long run of headings', () => {
+    const longHeading = (i: number) => heading(`SECTION ${i} ${'X'.repeat(70)}`, 1, 1);
+    const doc = parse([
+      ...Array.from({ length: 40 }, (_, i) => longHeading(i)),
+      para('Body text.', ['SECTION 39'], 1),
+    ]);
+    const chunks = chunkDocument(doc, { minTokens: 10, targetTokens: 50, maxTokens: 100 });
+    for (const c of chunks) expect(c.tokenCount).toBeLessThanOrEqual(100);
+    expect(chunks.map((c) => c.text).join('\n\n')).toContain('SECTION 0 ');
+  });
+
   it('still emits a trailing body-less heading at the end of the document', () => {
     const doc = parse([heading('A', 1, 1), para('Body.', ['A'], 1), heading('CREDITS', 1, 2)]);
     const chunks = chunkDocument(doc, { minTokens: 1, targetTokens: 50, maxTokens: 100 });
