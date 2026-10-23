@@ -90,6 +90,27 @@ describe('createHtmlParser', () => {
     ]);
   });
 
+  it('reads inline icons by their accessible name (img alt, svg title, referenced symbol)', async () => {
+    // Rulepop draws food/habitat icons as inline SVG <use> references and
+    // <img alt>; without names a heading like "[bird] in [forest]" became "in".
+    const parser = createHtmlParser();
+    const html = `<html><body><main>
+      <svg style="display:none">
+        <symbol id="i-forest"><title>Forest</title><path d="M0 0"/></symbol>
+        <symbol id="i-bird"><path d="M0 0"/></symbol>
+      </svg>
+      <h3><svg class="i"><use href="#i-bird"/></svg> in <svg class="i"><use href="#i-forest"/></svg></h3>
+      <p>Gain 1 <img src="/icons/fish.webp" alt="fish"> from the feeder.</p>
+      <p>Pay <svg aria-label="2 eggs"><use href="#i-egg"/></svg> to draw.</p>
+    </main></body></html>`;
+    const doc = await parser.parse(encode(html), { contentType: 'text/html' });
+    expect(doc.blocks.map((b) => ({ h: b.isHeading, t: b.text }))).toEqual([
+      { h: true, t: 'bird in Forest' },
+      { h: undefined, t: 'Gain 1 fish from the feeder.' },
+      { h: undefined, t: 'Pay 2 eggs to draw.' },
+    ]);
+  });
+
   it('falls back to body when no <main>', async () => {
     const parser = createHtmlParser();
     const html = `<html><body><h1>Root</h1><p>Body only.</p></body></html>`;

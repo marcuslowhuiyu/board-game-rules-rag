@@ -1,10 +1,10 @@
 # Current State
 
-_Last updated: 2026-10-22 (M2-R4 final-review fixes)_
+_Last updated: 2026-10-23 (M2 merged; real-document acceptance; M2-T1 chunk tuning)_
 
 ## Current milestone
 
-**Milestone 2 — Document Ingestion** (feature branch `feature/m02-document-ingestion`; PR #1 open — it was PR #7 before the repo was recreated). Second-round review fixes are tracked in `docs/milestones/M2-REVIEW-FIXES.md` as slices: R1, R2, R2b and R3 are done and reviewed. The final whole-PR review (Claude reviewer + Codex) judged it ready to merge with fixes; M2-R4 fixed those findings and has been reviewed. PR #1 is ready to leave draft and merge. R2b was added after an independent Codex review of R1+R2 found four P1 defects, including a stage-runner bundle that could not load. Do not advance to M3 until PR #1 merges AND the post-merge real-document acceptance checks pass on dev.
+**Milestone 2 — Document Ingestion.** Merged 2026-10-22 as PR #1 (squash `b9962f2`; it was PR #7 before the repo was recreated) after review-fix slices R1–R4, which are tracked in `docs/milestones/M2-REVIEW-FIXES.md`. The dev deploy was green, and the post-merge real-document acceptance passed functionally (see below). It exposed chunk-quality problems on real rulebooks, which **M2-T1 (chunk tuning, `feature/m02-t1-chunk-tuning`)** fixes. M2 closes when M2-T1 merges; then M3 begins.
 
 Spec: `docs/milestones/M2-document-ingestion.md`.
 Architecture decision: `docs/adr/0008-document-ingestion-pipeline.md` (revised 2026-09-17).
@@ -89,11 +89,38 @@ Tests: Dynamo publisher (4-item transaction, `JOB_STALE` mapping), `MarkJobFaile
 
 The R4 Codex review caught two more problems, both fixed: a concurrent-reinstate race that would have failed the job, and layout tables whose cell paragraphs were fused together. 276 tests total. Deferred minor findings are listed in `docs/milestones/M2-REVIEW-FIXES.md` §M2-R4.
 
-### What still MUST happen post-merge before M2 is closed
+### Post-merge real-document acceptance (dev, 2026-10-23) — passed
 
-- Ingest two structurally different real PDF rulebooks through the deployed `unpdf` path in dev; inspect representative complete chunks (heading paths, page ranges, lists / rule numbers). Real rulebooks stay out of the repo.
-- Ingest at least one source through the actual URL path in dev.
-- Confirm modified-version superseding + `knowledgeRevision` increment in dev.
+Run against the deployed stack through the public API, the same calls the browser makes. Real rulebooks stay out of the repo.
+
+| Check | Result |
+|---|---|
+| PDF #1: SETI base rules (21.9 MB, illustrated) via presigned upload | SUCCEEDED, 201 chunks, garbled 0 %, not flagged as a scan |
+| PDF #2: Ticket to Ride rules (Days of Wonder, 3.5 MB) | SUCCEEDED, 10 chunks |
+| URL: `https://wingspan.rulepop.com/` (about 108k chars) | SUCCEEDED, 183 chunks, nested sections preserved |
+| Supersede v1 → v2 | v1 SUPERSEDED, v2 CURRENT, `knowledgeRevision` 1 → 2 |
+| Re-upload v1 (R4 reinstate) | v1 CURRENT again with its original chunks, v2 SUPERSEDED, revision 3 |
+| Re-upload v1 while CURRENT | duplicate, revision unchanged |
+
+The garbled-text threshold (5 %) needs no change: every real document measured 0 %. Chunk quality did need tuning, and that is M2-T1.
+
+### M2-T1 — chunk tuning against the real documents
+
+Measured with a local harness that runs the real extractor, parser and chunker on the same three documents (before → after):
+
+| Document | chunks | tiny (< 20 tokens) | well-sized (100–700) |
+|---|---|---|---|
+| SETI | 201 → 78 | 106 → 9 | 48 → 46 |
+| Ticket to Ride | 10 → 7 | 3 → 0 | 6 → 6 |
+| Wingspan (HTML) | 183 → 185 | 5 → 4 | 65 → 76 |
+
+Each fix has a test that failed first, using real lines from these documents:
+
+1. **PDF numeric headings must look like section numbers.** Previously any line starting with a digit counted, including "48 tech tiles", "2 data." and "1. The first time, rotate disc 1…". Ticket to Ride's core rules were filed under "1 Longest Continuous Path". A numeric heading now needs "1." or "2.1" style numbering, a short capitalised title and no sentence punctuation at the end.
+2. **Body-less heading runs fold into the next section.** A parent heading followed directly by a child, or a diagram's labels, no longer produces heading-only chunks.
+3. **HTML icons are read by their accessible name:** `img` alt, `svg` aria-label or title, or the referenced `<symbol>`'s title or id. Rulepop's "[bird] in [forest]" headings had come out as "in".
+
+280 tests total.
 
 ## Active decisions
 
@@ -118,7 +145,7 @@ Full tracker: `docs/CONTRADICTIONS_AND_GAPS.md`.
 - **Fallback parser is a stub** — `createStubFallbackParser` throws. OCR/AI deferred.
 - **`InMemorySessionsRepository`'s TTL check uses wall-clock time** — tests that hardcode a past NOW would falsely see sessions as expired; worked around by using a far-future NOW. Consider clock-injecting in a later cleanup.
 - **No static security analysis.** CodeQL was removed in ADR-0009 while the repo was private. The repo is now public (recreated 2026-10-21), so CodeQL is free and can be reinstated.
-- **PDF heading heuristic vs. real rulebooks.** Line-level heading detection can promote a body line that matches the heuristic. Tune it during the real-rulebook acceptance run, along with the 5 % garbled threshold.
+- **PDF extraction limits seen on real rulebooks (deferred).** Large display fonts come out letter-spaced ("PL AYER PIECES", "BET WEEN ROUNDS"), and mixed-case headings (Ticket to Ride's "Claiming a Route") are not detected, so that document's rules carry an empty heading path. Both need font-size and position data from pdf.js rather than plain text; that is a bigger change, best done before M3 retrieval evals.
 
 ## Requires operator decision, if you want them
 
@@ -127,4 +154,7 @@ Full tracker: `docs/CONTRADICTIONS_AND_GAPS.md`.
 
 ## Next expected work
 
-Real-document acceptance in dev after PR #1 merges. Once those checks pass, advance to Milestone 3 — Embeddings, Retrieval & Evaluation Foundation. See `docs/milestones/M3-embeddings-retrieval.md`.
+Merge M2-T1, which closes M2. Then:
+- a focused dev-toolchain upgrade (vitest, vite and esbuild clear all 39 Dependabot alerts, which are dev-only);
+- a follow-up PR for the deferred minor review items (`M2-REVIEW-FIXES.md` §M2-R4);
+- Milestone 3 — Embeddings, Retrieval & Evaluation Foundation. See `docs/milestones/M3-embeddings-retrieval.md`.
