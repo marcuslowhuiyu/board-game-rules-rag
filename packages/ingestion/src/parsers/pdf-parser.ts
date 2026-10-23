@@ -18,13 +18,23 @@ export interface PdfParserOptions {
 const DEFAULT_HEADING = (line: string): { depth: number } | null => {
   const trimmed = line.trim();
   if (trimmed.length === 0 || trimmed.length > 100) return null;
-  // Numeric hierarchical headings: "1.", "1.2", "1.2.3 Combat".
+  // Numeric hierarchical headings: "1. Combat", "1.2 Assign Hits", "1.2.3 …".
   // Depth = 1 + numberOfDottedParts, so `1.` sits under an all-caps title
   // heading (depth 1), `1.1` nests under `1.`, and so on.
-  const numeric = /^(\d+(?:\.\d+){0,3})\.?\s+\S/.exec(trimmed);
+  //
+  // Real rulebooks are full of lines that merely start with a number —
+  // component quantities ("48 tech tiles"), mid-sentence wraps ("2 data.")
+  // and numbered steps ("1. The first time, rotate …"). So a numeric heading
+  // needs a section-style number ("1." or "2.1", never a bare "1"), a short
+  // title that starts with a capital, and no sentence punctuation at the end.
+  const numeric = /^(\d+(?:\.\d+){0,3})(\.?)\s+(\S.*)$/.exec(trimmed);
   if (numeric) {
-    const parts = numeric[1]!.split('.').filter((p) => p.length > 0).length;
-    return { depth: Math.min(parts + 1, 6) };
+    const [, number, trailingDot, title] = numeric as unknown as [string, string, string, string];
+    const parts = number.split('.').length;
+    const sectionStyle = parts > 1 || trailingDot === '.';
+    const titleLike =
+      /^[A-Z]/.test(title) && !/[.,;:!?]$/.test(title) && title.split(/\s+/).length <= 8;
+    return sectionStyle && titleLike ? { depth: Math.min(parts + 1, 6) } : null;
   }
   // ALL-CAPS heading lines (`SPACE COMBAT`, `ASSIGN HITS`). Depth 1.
   if (/^[A-Z0-9][A-Z0-9 ,.'\-:&/]{2,}$/.test(trimmed) && /[A-Z]/.test(trimmed)) {

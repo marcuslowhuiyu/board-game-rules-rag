@@ -97,6 +97,56 @@ describe('chunkDocument', () => {
     expect(chunkDocument(parse([]))).toEqual([]);
   });
 
+  it('folds a run of body-less headings into the next section instead of emitting heading-only chunks', () => {
+    // Real SETI page: a parent heading straight into a child heading, and a
+    // diagram's labels detected as consecutive headings.
+    const child: ParsedBlock = {
+      headingPath: ['MILESTONES', 'GOLD MILESTONES'],
+      isHeading: true,
+      headingDepth: 2,
+      pageStart: 18,
+      pageEnd: 18,
+      text: 'GOLD MILESTONES',
+    };
+    const doc = parse([
+      heading('MILESTONES', 1, 18),
+      child,
+      para('At 25, 50 or 70 points, place a marker.', ['MILESTONES', 'GOLD MILESTONES'], 18),
+      heading('COMPUTER', 1, 19),
+      heading('TECH SLOTS', 1, 19),
+      heading('TELESCOPE', 1, 19),
+      para('Computer techs expand your computer.', ['TELESCOPE'], 19),
+    ]);
+    const chunks = chunkDocument(doc, { minTokens: 5, targetTokens: 50, maxTokens: 100 });
+    expect(chunks.map((c) => ({ path: c.headingPath, text: c.text }))).toEqual([
+      {
+        path: ['MILESTONES', 'GOLD MILESTONES'],
+        text: 'MILESTONES\n\nGOLD MILESTONES\n\nAt 25, 50 or 70 points, place a marker.',
+      },
+      {
+        path: ['TELESCOPE'],
+        text: 'COMPUTER\n\nTECH SLOTS\n\nTELESCOPE\n\nComputer techs expand your computer.',
+      },
+    ]);
+  });
+
+  it('keeps the token cap when folding a long run of headings', () => {
+    const longHeading = (i: number) => heading(`SECTION ${i} ${'X'.repeat(70)}`, 1, 1);
+    const doc = parse([
+      ...Array.from({ length: 40 }, (_, i) => longHeading(i)),
+      para('Body text.', ['SECTION 39'], 1),
+    ]);
+    const chunks = chunkDocument(doc, { minTokens: 10, targetTokens: 50, maxTokens: 100 });
+    for (const c of chunks) expect(c.tokenCount).toBeLessThanOrEqual(100);
+    expect(chunks.map((c) => c.text).join('\n\n')).toContain('SECTION 0 ');
+  });
+
+  it('still emits a trailing body-less heading at the end of the document', () => {
+    const doc = parse([heading('A', 1, 1), para('Body.', ['A'], 1), heading('CREDITS', 1, 2)]);
+    const chunks = chunkDocument(doc, { minTokens: 1, targetTokens: 50, maxTokens: 100 });
+    expect(chunks.map((c) => c.text)).toEqual(['A\n\nBody.', 'CREDITS']);
+  });
+
   it('emits a short section as its own chunk', () => {
     // Section text below `minTokens` still gets a chunk (rule stays reachable
     // by its heading path).

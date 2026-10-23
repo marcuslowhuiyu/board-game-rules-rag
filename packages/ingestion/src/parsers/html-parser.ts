@@ -59,7 +59,64 @@ interface DomNode {
   type: string;
   name?: string;
   data?: string;
+  attribs?: Record<string, string>;
   children?: DomNode[];
+}
+
+/**
+ * Text of an inline subtree, with icons read by their accessible name: `<img>`
+ * by `alt`, `<svg>` by `aria-label`, its own `<title>`, or the `<title>` of the
+ * `<symbol>` it `<use>`s (falling back to the symbol id, e.g. `#i-bird` →
+ * "bird"). Rules pages draw food/resource icons inline, so dropping them
+ * turned "[bird] in [forest]" into "in".
+ */
+function inlineText(node: DomNode, symbolTitles: Map<string, string>): string {
+  if (node.type === 'text') return node.data ?? '';
+  if (node.type !== 'tag') return '';
+  const tag = node.name?.toLowerCase() ?? '';
+  if (tag === 'img') return ` ${node.attribs?.['alt'] ?? ''} `;
+  if (tag === 'svg') return ` ${svgName(node, symbolTitles)} `;
+  if (tag === 'br') return ' ';
+  return (node.children ?? []).map((c) => inlineText(c, symbolTitles)).join('');
+}
+
+function svgName(svg: DomNode, symbolTitles: Map<string, string>): string {
+  const label = svg.attribs?.['aria-label'];
+  if (label) return label;
+  const title = (svg.children ?? []).find((c) => c.type === 'tag' && c.name === 'title');
+  if (title) return (title.children ?? []).map((c) => c.data ?? '').join('');
+  // A diagram rather than an icon: keep the text it draws.
+  const visible = svgVisibleText(svg).trim();
+  if (visible) return visible;
+  const use = findUse(svg);
+  const ref = (use?.attribs?.['href'] ?? use?.attribs?.['xlink:href'] ?? '').replace(/^#/, '');
+  if (!ref) return '';
+  // Sprite ids commonly carry a short type prefix (`i-bird`, `g-…`, `icon-…`).
+  return (
+    symbolTitles.get(ref) ?? ref.replace(/^(?:[a-z]|icon|ico)[-_]/i, '').replace(/[-_]+/g, ' ')
+  );
+}
+
+/** Text of an SVG's `<text>` elements (with their `<tspan>`s), skipping `<symbol>` definitions. */
+function svgVisibleText(node: DomNode, inText = false): string {
+  return (node.children ?? [])
+    .map((c) => {
+      if (c.type === 'text') return inText ? (c.data ?? '') : '';
+      if (c.type !== 'tag' || c.name === 'symbol') return '';
+      return ` ${svgVisibleText(c, inText || c.name === 'text')} `;
+    })
+    .join('');
+}
+
+/** First `<use>` of an icon, ignoring `<symbol>` definitions (sprite sheets). */
+function findUse(node: DomNode): DomNode | undefined {
+  for (const c of node.children ?? []) {
+    if (c.type !== 'tag' || c.name === 'symbol') continue;
+    if (c.name === 'use') return c;
+    const nested = findUse(c);
+    if (nested) return nested;
+  }
+  return undefined;
 }
 
 /**
@@ -76,6 +133,13 @@ export function createHtmlParser(): DocumentParser {
     async parse(bytes: Uint8Array): Promise<ParsedDocument> {
       const html = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
       const $ = cheerio.load(html);
+      // Icon sprite titles, collected before stripping (sprites often sit
+      // outside <main>).
+      const symbolTitles = new Map<string, string>();
+      $('symbol[id]').each((_, el) => {
+        const t = collapseWhitespace($(el).children('title').first().text());
+        if (t) symbolTitles.set($(el).attr('id')!, t);
+      });
       for (const sel of STRIP_SELECTORS) $(sel).remove();
       const $root = pickRoot($) ?? $('body');
       const blocks: ParsedBlock[] = [];
@@ -111,7 +175,7 @@ export function createHtmlParser(): DocumentParser {
         if (/^h[1-6]$/.test(tag)) {
           flush();
           const depth = Number(tag.slice(1));
-          const cleaned = collapseWhitespace($(node as never).text());
+          const cleaned = collapseWhitespace(inlineText(node, symbolTitles));
           if (cleaned.length === 0) return;
           popTo(headingStack, depth - 1);
           headingStack.push({ depth, text: cleaned });
@@ -125,8 +189,9 @@ export function createHtmlParser(): DocumentParser {
           });
           return;
         }
-        if (tag === 'br') {
-          pending += ' ';
+        if (tag === 'br' || tag === 'img' || tag === 'svg') {
+          // Inline leaves: icons contribute their accessible name.
+          pending += inlineText(node, symbolTitles);
           return;
         }
         if (tag === 'tr') {
@@ -140,7 +205,7 @@ export function createHtmlParser(): DocumentParser {
             flush();
             emitParagraph(
               cells
-                .map((c) => collapseWhitespace($(c as never).text()))
+                .map((c) => collapseWhitespace(inlineText(c, symbolTitles)))
                 .filter((t) => t.length > 0)
                 .join(' | '),
             );

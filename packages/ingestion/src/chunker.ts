@@ -17,9 +17,12 @@ const DEFAULTS = { minTokens: 300, targetTokens: 500, maxTokens: 700 } as const;
  * Heading-aware chunker (MASTER_PLAN §15).
  *
  * Rules of the room:
- *  - Never merge blocks across a heading boundary. If a section is shorter
- *    than `minTokens` we still emit it, so a rule that lives under its own
- *    heading stays retrievable by that heading path.
+ *  - Never merge body text across a heading boundary. If a section is
+ *    shorter than `minTokens` we still emit it, so a rule that lives under
+ *    its own heading stays retrievable by that heading path.
+ *  - Headings with no body before the next heading are folded into the next
+ *    section (path = the latest heading's) instead of becoming heading-only
+ *    chunks; only a body-less heading at the very end is emitted alone.
  *  - A block whose text itself exceeds `maxTokens` is split at sentence
  *    boundaries; the split fragments keep the same heading path and page
  *    range.
@@ -66,10 +69,25 @@ export function chunkDocument(parsed: ParsedDocument, options: ChunkerOptions = 
     // becomes the start of a new bucket so downstream retrieval can still
     // see the heading in the chunk body.
     if (block.isHeading) {
-      flush();
+      const headingTokens = approxTokenCount(block.text);
+      if (
+        bucket.length > 0 &&
+        bucket.every((b) => b.isHeading) &&
+        // Measure the joined text, separators included — that is what the
+        // emitted chunk's tokenCount is computed from.
+        approxTokenCount(joinBlocks([...bucket, block])) <= max
+      ) {
+        // Body-less headings so far (a parent straight into its child, or a
+        // diagram's labels): fold them into this section rather than emit
+        // heading-only chunks. The deepest/latest heading's path wins.
+        bucket.push(block);
+        bucketTokens += headingTokens;
+      } else {
+        flush();
+        bucket = [block];
+        bucketTokens = headingTokens;
+      }
       bucketHeadingPath = block.headingPath.slice();
-      bucket = [block];
-      bucketTokens = approxTokenCount(block.text);
       continue;
     }
 

@@ -79,6 +79,39 @@ describe('createPdfTextLayerParser', () => {
     expect(body('Build units')?.headingPath).toEqual(['PRODUCTION']);
   });
 
+  it('does not treat quantity lines or numbered steps as headings (real SETI / Ticket to Ride lines)', async () => {
+    const parser = createPdfTextLayerParser({
+      extract: async () => ({
+        pages: [
+          [
+            'GENERAL PIECES',
+            '48 tech tiles',
+            '30 Destination Ticket cards',
+            '1 Longest Continuous Path',
+            '2 data.',
+            "1 energy to land if there's an orbiter at the",
+            'ROTATING THE SOLAR SYSTEM',
+            '1. The first time, rotate disc 1, the one on top.',
+            '2. The second time, rotate disc 2. Disc 1 will naturally rotate with it.',
+            '3. SCORING',
+            'Score points at the end.',
+            '3.1 Route Scoring Table',
+            'Points depend on route length.',
+          ].join('\n'),
+        ],
+      }),
+    });
+    const doc = await parser.parse(new Uint8Array(), { contentType: 'application/pdf' });
+    expect(doc.blocks.filter((b) => b.isHeading).map((b) => b.text)).toEqual([
+      'GENERAL PIECES',
+      'ROTATING THE SOLAR SYSTEM',
+      '3. SCORING',
+      '3.1 Route Scoring Table',
+    ]);
+    const steps = doc.blocks.find((b) => !b.isHeading && b.text.startsWith('1. The first time'));
+    expect(steps?.headingPath).toEqual(['ROTATING THE SOLAR SYSTEM']);
+  });
+
   it('joins wrapped body lines under one heading into a single block', async () => {
     const parser = createPdfTextLayerParser({
       extract: async () => ({
