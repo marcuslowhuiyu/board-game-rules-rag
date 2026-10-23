@@ -1,6 +1,6 @@
 import { App } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { DevStack } from '../lib/dev-stack.js';
 import { GithubOidcStack } from '../lib/github-oidc.js';
 
@@ -34,10 +34,31 @@ describe('DevStack', () => {
     expect((first.Properties as Record<string, unknown>).CorsConfiguration).toBeUndefined();
   });
 
-  it('provisions four DynamoDB tables on-demand', () => {
-    template.resourceCountIs('AWS::DynamoDB::Table', 4);
+  it('provisions all M1+M2 DynamoDB tables on-demand', () => {
+    template.resourceCountIs('AWS::DynamoDB::Table', 7);
     template.allResourcesProperties('AWS::DynamoDB::Table', {
       BillingMode: 'PAY_PER_REQUEST',
+    });
+  });
+
+  it('provisions a chunks table keyed by (documentId, chunkId)', () => {
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      KeySchema: [
+        { AttributeName: 'documentId', KeyType: 'HASH' },
+        { AttributeName: 'chunkId', KeyType: 'RANGE' },
+      ],
+    });
+  });
+
+  it('provisions a documents table keyed by documentId', () => {
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      KeySchema: [{ AttributeName: 'documentId', KeyType: 'HASH' }],
+    });
+  });
+
+  it('provisions an ingestion jobs table keyed by jobId', () => {
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      KeySchema: [{ AttributeName: 'jobId', KeyType: 'HASH' }],
     });
   });
 
@@ -98,6 +119,212 @@ describe('DevStack', () => {
     template.hasOutput('ContentTableName', {});
     template.hasOutput('SessionsTableName', {});
     template.hasOutput('MessagesTableName', {});
+    template.hasOutput('DocumentsTableName', {});
+    template.hasOutput('ChunksTableName', {});
+    template.hasOutput('IngestionJobsTableName', {});
+    template.hasOutput('IngestionBucketName', {});
+    template.hasOutput('IngestionStateMachineArn', {});
+  });
+
+  it('provisions two S3 buckets (web site + ingestion) with SSL enforced', () => {
+    template.resourceCountIs('AWS::S3::Bucket', 2);
+  });
+
+  it('ingestion bucket lifecycle: effective TTL per prefix is what ADR-0008 intends', () => {
+    // S3 applies every rule whose prefix matches a key and the shortest
+    // expiration wins, so assert the EFFECTIVE expiry for representative keys
+    // rather than the presence of individual rules (overlapping prefixes are
+    // what silently cut stage state from 7 days to 1 before M2-R2).
+    type Rule = {
+      Id?: string;
+      Status?: string;
+      Prefix?: string;
+      ExpirationInDays?: number;
+      AbortIncompleteMultipartUpload?: { DaysAfterInitiation?: number };
+    };
+    const buckets = template.findResources('AWS::S3::Bucket');
+    const rules = Object.values(buckets)
+      .map(
+        (b) =>
+          (b.Properties as { LifecycleConfiguration?: { Rules?: Rule[] } }).LifecycleConfiguration
+            ?.Rules,
+      )
+      .find((r) => r !== undefined)!;
+    expect(rules).toBeDefined();
+
+    const effectiveExpiry = (key: string): number | undefined => {
+      const days = rules
+        .filter((r) => r.Status === 'Enabled' && key.startsWith(r.Prefix ?? ''))
+        .map((r) => r.ExpirationInDays)
+        .filter((d): d is number => d !== undefined);
+      return days.length > 0 ? Math.min(...days) : undefined;
+    };
+
+    // Authoritative bytes and canonical chunk bodies are never expired.
+    expect(effectiveExpiry('raw/uploads/abc.pdf')).toBeUndefined();
+    expect(effectiveExpiry('raw/url/abc.snapshot')).toBeUndefined();
+    expect(effectiveExpiry('normalized/doc_1/ch_1_0000.txt')).toBeUndefined();
+    // Per-job stage state: exactly 7 days.
+    expect(effectiveExpiry('stage-state/ingestion/job_1/parsed.json')).toBe(7);
+    // Scratch space: 1 day.
+    expect(effectiveExpiry('temporary/anything.bin')).toBe(1);
+
+    // No rule's prefix nests inside another's.
+    const prefixes = rules.map((r) => r.Prefix ?? '');
+    for (const a of prefixes) {
+      for (const b of prefixes) {
+        if (a !== b) expect(a.startsWith(b)).toBe(false);
+      }
+    }
+
+    // Multipart cleanup on every prefix.
+    for (const r of rules) {
+      expect(r.AbortIncompleteMultipartUpload?.DaysAfterInitiation).toBe(3);
+    }
+  });
+
+  it('restricts ingestion-bucket CORS to the CloudFront distribution (never `*`)', () => {
+    // Find the ingestion bucket — the one whose CORS references the
+    // CloudFront domain name.
+    const buckets = template.findResources('AWS::S3::Bucket');
+    let ingestion:
+      { CorsConfiguration?: { CorsRules?: Array<{ AllowedOrigins?: unknown[] }> } } | undefined;
+    for (const b of Object.values(buckets)) {
+      const cors = (b.Properties as { CorsConfiguration?: unknown }).CorsConfiguration;
+      if (cors) ingestion = b.Properties as never;
+    }
+    expect(ingestion).toBeDefined();
+    const rule = ingestion!.CorsConfiguration!.CorsRules![0]!;
+    const origins = rule.AllowedOrigins ?? [];
+    expect(origins.length).toBeGreaterThan(0);
+    for (const o of origins) {
+      // Origins come out as Fn::Join tokens referencing the distribution.
+      const asJson = JSON.stringify(o);
+      expect(asJson.includes('"*"')).toBe(false);
+      expect(asJson).toMatch(/WebDistribution.*DomainName|"DomainName"/);
+    }
+  });
+
+  it('state machine has one Choice after each M2 stage plus a MarkJobFailed_<STAGE> catch', () => {
+    template.resourceCountIs('AWS::StepFunctions::StateMachine', 1);
+    const machines = template.findResources('AWS::StepFunctions::StateMachine');
+    const first = Object.values(machines)[0] as {
+      Properties: { DefinitionString: { 'Fn::Join': [string, unknown[]] } };
+    };
+    const parts = first.Properties.DefinitionString['Fn::Join'][1];
+    const flat = JSON.stringify(parts);
+    const stages = [
+      'VALIDATE',
+      'FETCH',
+      'PARSE',
+      'CLASSIFY',
+      'DISCOVER_ERRATA',
+      'NORMALIZE',
+      'CHUNK',
+      'FINALIZE',
+    ];
+    for (const stage of stages) {
+      expect(flat).toContain(`Stage_${stage}`);
+      expect(flat).toContain(`Check_After_${stage}`);
+      expect(flat).toContain(`MarkJobFailed_${stage}`);
+    }
+    // Every terminal Fail transitions through a MarkJobFailed_<STAGE>
+    // Lambda first, so no path leaves the job stuck RUNNING.
+    expect(flat).toContain('PipelineFailed');
+    // Choice branches on `$.terminal === true`.
+    expect(flat).toContain('$.terminal');
+  });
+
+  describe('state machine terminal routing + retries', () => {
+    type State = {
+      Type: string;
+      Next?: string;
+      Choices?: { Next: string; And?: unknown[]; BooleanEquals?: boolean; Variable?: string }[];
+      Default?: string;
+      Retry?: { ErrorEquals: string[]; MaxAttempts?: number }[];
+    };
+    let states: Record<string, State>;
+
+    beforeAll(() => {
+      const machines = template.findResources('AWS::StepFunctions::StateMachine');
+      const first = Object.values(machines)[0] as {
+        Properties: { DefinitionString: { 'Fn::Join': [string, unknown[]] } };
+      };
+      // Replace intrinsic tokens (Lambda ARNs) with a placeholder string so
+      // the definition parses as plain JSON.
+      const json = first.Properties.DefinitionString['Fn::Join'][1]
+        .map((p) => (typeof p === 'string' ? p : 'TOKEN'))
+        .join('');
+      states = (JSON.parse(json) as { States: Record<string, State> }).States;
+    });
+
+    const STAGES = [
+      'VALIDATE',
+      'FETCH',
+      'PARSE',
+      'CLASSIFY',
+      'DISCOVER_ERRATA',
+      'NORMALIZE',
+      'CHUNK',
+      'FINALIZE',
+    ];
+
+    it.each(STAGES)('Check_After_%s sends only terminal SUCCEEDED to the success path', (stage) => {
+      const choice = states[`Check_After_${stage}`]!;
+      expect(choice.Type).toBe('Choice');
+      const [success, terminalOther] = choice.Choices!;
+      expect(success!.Next).toBe('SkipEmbedIndexInM2');
+      expect(success!.And).toEqual(
+        expect.arrayContaining([
+          { Variable: '$.terminal', BooleanEquals: true },
+          { Variable: '$.status', StringEquals: 'SUCCEEDED' },
+        ]),
+      );
+      expect(terminalOther).toMatchObject({ Variable: '$.terminal', BooleanEquals: true });
+      expect(terminalOther!.Next).toBe(`TerminalNotSucceeded_${stage}`);
+    });
+
+    it.each(STAGES)(
+      'terminal non-SUCCEEDED after %s goes through MarkJobFailed to PipelineFailed',
+      (stage) => {
+        expect(states[`TerminalNotSucceeded_${stage}`]!.Next).toBe(`MarkJobFailed_${stage}`);
+        expect(states[`MarkJobFailed_${stage}`]!.Next).toBe('PipelineFailed');
+        expect(states['PipelineFailed']!.Type).toBe('Fail');
+      },
+    );
+
+    it('only FINALIZE retries RetryableStageError, with a bounded attempt count', () => {
+      for (const stage of STAGES) {
+        const retriers = states[`Stage_${stage}`]!.Retry ?? [];
+        const retryable = retriers.find((r) => r.ErrorEquals.includes('RetryableStageError'));
+        if (stage === 'FINALIZE') {
+          expect(retryable).toBeDefined();
+          expect(retryable!.MaxAttempts).toBeGreaterThan(0);
+          expect(retryable!.MaxAttempts).toBeLessThanOrEqual(5);
+        } else {
+          expect(retryable).toBeUndefined();
+        }
+      }
+    });
+  });
+
+  it('exposes M2 routes on the HTTP API', () => {
+    for (const rk of [
+      'POST /uploads/presign',
+      'POST /ingestion',
+      'GET /ingestion/{jobId}',
+      'GET /sources/{sourceId}',
+      'GET /sources/{sourceId}/chunks',
+    ]) {
+      template.hasResourceProperties('AWS::ApiGatewayV2::Route', { RouteKey: rk });
+    }
+  });
+
+  it('provisions the ingestion Node 22 Lambdas (api + stage-runner + mark-job-failed)', () => {
+    const fns = template.findResources('AWS::Lambda::Function', {
+      Properties: { Runtime: 'nodejs22.x' },
+    });
+    expect(Object.keys(fns).length).toBeGreaterThanOrEqual(3);
   });
 });
 

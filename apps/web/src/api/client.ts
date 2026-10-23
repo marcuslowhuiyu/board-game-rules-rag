@@ -4,6 +4,7 @@ export interface Edition {
   name: string;
   publisher?: string;
   releaseYear?: number;
+  knowledgeRevision: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -66,6 +67,85 @@ export interface CreateSessionInput {
   enabledContentIds: string[];
 }
 
+export type SourceType =
+  | 'RULEBOOK'
+  | 'RULES_REFERENCE'
+  | 'FAQ'
+  | 'ERRATA'
+  | 'LIVING_RULES'
+  | 'PROMO_RULES'
+  | 'DESIGNER_RULING'
+  | 'PUBLISHER_RULING'
+  | 'COMMUNITY_THREAD'
+  | 'OTHER';
+
+export type Authority =
+  | 'OFFICIAL_RULES'
+  | 'OFFICIAL_ERRATA'
+  | 'DESIGNER_OR_PUBLISHER'
+  | 'COMMUNITY_CONSENSUS'
+  | 'COMMUNITY_DISCUSSION'
+  | 'UNKNOWN';
+
+export type IngestionStage =
+  | 'VALIDATE'
+  | 'FETCH'
+  | 'PARSE'
+  | 'CLASSIFY'
+  | 'DISCOVER_ERRATA'
+  | 'NORMALIZE'
+  | 'CHUNK'
+  | 'EMBED'
+  | 'INDEX'
+  | 'FINALIZE';
+
+export type IngestionStatus = 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED';
+
+export interface IngestionJobView {
+  jobId: string;
+  gameId: string;
+  editionId: string;
+  contentId: string;
+  title: string;
+  sourceType: SourceType;
+  authority: Authority;
+  source:
+    | { kind: 'S3'; s3Key: string; contentType: string; filename?: string; sizeBytes?: number }
+    | { kind: 'URL'; url: string };
+  status: IngestionStatus;
+  stage: IngestionStage;
+  completedStages: IngestionStage[];
+  documentId?: string;
+  chunkCount?: number;
+  duplicateOf?: string;
+  supersededDocumentId?: string;
+  version?: string;
+  error?: { stage: IngestionStage; message: string; code?: string };
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PresignedUploadResponse {
+  url: string;
+  key: string;
+  contentType: string;
+  expiresAt: string;
+  maxBytes: number;
+  method: 'PUT';
+  requiredHeaders: Record<string, string>;
+}
+
+export interface CreateIngestionJobInput {
+  gameId: string;
+  editionId: string;
+  contentId: string;
+  title: string;
+  sourceType: SourceType;
+  authority: Authority;
+  source: IngestionJobView['source'];
+  version?: string;
+}
+
 export class ApiError extends Error {
   constructor(
     public readonly status: number,
@@ -81,10 +161,6 @@ export class ApiError extends Error {
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
     ...init,
-    // `same-origin` is the fetch default, but stating it explicitly documents
-    // the same-origin design (CloudFront serves both the SPA and `/api/*` —
-    // see ADR-0007) and makes it a compile-error if we ever accidentally
-    // point the client at a cross-site URL without revisiting the strategy.
     credentials: 'same-origin',
     headers: {
       accept: 'application/json',
@@ -113,6 +189,14 @@ export interface ApiClient {
   createGame(input: CreateGameInput): Promise<Game>;
   createSession(input: CreateSessionInput): Promise<SessionView>;
   deleteSession(sessionId: string): Promise<void>;
+  presignUpload(input: {
+    filename: string;
+    contentType: string;
+    sizeBytes: number;
+  }): Promise<PresignedUploadResponse>;
+  uploadFile(presign: PresignedUploadResponse, file: File): Promise<void>;
+  createIngestion(input: CreateIngestionJobInput): Promise<IngestionJobView>;
+  getIngestion(jobId: string): Promise<IngestionJobView>;
 }
 
 export function createApiClient(baseUrl: string): ApiClient {
@@ -137,5 +221,27 @@ export function createApiClient(baseUrl: string): ApiClient {
       request<void>(`${base}/sessions/${encodeURIComponent(sessionId)}`, {
         method: 'DELETE',
       }),
+    presignUpload: (input) =>
+      request<PresignedUploadResponse>(`${base}/uploads/presign`, {
+        method: 'POST',
+        body: JSON.stringify(input),
+      }),
+    uploadFile: async (presign, file) => {
+      const res = await fetch(presign.url, {
+        method: 'PUT',
+        headers: presign.requiredHeaders,
+        body: file,
+      });
+      if (!res.ok) {
+        throw new ApiError(res.status, 'UPLOAD_FAILED', `S3 upload failed: ${res.status}`);
+      }
+    },
+    createIngestion: (input) =>
+      request<IngestionJobView>(`${base}/ingestion`, {
+        method: 'POST',
+        body: JSON.stringify(input),
+      }),
+    getIngestion: (jobId) =>
+      request<IngestionJobView>(`${base}/ingestion/${encodeURIComponent(jobId)}`),
   };
 }

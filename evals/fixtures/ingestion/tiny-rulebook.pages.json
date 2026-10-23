@@ -1,0 +1,4 @@
+[
+  "TWILIGHT IMPERIUM\n\nRules Reference (M2 fixture)\n\n1. OVERVIEW\n\nThis fixture stands in for a real rulebook. It exists to exercise the deterministic PDF text-layer parser without shipping a copyrighted PDF in git.\n\n2. SPACE COMBAT\n\nSpace combat occurs after all ships in a system have moved. Both players participate simultaneously in each combat round.",
+  "2.1 Assign Hits\n\nThe attacker assigns hits produced by their own units. Each unit takes one hit before another may be assigned. Sustain damage abilities may absorb the first hit against the affected unit.\n\n2.2 Retreat\n\nEither player may retreat at the start of the next combat round provided their ships have somewhere legal to go."
+]

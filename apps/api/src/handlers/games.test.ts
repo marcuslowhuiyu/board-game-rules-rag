@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Game } from '@bgr/domain';
 import { asContentId, asEditionId, asGameId } from '@bgr/domain';
+import { sequentialIds } from '../ingestion/test-support.js';
 import { makeHandler } from '../lib/router.js';
 import { bodyAs, makeEvent, makeTestContext } from '../test-support.js';
 import { gameRoutes } from './games.js';
@@ -161,5 +162,78 @@ describe('games handlers', () => {
     expect(res.statusCode).toBe(200);
     const body = bodyAs<{ content: unknown[] }>(res);
     expect(body.content).toHaveLength(1);
+  });
+
+  const postGame = (handler: ReturnType<typeof build>['handler'], body: unknown) =>
+    handler(
+      makeEvent({
+        rawPath: '/games',
+        requestContext: {
+          http: {
+            method: 'POST',
+            path: '/games',
+            protocol: 'HTTP/1.1',
+            sourceIp: '127.0.0.1',
+            userAgent: 'vitest',
+          },
+        } as never,
+        body: JSON.stringify(body),
+      }),
+    );
+
+  it('POST /games with an initial edition also creates a READY base content package for it', async () => {
+    // Without one, a game added through the app cannot ingest any sources:
+    // ingestion requires a contentId and no endpoint creates content.
+    const { ctx, handler } = build();
+    const res = await postGame(handler, {
+      name: 'Cascadia',
+      initialEdition: { name: 'First Edition' },
+    });
+    const game = bodyAs<Game>(res);
+    const content = await ctx.games.listContent(game.gameId);
+    expect(content).toEqual([
+      expect.objectContaining({
+        gameId: game.gameId,
+        editionId: game.editions[0]!.editionId,
+        slug: 'base',
+        name: 'Base Game',
+        contentType: 'BASE',
+        status: 'READY',
+      }),
+    ]);
+  });
+
+  it('POST /games without an edition creates no content', async () => {
+    const { ctx, handler } = build();
+    const game = bodyAs<Game>(await postGame(handler, { name: 'Azul' }));
+    expect(await ctx.games.listContent(game.gameId)).toEqual([]);
+  });
+
+  it('a create whose content write fails leaves nothing behind, so a retry succeeds', async () => {
+    const ctx = makeTestContext({ now: NOW, ids: sequentialIds() });
+    const handler = makeHandler(gameRoutes(() => ctx));
+    // sequentialIds will issue g_1, e_2, c_3 for the first request. Occupy
+    // c_3 so the default content write collides after the game is chosen.
+    await ctx.games.addContent({
+      contentId: asContentId('c_3'),
+      gameId: asGameId('g_1'),
+      editionId: asEditionId('e_2'),
+      slug: 'squatter',
+      name: 'Squatter',
+      contentType: 'PROMO',
+      dependencies: [],
+      status: 'READY',
+    });
+    const body = { name: 'Cascadia', initialEdition: { name: 'First Edition' } };
+
+    const first = await postGame(handler, body);
+    expect(first.statusCode).toBeGreaterThanOrEqual(400);
+    expect(await ctx.games.getGame(asGameId('g_1'))).toBeNull();
+
+    const retry = await postGame(handler, body);
+    expect(retry.statusCode).toBe(201);
+    const game = bodyAs<Game>(retry);
+    expect(await ctx.games.listContent(game.gameId)).toHaveLength(1);
+    expect((await ctx.games.searchGames({ query: 'cascadia' })).items).toHaveLength(1);
   });
 });

@@ -674,8 +674,9 @@ tokenCount
 authority
 sourceType
 documentVersion
-isCurrent
 ```
+
+`isCurrent` was originally listed here and removed in M2: currency comes from `SourceDocument.status` only (ADR-0008 §Chunk currency).
 
 A vector should carry only the metadata required for efficient filtering.
 

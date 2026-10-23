@@ -1,12 +1,19 @@
 import { z } from 'zod';
 import { EditionIdSchema, GameIdSchema } from './ids.js';
 
+/**
+ * `knowledgeRevision` is bumped whenever authoritative knowledge attached to
+ * this edition materially changes (new document ingested, previous document
+ * superseded, errata discovered). See MASTER_PLAN §19 and ADR-0008.
+ * M2 introduces the field; M6 ruling cache invalidates on mismatch.
+ */
 export const EditionSchema = z.object({
   editionId: EditionIdSchema,
   gameId: GameIdSchema,
   name: z.string().min(1).max(200),
   publisher: z.string().min(1).max(200).optional(),
   releaseYear: z.number().int().min(1900).max(2100).optional(),
+  knowledgeRevision: z.number().int().nonnegative().default(0),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
 });

@@ -30,6 +30,7 @@ const seedGame = async (
         editionId,
         gameId,
         name: '4th Edition',
+        knowledgeRevision: 0,
         createdAt: NOW,
         updatedAt: NOW,
       },
@@ -136,11 +137,19 @@ describe('sessions handlers', () => {
       slug: 'twilight-imperium-4',
       name: 'Twilight Imperium 4',
       editions: [
-        { editionId: editionOne, gameId, name: '4th Edition', createdAt: NOW, updatedAt: NOW },
+        {
+          editionId: editionOne,
+          gameId,
+          name: '4th Edition',
+          knowledgeRevision: 0,
+          createdAt: NOW,
+          updatedAt: NOW,
+        },
         {
           editionId: editionTwo,
           gameId,
           name: 'Legendary Edition',
+          knowledgeRevision: 0,
           createdAt: NOW,
           updatedAt: NOW,
         },
