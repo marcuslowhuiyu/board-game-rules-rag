@@ -18,3 +18,6 @@ evals/reports
 
 # CodeGraph local index (per-developer, never committed)
 .codegraph/
+
+# Lambda bundle smoke test scratch (infrastructure/cdk/test/lambda-bundles.test.ts)
+apps/api/.bundle-smoke/

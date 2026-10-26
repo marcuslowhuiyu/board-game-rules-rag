@@ -39,7 +39,8 @@ export const AddGameScreen = ({ api, onCancel, onCreated }: Props): JSX.Element 
       </button>
       <h2 id="add-title">Add a game</h2>
       <p className="notice">
-        This registers metadata only. Uploading rules PDFs comes in a later milestone.
+        Registers metadata only. After the game is created, use the "Manage sources" button on the
+        configuration screen to upload a PDF or paste a rules URL.
       </p>
       <form className="stack" onSubmit={submit}>
         <div className="field">

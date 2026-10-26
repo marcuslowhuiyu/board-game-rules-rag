@@ -1,7 +1,9 @@
 import {
   ConflictError,
+  NotFoundError,
   type ContentPackage,
   type Edition,
+  type EditionId,
   type Game,
   type GameId,
 } from '@bgr/domain';
@@ -11,17 +13,32 @@ export class InMemoryGamesRepository implements GamesRepository {
   private readonly games = new Map<GameId, Game>();
   private readonly contentByGame = new Map<GameId, ContentPackage[]>();
 
-  async createGame(game: Game): Promise<Game> {
+  async createGame(game: Game, initialContent: readonly ContentPackage[] = []): Promise<Game> {
+    // Check everything before writing anything, mirroring the DynamoDB
+    // transaction: either the game and all its content land, or nothing does.
     for (const existing of this.games.values()) {
       if (existing.slug === game.slug) {
         throw new ConflictError(`game with slug already exists: ${game.slug}`);
       }
     }
+    for (const pkg of initialContent) {
+      if ((this.contentByGame.get(pkg.gameId) ?? []).some((c) => c.contentId === pkg.contentId)) {
+        throw new ConflictError(`content already exists: ${pkg.contentId}`);
+      }
+    }
     this.games.set(game.gameId, game);
+    for (const pkg of initialContent) {
+      this.contentByGame.set(pkg.gameId, [...(this.contentByGame.get(pkg.gameId) ?? []), pkg]);
+    }
     return game;
   }
 
   async getGame(gameId: GameId): Promise<Game | null> {
+    return this.peekGame(gameId);
+  }
+
+  /** Synchronous read for `InMemoryAtomicPublisher`'s yield-free check-and-apply. */
+  peekGame(gameId: GameId): Game | null {
     return this.games.get(gameId) ?? null;
   }
 
@@ -56,5 +73,42 @@ export class InMemoryGamesRepository implements GamesRepository {
       throw new ConflictError(`content already exists: ${pkg.contentId}`);
     }
     this.contentByGame.set(pkg.gameId, [...existing, pkg]);
+  }
+
+  async bumpKnowledgeRevision(
+    gameId: GameId,
+    editionId: EditionId,
+    updatedAt: string,
+  ): Promise<number> {
+    const existing = this.games.get(gameId);
+    if (!existing) throw new NotFoundError('game', gameId);
+    const idx = existing.editions.findIndex((e) => e.editionId === editionId);
+    if (idx === -1) throw new NotFoundError('edition', editionId);
+    const edition = existing.editions[idx]!;
+    const nextRevision = edition.knowledgeRevision + 1;
+    const editions = existing.editions.slice();
+    editions[idx] = { ...edition, knowledgeRevision: nextRevision, updatedAt };
+    this.games.set(gameId, { ...existing, editions, updatedAt });
+    return nextRevision;
+  }
+
+  async replaceEditions(
+    gameId: GameId,
+    editions: readonly Edition[],
+    updatedAt: string,
+    expectedUpdatedAt: string,
+  ): Promise<void> {
+    const existing = this.games.get(gameId);
+    if (!existing) throw new NotFoundError('game', gameId);
+    if (existing.updatedAt !== expectedUpdatedAt) {
+      throw new ConflictError(
+        `game ${gameId} updatedAt ${existing.updatedAt} != expected ${expectedUpdatedAt}`,
+      );
+    }
+    this.games.set(gameId, {
+      ...existing,
+      editions: editions.slice(),
+      updatedAt,
+    });
   }
 }
