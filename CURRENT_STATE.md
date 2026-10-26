@@ -154,7 +154,6 @@ Full tracker: `docs/CONTRADICTIONS_AND_GAPS.md`.
 
 ## Next expected work
 
-Merge M2-T1, which closes M2. Then:
-- a focused dev-toolchain upgrade (vitest, vite and esbuild clear all 39 Dependabot alerts, which are dev-only);
+M2 is closed. The dev-toolchain upgrade (Vitest 4, Vite 7, esbuild 0.28; ADR-0001 revision 2026-10-26) clears the Dependabot alerts. Then:
 - a follow-up PR for the deferred minor review items (`M2-REVIEW-FIXES.md` §M2-R4);
 - Milestone 3 — Embeddings, Retrieval & Evaluation Foundation. See `docs/milestones/M3-embeddings-retrieval.md`.
