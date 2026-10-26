@@ -37,3 +37,8 @@ The project needs one language and one build/deploy toolchain across frontend, b
 - **TypeScript:** `^5.6.2`. Base config lives at `tsconfig.base.json` with `strict`, `noUncheckedIndexedAccess`, `noImplicitOverride`, `exactOptionalPropertyTypes` all on. CDK opts out of `exactOptionalPropertyTypes` because `aws-cdk-lib`'s public types are not compatible with it — noted here so a future upgrade or ADR revision can revisit.
 - **Testing / linting / formatting confirmed:** Vitest 2.x, ESLint 9 flat config with `typescript-eslint` 8, Prettier 3.
 - **Bundler for Lambda:** esbuild (via CDK's `NodejsFunction`). Added `esbuild` as a root devDependency so `pnpm exec esbuild` resolves when CDK's `NodejsFunction` bundling runs from the workspace root.
+
+### 2026-10-26 — Dev-toolchain upgrade
+
+- **Vitest 4.1, Vite 7.3 (with `@vitejs/plugin-react` 5), esbuild 0.28.** This clears the open Dependabot alerts, all in dev-only packages (vitest, tinypool, @vitest/mocker, vite, esbuild, source-map-js, tar). Vite stays on 7 rather than 8, the newest major that Vitest 4 supports, to keep the jump small.
+- **`canvas` is removed with a pnpm override (`"canvas": "-"`).** It was an optional dependency of `unpdf` and `jsdom` that never built here (`onlyBuiltDependencies` allows only esbuild), and it pulled in a vulnerable `tar` via `node-pre-gyp`. The PDF text-layer extractor does not use it, and the Lambda bundle smoke test confirms the stage runner loads without it.
