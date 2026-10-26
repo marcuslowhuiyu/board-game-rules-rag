@@ -42,3 +42,8 @@ The project needs one language and one build/deploy toolchain across frontend, b
 
 - **Vitest 4.1, Vite 7.3 (with `@vitejs/plugin-react` 5), esbuild 0.28.** This clears the open Dependabot alerts, all in dev-only packages (vitest, tinypool, @vitest/mocker, vite, esbuild, source-map-js, tar). Vite stays on 7 rather than 8, the newest major that Vitest 4 supports, to keep the jump small.
 - **`canvas` is removed with a pnpm override (`"canvas": "-"`).** It was an optional dependency of `unpdf` and `jsdom` that never built here (`onlyBuiltDependencies` allows only esbuild), and it pulled in a vulnerable `tar` via `node-pre-gyp`. The PDF text-layer extractor does not use it, and the Lambda bundle smoke test confirms the stage runner loads without it.
+
+### 2026-10-26 — Zod 4
+
+- **Zod 3.25 → 4.6.** This fixes GHSA "Zod can exhaust memory while validating oversized constrained collections", which affects the API's request-body validation and has no fix on 3.x. No schema needed changes: none uses `.partial()`, whose default-filling changed in v4. The visible difference is the wording of the zod `issues` returned as `error.details` in 400 responses (e.g. "Invalid input: expected string, received undefined"). The web client treats `details` as opaque.
+- **undici 7.29 → 7.30.1** (transitive, via cheerio) for the content-encoding DoS advisory.
