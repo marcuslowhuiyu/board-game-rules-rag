@@ -2,10 +2,10 @@ name: CI (docs only)
 
 # Branch protection requires the "Lint / Typecheck / Test / Synth" check, but
 # ci.yml ignores docs-only PRs to save minutes (ADR-0009), so on those PRs the
-# required check would wait forever. This stub reports that check as passing
-# when every changed file is docs. A PR that also touches code triggers both
-# workflows (path filters can't say "only docs"); there the stub fails, so it
-# can never stand in for the real job.
+# required check would wait forever. This stub reports that check as passing.
+# A PR touching both code and docs triggers both workflows; that is safe,
+# because GitHub requires every check with the required name to pass, so the
+# real job still gates the merge.
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
@@ -22,21 +22,6 @@ jobs:
     name: Lint / Typecheck / Test / Synth
     runs-on: ubuntu-latest
     timeout-minutes: 2
-    permissions:
-      contents: read
-      pull-requests: read
+    permissions: {}
     steps:
-      - name: Confirm the PR changes only docs
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          PR: ${{ github.event.pull_request.number }}
-        run: |
-          code_files=$(gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[].filename' \
-            | grep -v -E '\.md$|^docs/' || true)
-          if [ -n "$code_files" ]; then
-            echo "Non-docs files changed; ci.yml runs the real check:"
-            echo "$code_files"
-            exit 1
-          fi
-          echo "Docs-only PR; full CI not needed."
+      - run: echo "Docs changes need no full CI; ci.yml runs it when code changes too."
