@@ -61,17 +61,28 @@ export class TitanEmbeddingsProvider implements EmbeddingsProvider {
     const vectors: number[][] = new Array(texts.length);
     let inputTokens = 0;
     let next = 0;
+    // After a failure no worker starts another (billable) request, and the
+    // batch rejects only once the requests already sent have settled, so a
+    // caller's retry never overlaps abandoned work.
+    let failed = false;
     const worker = async () => {
-      while (next < texts.length) {
+      while (!failed && next < texts.length) {
         const i = next++;
-        const out = await this.embedOne(texts[i]!);
-        vectors[i] = out.embedding;
-        inputTokens += out.inputTextTokenCount;
+        try {
+          const out = await this.embedOne(texts[i]!);
+          vectors[i] = out.embedding;
+          inputTokens += out.inputTextTokenCount;
+        } catch (err) {
+          failed = true;
+          throw err;
+        }
       }
     };
-    await Promise.all(
+    const results = await Promise.allSettled(
       Array.from({ length: Math.min(this.concurrency, texts.length) }, () => worker()),
     );
+    const rejection = results.find((r) => r.status === 'rejected');
+    if (rejection) throw rejection.reason;
     return { vectors, inputTokens };
   }
 

@@ -117,6 +117,25 @@ describe('TitanEmbeddingsProvider', () => {
     await expect(provider.embed(['roll'])).rejects.toThrow(/expected 256 dimensions, got 3/);
   });
 
+  it('stops sending requests after one fails, and rejects only once in-flight requests settle', async () => {
+    let inFlight = 0;
+    bedrock.on(InvokeModelCommand).callsFake(async (input) => {
+      const first = bedrock.commandCalls(InvokeModelCommand).length === 1;
+      inFlight++;
+      await new Promise((r) => setTimeout(r, first ? 1 : 10));
+      inFlight--;
+      if (first) throw new Error('ThrottlingException');
+      return titanResponse(input, 256);
+    });
+    const provider = new TitanEmbeddingsProvider({ ...base, dimensions: 256, concurrency: 3 });
+
+    const texts = Array.from({ length: 12 }, (_, i) => `text ${i}`);
+    await expect(provider.embed(texts)).rejects.toThrow('ThrottlingException');
+
+    expect(inFlight).toBe(0);
+    expect(bedrock.commandCalls(InvokeModelCommand)).toHaveLength(3);
+  });
+
   it('propagates Bedrock errors', async () => {
     bedrock.on(InvokeModelCommand).rejects(new Error('AccessDeniedException'));
     const provider = new TitanEmbeddingsProvider(base);
