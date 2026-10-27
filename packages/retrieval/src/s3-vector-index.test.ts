@@ -104,6 +104,27 @@ describe('S3VectorIndex', () => {
     expect(Object.keys(sent as object)).not.toContain('documentVersion');
   });
 
+  it('omits an empty heading path, since the service rejects empty arrays, and reads it back as []', async () => {
+    s3v.on(PutVectorsCommand).resolves({});
+    const { headingPath: _, ...withoutHeading } = meta;
+    s3v.on(QueryVectorsCommand).resolves({
+      vectors: [{ key: 'ch_0', distance: 0.5, metadata: withoutHeading as never }],
+      distanceMetric: 'cosine',
+    });
+    const index = new S3VectorIndex(options);
+
+    await index.putVectors([{ key: 'ch_0', vector: [1], metadata: { ...meta, headingPath: [] } }]);
+    const hits = await index.query({
+      vector: [1],
+      topK: 5,
+      filter: { gameId: 'g_1', editionId: 'e_1', documentIds: ['doc_1'] },
+    });
+
+    const sent = s3v.commandCalls(PutVectorsCommand)[0]!.args[0].input.vectors![0]!.metadata;
+    expect(Object.keys(sent as object)).not.toContain('headingPath');
+    expect(hits[0]!.metadata.headingPath).toEqual([]);
+  });
+
   it('writes vectors in batches of at most 500', async () => {
     s3v.on(PutVectorsCommand).resolves({});
     const index = new S3VectorIndex(options);

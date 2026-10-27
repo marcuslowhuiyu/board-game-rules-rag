@@ -38,7 +38,7 @@ export class S3VectorIndex implements VectorIndex {
           vectors: items.slice(i, i + MAX_VECTORS_PER_PUT).map((item) => ({
             key: item.key,
             data: { float32: item.vector },
-            metadata: definedOnly(item.metadata),
+            metadata: toServiceMetadata(item.metadata),
           })),
         }),
       );
@@ -75,7 +75,11 @@ export class S3VectorIndex implements VectorIndex {
       }),
     );
     return (out.vectors ?? []).map((v) => {
-      const metadata = ChunkVectorMetadataSchema.safeParse(v.metadata);
+      // An empty heading path is stored as an absent key (see toServiceMetadata).
+      const raw = v.metadata as Record<string, unknown> | undefined;
+      const metadata = ChunkVectorMetadataSchema.safeParse(
+        raw && !('headingPath' in raw) ? { ...raw, headingPath: [] } : raw,
+      );
       if (!v.key || !metadata.success) {
         throw new Error(`vector ${v.key ?? '(no key)'} has invalid metadata`);
       }
@@ -85,10 +89,15 @@ export class S3VectorIndex implements VectorIndex {
   }
 }
 
-/** S3 Vectors metadata is a JSON document: optional fields are omitted, not undefined. */
-function definedOnly(metadata: object): Record<string, DocumentType> {
-  return Object.fromEntries(Object.entries(metadata).filter(([, v]) => v !== undefined)) as Record<
-    string,
-    DocumentType
-  >;
+/**
+ * S3 Vectors metadata is a JSON document that cannot hold `undefined` or an
+ * empty array, so those fields are omitted. A chunk before a document's first
+ * heading has an empty heading path.
+ */
+function toServiceMetadata(metadata: object): Record<string, DocumentType> {
+  return Object.fromEntries(
+    Object.entries(metadata).filter(
+      ([, v]) => v !== undefined && !(Array.isArray(v) && v.length === 0),
+    ),
+  ) as Record<string, DocumentType>;
 }
