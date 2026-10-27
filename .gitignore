@@ -21,3 +21,6 @@ evals/reports
 
 # Lambda bundle smoke test scratch (infrastructure/cdk/test/lambda-bundles.test.ts)
 apps/api/.bundle-smoke/
+
+# Superpowers local scratch (brainstorm mockups, plan ledgers)
+.superpowers/
