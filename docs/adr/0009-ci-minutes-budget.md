@@ -36,5 +36,13 @@ Working practice: open PRs as **drafts** while iterating, run the full gate loca
 - **Negative:**
   - Nothing does static security analysis until CodeQL comes back.
   - Code on `main` is not re-checked after merge. A semantic conflict between two PRs that each passed could slip through, which is acceptable with one active branch at a time.
-  - A PR containing only docs gets no CI run, so it shows no status check.
+  - A PR containing only docs gets no full CI run. (Since 2026-10-27 a stub reports the required check for it; see Revisions.)
 - **Follow-up:** M9's dependency-scanning gate (blocking high-severity audit findings) must make the audit step blocking. Revisit this ADR if the repo goes public.
+
+## Revisions
+
+### 2026-10-27 — Branch protection on `main`
+
+The repo is public now, so branch protection is available. `main` now requires a pull request (no approvals, since there is one human), the `Lint / Typecheck / Test / Synth` check from GitHub Actions, and applies to admins. Force pushes and deletion are blocked. "Require branches to be up to date" is off: it would re-run CI each time `main` moves.
+
+`ci.yml` still skips docs-only PRs, which would leave the required check waiting forever. `ci-docs.yml` fills that gap: it runs only when a PR touches `**.md` or `docs/**`, and reports a job with the same name that always passes. A PR touching both code and docs triggers both workflows. That is safe: GitHub requires every check with the required name to pass, so the real job still gates the merge. This was confirmed on PR #28, where a failing stub blocked the merge even though the real job passed.

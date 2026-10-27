@@ -1,0 +1,27 @@
+name: CI (docs only)
+
+# Branch protection requires the "Lint / Typecheck / Test / Synth" check, but
+# ci.yml ignores docs-only PRs to save minutes (ADR-0009), so on those PRs the
+# required check would wait forever. This stub reports that check as passing.
+# A PR touching both code and docs triggers both workflows; that is safe,
+# because GitHub requires every check with the required name to pass, so the
+# real job still gates the merge.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - '**.md'
+      - 'docs/**'
+
+concurrency:
+  group: ci-docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: Lint / Typecheck / Test / Synth
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - run: echo "Docs changes need no full CI; ci.yml runs it when code changes too."
