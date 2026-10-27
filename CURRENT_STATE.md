@@ -106,6 +106,8 @@ Load-bearing decisions from `docs/adr/`:
 - **ADR-0007** — Same-origin routing via CloudFront `/api/*` + first-party `SameSite=Lax` session cookie.
 - **ADR-0008 (revised 2026-09-17; review-fix revisions 2026-10-21/22)** — Ingestion pipeline: Step Functions + one stage-runner Lambda + Choice-based short-circuit + `MarkJobFailed` failure path; deterministic PDF-first; `TransactWriteItems`-based atomic publish; content-hash dedup scoped to `(game, edition, contentId, hash)`; manual redirect SSRF handling; quality gate at PARSE; storage lifecycle keeps raw/ + normalized/ retained and expires only `stage-state/ingestion/` (7d) and `temporary/` (1d), with no nested rule prefixes; ingestion-bucket CORS pinned to the CloudFront domain. M3 revision (2026-10-27): EMBED/INDEX stages, re-uploads re-index, AWS SDK bundled into Lambdas.
 
+- **ADR-0009 (revised 2026-10-27)** — CI runs on a minimal Actions budget: PR-only, skips drafts and docs-only changes. `main` is protected: PRs only, the `Lint / Typecheck / Test / Synth` check is required (also for admins), and no force pushes. `ci-docs.yml` reports that check on docs-only PRs. GitHub requires every same-named check to pass, so on mixed PRs the real job still gates the merge.
+
 ## Known issues / open questions
 
 Full tracker: `docs/CONTRADICTIONS_AND_GAPS.md`.
@@ -120,7 +122,6 @@ Full tracker: `docs/CONTRADICTIONS_AND_GAPS.md`.
 
 ## Requires operator decision, if you want them
 
-- **Branch protection on `main`.** Now available for free, because the repo is public. Requiring the `Lint / Typecheck / Test / Synth` check before merge would enforce the PR-and-CI workflow.
 - **A second region for AgentCore** — pending G4 verification.
 
 ## Next expected work
