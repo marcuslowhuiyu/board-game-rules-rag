@@ -11,7 +11,11 @@
     "test": "vitest run --passWithNoTests"
   },
   "devDependencies": {
+    "aws-sdk-client-mock": "^4.1.0",
     "typescript": "^5.6.2",
     "vitest": "^4.1.12"
+  },
+  "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.1157.0"
   }
 }
