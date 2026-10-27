@@ -133,6 +133,9 @@ importers:
       '@aws-sdk/client-dynamodb':
         specifier: ^3.679.0
         version: 3.1133.0
+      '@aws-sdk/client-s3':
+        specifier: ^3.679.0
+        version: 3.1134.0
       '@bgr/ai':
         specifier: workspace:*
         version: link:../packages/ai

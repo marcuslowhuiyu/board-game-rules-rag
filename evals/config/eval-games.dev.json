@@ -1,0 +1,26 @@
+{
+  "seti": {
+    "gameId": "g_ad8cd902e7364f42",
+    "editionId": "e_27cecffa08dc4bd0",
+    "content": {
+      "base": "c_72dda4c400294b6a"
+    },
+    "chunks": 78
+  },
+  "ticket-to-ride": {
+    "gameId": "g_7e37840905624530",
+    "editionId": "e_9e8939c7a7a24021",
+    "content": {
+      "base": "c_a434c4023d084d04"
+    },
+    "chunks": 7
+  },
+  "wingspan": {
+    "gameId": "g_8f225ed79f5c4edb",
+    "editionId": "e_b3b07e5d0866400e",
+    "content": {
+      "base": "c_9986f5e2948a40ec"
+    },
+    "chunks": 186
+  }
+}
