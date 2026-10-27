@@ -16,7 +16,8 @@ import {
   type SourceDocumentId,
 } from '@bgr/domain';
 import type { EmbeddingsProvider } from '@bgr/ai';
-import type { ChunkVectorMetadata, VectorIndex, VectorItem } from '@bgr/retrieval';
+import { chunkVectorMetadata, embeddingText } from '@bgr/retrieval';
+import type { VectorIndex, VectorItem } from '@bgr/retrieval';
 import type { Logger } from '@bgr/shared';
 import type {
   AtomicPublisher,
@@ -544,7 +545,7 @@ async function stageEmbed(ctx: StageContext, job: IngestionJob): Promise<Ingesti
   const items: VectorItem[] = chunks.map((c, i) => ({
     key: c.chunkId,
     vector: vectors[i]!,
-    metadata: vectorMetadata(c, bodies[i]!),
+    metadata: chunkVectorMetadata(c, bodies[i]!),
   }));
   await writeState(ctx, job.jobId, 'vectors', items);
   ctx.logger?.info('embedded chunks', {
@@ -580,38 +581,6 @@ async function indexedDocumentId(ctx: StageContext, job: IngestionJob): Promise<
     throw new StageError('EMBED', 'no planned or existing document to index', 'NO_DOCUMENT');
   }
   return existing.documentId;
-}
-
-/**
- * Text sent to the embedding model: the chunk prefixed with lightweight
- * context (MASTER_PLAN §15), so a chunk that never names its game or section
- * still matches questions that do.
- */
-export function embeddingText(input: {
-  gameName: string;
-  contentName: string;
-  headingPath: readonly string[];
-  text: string;
-}): string {
-  const lines = [`Game: ${input.gameName}`, `Content: ${input.contentName}`];
-  if (input.headingPath.length > 0) lines.push(`Section: ${input.headingPath.join(' > ')}`);
-  return `${lines.join('\n')}\n\n${input.text}`;
-}
-
-function vectorMetadata(chunk: Chunk, text: string): ChunkVectorMetadata {
-  return {
-    gameId: chunk.gameId,
-    editionId: chunk.editionId,
-    contentId: chunk.contentId,
-    documentId: chunk.documentId,
-    authority: chunk.authority,
-    sourceType: chunk.sourceType,
-    headingPath: chunk.headingPath,
-    pageStart: chunk.pageStart,
-    pageEnd: chunk.pageEnd,
-    text,
-    ...(chunk.documentVersion !== undefined ? { documentVersion: chunk.documentVersion } : {}),
-  };
 }
 
 async function stageFinalize(ctx: StageContext, job: IngestionJob): Promise<IngestionJob> {

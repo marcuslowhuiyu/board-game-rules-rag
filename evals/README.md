@@ -35,7 +35,7 @@ Reported per game: Recall@1/3/5, MRR, the irrelevant-result rate (top-5 chunks t
 }
 ```
 
-- **Evidence is matched by phrase, never by chunk id.** A chunk satisfies an item when it contains the phrase, ignoring case, whitespace and curly quotes, and with spaces removed. Removing spaces handles letter-spaced PDF headings such as "L AUNCH A PROBE". If `heading` is set, the chunk's heading path must also contain it.
+- **Evidence is matched by phrase, never by chunk id.** A chunk satisfies an item when it contains the phrase, ignoring case, curly quotes, dash variants and runs of whitespace. A single stray space is also allowed between two letters inside a word, which handles letter-spaced PDF text such as "L AUNCH A PROBE" without letting "now here" match "nowhere". If `heading` is set, the chunk's heading path must also contain it.
 - **Phrases are short anchors** (≤ 15 words). Real rulebook text otherwise stays out of the repo.
 - **Required vs supporting.** `required: false` marks a supporting item. It is reported, but doesn't count toward pass/fail.
 - **Questions are paraphrased.** Don't copy forum posts. Don't fetch BGG through its internal `api.geekdo.com` API; M6 forum search uses the official XML API with a token.
@@ -58,7 +58,12 @@ pnpm -C evals eval:ingest              # create/reuse the eval games and ingest 
 pnpm -C evals exec tsx scripts/verify-dataset.ts   # check every evidence phrase against the ingested chunks
 pnpm -C evals eval:retrieval --markdown            # full eval; JSON report in evals/reports/ (gitignored)
 pnpm -C evals eval:retrieval --games seti          # one game
+pnpm -C evals eval:retrieval --dimensions 512 --markdown   # local index at 512 dimensions
 ```
+
+### Comparing embedding settings
+
+`--dimensions <256|512|1024>` leaves the deployed index alone. It reads the eval games' current chunks from dev, re-embeds them with Titan at that dimension into an exact in-memory index, and runs the same cases against it. The embedding text and metadata come from `@bgr/retrieval` (`embeddingText`, `chunkVectorMetadata`), the same functions the EMBED stage uses, so only the dimension differs. Compare `--dimensions 512` with `--dimensions 1024` rather than with the live run: the live index is approximate and its vectors were written at ingest time. Re-embedding about 270 chunks costs well under a cent.
 
 The full eval is a **local, on-demand command**. It has no CI job. CI minutes are tight (ADR-0009), and a dispatch job would also need AWS access through OIDC.
 

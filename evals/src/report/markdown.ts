@@ -3,11 +3,14 @@ import type { EvalReport } from '../scoring/aggregate.js';
 const pct = (x: number | null) => (x === null ? '–' : `${Math.round(x * 100)}%`);
 const num = (x: number) => x.toFixed(2);
 
-/** A compact table for PR discussion. The JSON report holds the full detail. */
-export function toMarkdown(report: EvalReport): string {
+/**
+ * A compact table for PR discussion. The JSON report holds the full detail.
+ * `label` names the index the run used (live, or a local re-embed).
+ */
+export function toMarkdown(report: EvalReport, label?: string): string {
   const { bars } = report.config;
   const lines = [
-    `## Retrieval eval — ${report.generatedAt}`,
+    `## Retrieval eval — ${label ? `${label} — ` : ''}${report.generatedAt}`,
     '',
     '| Game | Chunks | Cases | R@1 | R@3 | R@5 | MRR | Irrelevant | Simple pass | Complex full coverage |',
     '|---|---|---|---|---|---|---|---|---|---|',

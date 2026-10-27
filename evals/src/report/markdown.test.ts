@@ -55,4 +55,10 @@ describe('toMarkdown', () => {
   it('lists failed case ids per tier', () => {
     expect(toMarkdown(report)).toMatch(/Failed complex cases[^\n]*\n[^\n]*seti-milestone-order/);
   });
+
+  it('names the index the run used in the heading', () => {
+    expect(toMarkdown(report, 'local index, 512 dimensions')).toMatch(
+      /^## Retrieval eval — local index, 512 dimensions — 2026-10-27T00:00:00.000Z\n/,
+    );
+  });
 });
