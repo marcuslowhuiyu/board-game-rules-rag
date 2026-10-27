@@ -1,10 +1,10 @@
 # Current State
 
-_Last updated: 2026-10-27 (M3 slices 1–4 done; slice 5 baseline recorded; FAQ cases pending; the operator's case review moves to M4)_
+_Last updated: 2026-10-27 (M3 complete and merged via PR #26; M4 next)_
 
 ## Current milestone
 
-**Milestone 3 — Embeddings, Retrieval & Evaluation Foundation**, on `feature/m03-embeddings` (draft PR #26). It is built in slices, each reviewed before the next. Slices 1–3 are done, Codex-reviewed and in review on the PR; slice 3 is deployed to dev from the branch. Slice 4 is built, and slice 5's dimension comparison and baseline are done (see below).
+**Milestone 3 — Embeddings, Retrieval & Evaluation Foundation** is complete: merged via PR #26 after a Codex review of the whole milestone (no findings) and a fresh review of each slice. It was built in five slices and is deployed to dev. The next milestone is M4; read its spec before starting.
 
 1. **`EmbeddingsProvider` plus the Titan Text Embeddings V2 adapter** (`packages/ai`). This slice is done and in review. The region, model id and dimension (256, 512 or 1024) are constructor options supplied from config. Titan has no batch call on demand, so a batch makes one request per text, with bounded concurrency (default 4), SDK retries for throttling and checks on vector size. It returns input-token counts for cost reporting.
 2. **`RulesRetriever`** (`packages/retrieval`). Done; in review.
@@ -168,7 +168,7 @@ Full tracker: `docs/CONTRADICTIONS_AND_GAPS.md`.
 
 ## Next expected work
 
-**Finish M3:** take PR #26 out of draft for the final CI run, Codex review of the whole milestone and merge. The FAQ cases are added whenever the PDFs arrive; they don't block M3.
+**M3 leftovers (non-blocking):** add the 10 FAQ cases whenever the PDFs arrive. Deferred minor review items are listed in PR #26's description.
 
 **In M4:** the operator reviews the 42 cases once the system produces answers, which makes the questions easier to judge. A review page with every case, its answer-key quote and its latest result is at https://claude.ai/artifact/2c7iAbKnrybaCf5vgGtmu5 (private to the operator); marks saved there are readable by Claude.
 
