@@ -1,13 +1,17 @@
 # Current State
 
-_Last updated: 2026-10-27 (M3 slice 1: embeddings provider)_
+_Last updated: 2026-10-27 (M3 slices 1–2: embeddings provider, retriever)_
 
 ## Current milestone
 
 **Milestone 3 — Embeddings, Retrieval & Evaluation Foundation**, on `feature/m03-embeddings`. It is built in slices, each reviewed before the next:
 
 1. **`EmbeddingsProvider` plus the Titan Text Embeddings V2 adapter** (`packages/ai`). This slice is done and in review. The region, model id and dimension (256, 512 or 1024) are constructor options supplied from config. Titan has no batch call on demand, so a batch makes one request per text, with bounded concurrency (default 4), SDK retries for throttling and checks on vector size. It returns input-token counts for cost reporting.
-2. `RulesRetriever` on S3 Vectors, with mandatory game/edition/content filters and supersession filtering.
+2. **`RulesRetriever`** (`packages/retrieval`). Done; in review.
+   - **`VectorRulesRetriever`:** every query needs a game, an edition, non-empty enabled content and question text. It searches only CURRENT documents of the enabled content (looked up in DynamoDB), then re-checks every hit against that filter.
+   - **Vector stores:** `S3VectorIndex` uses pre-filtered (`ENHANCED`) queries and writes in batches of 500. `InMemoryVectorIndex` serves tests.
+   - **`selectEvidence`:** keeps the top N candidates by score.
+   - **Tests:** seeded property tests check that a disabled promo, another edition or a superseded document never appears in results. Design: ADR-0002 revision 2026-10-27.
 3. Enable the EMBED and INDEX ingestion stages.
 4. Retrieval eval framework plus 30–50 cases for SETI, Ticket to Ride and Wingspan. Evals run on demand; the nightly schedule in the spec is dropped to save CI minutes (ADR-0009), and PRs run a small regression subset.
 5. Baseline metrics recorded here.
@@ -89,5 +93,5 @@ Full tracker: `docs/CONTRADICTIONS_AND_GAPS.md`.
 
 ## Next expected work
 
-- M3 slice 2: `RulesRetriever` on S3 Vectors.
+- M3 slice 3: enable the EMBED and INDEX stages (create the S3 Vectors bucket and index in CDK).
 - A follow-up PR for the deferred minor review items (`M2-REVIEW-FIXES.md` §M2-R4).
