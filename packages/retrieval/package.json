@@ -11,7 +11,16 @@
     "test": "vitest run --passWithNoTests"
   },
   "devDependencies": {
+    "aws-sdk-client-mock": "^4.1.0",
     "typescript": "^5.6.2",
     "vitest": "^4.1.12"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3vectors": "^3.1157.0",
+    "@bgr/ai": "workspace:*",
+    "@bgr/domain": "workspace:*",
+    "@bgr/persistence": "workspace:*",
+    "@smithy/types": "^4.19.0",
+    "zod": "^4.6.7"
   }
 }

@@ -20,7 +20,14 @@ const STRIP_SELECTORS = [
   '[role="navigation"]',
   '[role="banner"]',
   '[role="contentinfo"]',
+  // WordPress reader comments: community text, never part of the source.
+  '#comments',
+  '.comments-area',
+  '.comment-list',
 ];
+
+/** A candidate root must hold at least this share of the page's text. */
+const MIN_ROOT_TEXT_SHARE = 0.5;
 
 const MAIN_CANDIDATES = ['main', 'article', '[role="main"]', '#main', '#content', '.content'];
 
@@ -227,10 +234,23 @@ export function createHtmlParser(): DocumentParser {
   };
 }
 
+/** Landmarks that declare the page's main content; trusted as given. */
+const TRUSTED_ROOTS = new Set(['main', '[role="main"]']);
+
+/**
+ * The page's content root. `<main>` and `role="main"` are authoritative.
+ * Weaker candidates (`article`, `#content`, `.content`, …) are used only when
+ * they hold most of the page's text: WordPress marks each reader comment up
+ * as an `<article>`, and a small one is not the content, so the page falls
+ * back to body.
+ */
 function pickRoot($: cheerio.CheerioAPI): cheerio.Cheerio<never> | null {
+  const textLength = (el: cheerio.Cheerio<never>) => collapseWhitespace(el.text()).length;
+  const total = textLength($('body') as unknown as cheerio.Cheerio<never>);
   for (const sel of MAIN_CANDIDATES) {
-    const $node = $(sel).first();
-    if ($node.length > 0) return $node as unknown as cheerio.Cheerio<never>;
+    const $node = $(sel).first() as unknown as cheerio.Cheerio<never>;
+    if ($node.length === 0) continue;
+    if (TRUSTED_ROOTS.has(sel) || textLength($node) >= total * MIN_ROOT_TEXT_SHARE) return $node;
   }
   return null;
 }

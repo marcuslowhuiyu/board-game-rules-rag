@@ -1,0 +1,58 @@
+{
+  "seti": {
+    "name": "SETI (eval)",
+    "edition": "Base (CGE 2024)",
+    "documents": [
+      {
+        "title": "SETI Base Rules",
+        "sourceType": "RULEBOOK",
+        "authority": "OFFICIAL_RULES",
+        "s3Key": "raw/upload/b241d2ace42c1199254bde456ddac09d7ce1ca5ba036596f545b5d3aadcc083a.pdf"
+      },
+      {
+        "title": "SETI Official FAQ (CGE)",
+        "sourceType": "FAQ",
+        "authority": "OFFICIAL_ERRATA",
+        "local": "~/bgr-eval-sources/seti-faq.pdf",
+        "skip": true
+      }
+    ]
+  },
+  "ticket-to-ride": {
+    "name": "Ticket to Ride (eval)",
+    "edition": "USA (Days of Wonder)",
+    "documents": [
+      {
+        "title": "Ticket to Ride Rules (2015)",
+        "sourceType": "RULEBOOK",
+        "authority": "OFFICIAL_RULES",
+        "s3Key": "raw/upload/2c331d825e863bf4850c058e29cf7b07c58798a0799a490e6706a14254d7ab19.pdf"
+      }
+    ]
+  },
+  "wingspan": {
+    "name": "Wingspan (eval)",
+    "edition": "Base (Stonemaier 2019)",
+    "documents": [
+      {
+        "title": "Wingspan Rulepop Reference",
+        "sourceType": "LIVING_RULES",
+        "authority": "OFFICIAL_RULES",
+        "url": "https://wingspan.rulepop.com/"
+      },
+      {
+        "title": "Wingspan Rules & FAQ (Stonemaier)",
+        "sourceType": "FAQ",
+        "authority": "OFFICIAL_ERRATA",
+        "url": "https://stonemaiergames.com/games/wingspan/rules/"
+      },
+      {
+        "title": "Wingspan Appendix",
+        "sourceType": "RULEBOOK",
+        "authority": "OFFICIAL_RULES",
+        "local": "~/bgr-eval-sources/wingspan-appendix.pdf",
+        "skip": true
+      }
+    ]
+  }
+}

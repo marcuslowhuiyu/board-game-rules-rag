@@ -14,6 +14,8 @@ import type {
   InMemoryIngestionJobsRepository,
 } from '@bgr/persistence';
 import { InMemoryAtomicPublisher, type AtomicPublisher, type IdGenerator } from '@bgr/persistence';
+import type { EmbeddingResult, EmbeddingsProvider } from '@bgr/ai';
+import { InMemoryVectorIndex, type VectorIndex } from '@bgr/retrieval';
 import type { AppContext } from '../lib/context.js';
 import type { StageContext } from './pipeline.js';
 
@@ -27,6 +29,32 @@ export interface StageContextOverrides {
   publisher?: AtomicPublisher;
   chunkerOptions?: ChunkerOptions;
   now?: () => Date;
+  embeddings?: EmbeddingsProvider;
+  vectorIndex?: VectorIndex;
+}
+
+/**
+ * Deterministic stand-in for Titan: hashes each word into one of 64
+ * dimensions, so texts sharing words score as similar. Records every input.
+ */
+export class FakeEmbeddings implements EmbeddingsProvider {
+  readonly modelId = 'fake-hashing';
+  readonly dimensions = 64;
+  readonly inputs: string[] = [];
+
+  async embed(texts: readonly string[]): Promise<EmbeddingResult> {
+    this.inputs.push(...texts);
+    const vectors = texts.map((text) => {
+      const v = new Array<number>(this.dimensions).fill(0);
+      for (const word of text.toLowerCase().match(/[a-z0-9]+/g) ?? []) {
+        let h = 0;
+        for (const ch of word) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+        v[h % this.dimensions]! += 1;
+      }
+      return v;
+    });
+    return { vectors, inputTokens: texts.length };
+  }
 }
 
 export function makeStageContext(
@@ -68,6 +96,8 @@ export function makeStageContext(
     s3Fetcher,
     pdfParser,
     htmlParser,
+    embeddings: overrides.embeddings ?? new FakeEmbeddings(),
+    vectorIndex: overrides.vectorIndex ?? new InMemoryVectorIndex(),
   };
   if (overrides.chunkerOptions !== undefined) ctx.chunkerOptions = overrides.chunkerOptions;
   return ctx;

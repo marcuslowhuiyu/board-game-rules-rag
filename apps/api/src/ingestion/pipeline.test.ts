@@ -34,7 +34,8 @@ import {
   InMemoryAtomicPublisher,
 } from '@bgr/persistence';
 import { RetryableStageError, runFullPipeline, runStage, StageError } from './pipeline.js';
-import { makeStageContext, sequentialIds } from './test-support.js';
+import { FakeEmbeddings, makeStageContext, sequentialIds } from './test-support.js';
+import { InMemoryVectorIndex, VectorRulesRetriever } from '@bgr/retrieval';
 
 const NOW = '2026-09-17T00:00:00.000Z';
 
@@ -332,11 +333,13 @@ describe('ingestion pipeline (M2 acceptance)', () => {
       'DISCOVER_ERRATA',
       'NORMALIZE',
       'CHUNK',
+      'EMBED',
+      'INDEX',
       'FINALIZE',
     ]);
   });
 
-  it('FETCH duplicate short-circuit marks the result terminal (state machine skips later stages)', async () => {
+  it('a duplicate upload skips parsing but re-indexes the existing document, then reports the duplicate', async () => {
     const stageCtx = makeStageContext(ctx, {
       pdfExtractor: makeExtractor(RULEBOOK_V1_PAGES),
     });
@@ -345,15 +348,18 @@ describe('ingestion pipeline (M2 acceptance)', () => {
     await runFullPipeline(first.jobId, stageCtx);
 
     const second = await createPdfJob(ctx, 'raw/second.pdf', bytes);
-    // Only run VALIDATE + FETCH; FETCH must return terminal:true and short-
-    // circuit the rest of the pipeline (the state machine's Choice state
-    // relies on this).
     await runStage(second.jobId, 'VALIDATE', stageCtx);
     const fetchResult = await runStage(second.jobId, 'FETCH', stageCtx);
-    expect(fetchResult.terminal).toBe(true);
-    expect(fetchResult.status).toBe('SUCCEEDED');
-    expect(fetchResult.duplicate).toBe(true);
-    expect(fetchResult.nextStage).toBeNull();
+    expect(fetchResult.terminal).toBe(false);
+    expect(fetchResult.job.completedStages).toEqual(
+      expect.arrayContaining(['PARSE', 'CLASSIFY', 'DISCOVER_ERRATA', 'NORMALIZE', 'CHUNK']),
+    );
+    expect(fetchResult.job.completedStages).not.toContain('EMBED');
+
+    const done = await runFullPipeline(second.jobId, stageCtx, 'PARSE');
+    expect(done.status).toBe('SUCCEEDED');
+    expect(done.duplicate).toBe(true);
+    expect(done.job.completedStages).toEqual(expect.arrayContaining(['EMBED', 'INDEX']));
   });
 
   it('deduplicates only within the same contentId — identical bytes on a different content package publish a new document', async () => {
@@ -1056,5 +1062,159 @@ describe('ingestion pipeline (M2 acceptance)', () => {
     const jobB = await ctx.ingestionJobs.getJob(b.jobId);
     expect(jobB?.status).toBe('SUCCEEDED');
     expect(jobB?.duplicateOf).toBe(published[0]!.documentId);
+  });
+
+  describe('EMBED and INDEX (M3)', () => {
+    async function indexedKeys(index: InMemoryVectorIndex) {
+      return index
+        .entries()
+        .map((e) => e.key)
+        .sort();
+    }
+
+    it('embeds every chunk with its game, content and section as context and indexes its full text', async () => {
+      const embeddings = new FakeEmbeddings();
+      const vectorIndex = new InMemoryVectorIndex();
+      const stageCtx = makeStageContext(ctx, {
+        pdfExtractor: makeExtractor(RULEBOOK_V1_PAGES),
+        chunkerOptions: { minTokens: 20, targetTokens: 60, maxTokens: 120 },
+        embeddings,
+        vectorIndex,
+      });
+      const job = await createPdfJob(ctx, 'raw/embed.pdf', new Uint8Array([4, 2, 4]));
+
+      const result = await runFullPipeline(job.jobId, stageCtx);
+
+      const documentId = asSourceDocumentId(result.job.documentId!);
+      const chunks = await ctx.chunks.listChunksForDocument(documentId);
+      expect(await indexedKeys(vectorIndex)).toEqual(chunks.map((c) => c.chunkId).sort());
+      const assignHits = chunks.find((c) => c.headingPath.includes('2.1 Assign Hits'))!;
+      const body = await ctx.normalizedStore.getText(assignHits.textUri);
+      const entry = vectorIndex.entries().find((e) => e.key === assignHits.chunkId)!;
+      expect(entry.metadata).toEqual({
+        gameId,
+        editionId,
+        contentId,
+        documentId,
+        authority: 'OFFICIAL_RULES',
+        sourceType: 'RULEBOOK',
+        headingPath: assignHits.headingPath,
+        pageStart: assignHits.pageStart,
+        pageEnd: assignHits.pageEnd,
+        text: body,
+      });
+      expect(embeddings.inputs).toContain(
+        `Game: Twilight Imperium 4\nContent: Base Game\nSection: ${assignHits.headingPath.join(' > ')}\n\n${body}`,
+      );
+    });
+
+    it('a retriever finds the ingested rule, and only the current version after a supersede', async () => {
+      const embeddings = new FakeEmbeddings();
+      const vectorIndex = new InMemoryVectorIndex();
+      const opts = {
+        chunkerOptions: { minTokens: 20, targetTokens: 60, maxTokens: 120 },
+        embeddings,
+        vectorIndex,
+      };
+      const retriever = new VectorRulesRetriever({
+        embeddings,
+        index: vectorIndex,
+        documents: ctx.documents,
+        topK: 3,
+      });
+      const ask = () =>
+        retriever.retrieve({
+          gameId,
+          editionId,
+          enabledContentIds: [contentId],
+          text: 'how does the attacker assign hits',
+        });
+
+      const one = await runFullPipeline(
+        (await createPdfJob(ctx, 'raw/r1.pdf', new Uint8Array([3, 1]))).jobId,
+        makeStageContext(ctx, { ...opts, pdfExtractor: makeExtractor(RULEBOOK_V1_PAGES) }),
+      );
+      const first = await ask();
+      expect(first[0]!.headingPath).toContain('2.1 Assign Hits');
+      expect(new Set(first.map((h) => h.documentId))).toEqual(new Set([one.job.documentId]));
+
+      const two = await runFullPipeline(
+        (await createPdfJob(ctx, 'raw/r2.pdf', new Uint8Array([3, 2]))).jobId,
+        makeStageContext(ctx, { ...opts, pdfExtractor: makeExtractor(RULEBOOK_V2_PAGES) }),
+      );
+      const after = await ask();
+      expect(after.length).toBeGreaterThan(0);
+      expect(new Set(after.map((h) => h.documentId))).toEqual(new Set([two.job.documentId]));
+    });
+
+    it('re-uploading a CURRENT document backfills its vectors (documents ingested before M3)', async () => {
+      const bytes = new Uint8Array([8, 8, 1]);
+      const one = await runFullPipeline(
+        (await createPdfJob(ctx, 'raw/b1.pdf', bytes)).jobId,
+        makeStageContext(ctx, { pdfExtractor: makeExtractor(RULEBOOK_V1_PAGES) }),
+      );
+      const emptyIndex = new InMemoryVectorIndex();
+
+      const two = await runFullPipeline(
+        (await createPdfJob(ctx, 'raw/b2.pdf', bytes)).jobId,
+        makeStageContext(ctx, {
+          pdfExtractor: makeExtractor(RULEBOOK_V1_PAGES),
+          vectorIndex: emptyIndex,
+        }),
+      );
+
+      expect(two.duplicate).toBe(true);
+      const chunks = await ctx.chunks.listChunksForDocument(
+        asSourceDocumentId(one.job.documentId!),
+      );
+      expect(await indexedKeys(emptyIndex)).toEqual(chunks.map((c) => c.chunkId).sort());
+    });
+
+    it('reinstating a SUPERSEDED document re-indexes its chunks', async () => {
+      const v1Bytes = new Uint8Array([6, 1, 6]);
+      const one = await runFullPipeline(
+        (await createPdfJob(ctx, 'raw/i1.pdf', v1Bytes)).jobId,
+        makeStageContext(ctx, { pdfExtractor: makeExtractor(RULEBOOK_V1_PAGES) }),
+      );
+      await runFullPipeline(
+        (await createPdfJob(ctx, 'raw/i2.pdf', new Uint8Array([6, 2, 6]))).jobId,
+        makeStageContext(ctx, { pdfExtractor: makeExtractor(RULEBOOK_V2_PAGES) }),
+      );
+      const emptyIndex = new InMemoryVectorIndex();
+
+      const three = await runFullPipeline(
+        (await createPdfJob(ctx, 'raw/i1-again.pdf', v1Bytes)).jobId,
+        makeStageContext(ctx, {
+          pdfExtractor: makeExtractor(RULEBOOK_V1_PAGES),
+          vectorIndex: emptyIndex,
+        }),
+      );
+
+      expect(three.job.documentId).toBe(one.job.documentId);
+      const chunks = await ctx.chunks.listChunksForDocument(
+        asSourceDocumentId(one.job.documentId!),
+      );
+      expect(await indexedKeys(emptyIndex)).toEqual(chunks.map((c) => c.chunkId).sort());
+    });
+
+    it('an embedding failure fails the job at EMBED and publishes nothing', async () => {
+      const failing: FakeEmbeddings = Object.assign(new FakeEmbeddings(), {
+        embed: async () => {
+          throw new Error('ThrottlingException');
+        },
+      });
+      const stageCtx = makeStageContext(ctx, {
+        pdfExtractor: makeExtractor(RULEBOOK_V1_PAGES),
+        embeddings: failing,
+      });
+      const job = await createPdfJob(ctx, 'raw/fail.pdf', new Uint8Array([1, 9]));
+
+      await expect(runFullPipeline(job.jobId, stageCtx)).rejects.toThrow(StageError);
+
+      const after = await ctx.ingestionJobs.getJob(job.jobId);
+      expect(after?.status).toBe('FAILED');
+      expect(after?.error?.stage).toBe('EMBED');
+      expect(await ctx.documents.listDocumentsForEdition(gameId, editionId)).toEqual([]);
+    });
   });
 });

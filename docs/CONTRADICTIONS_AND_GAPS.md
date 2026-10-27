@@ -8,10 +8,7 @@ Each item names the section(s) of `MASTER_PLAN.md` that raised it, the impact, a
 
 ## Open — resolve during Milestone 0
 
-### G3. Region availability of Amazon S3 Vectors
-- **Where:** §10, §22 assume S3 Vectors in `ap-southeast-1`.
-- **Impact:** S3 Vectors is a young service; ap-southeast-1 may not offer it initially. If not, retrieval infrastructure may need to run in a different region than the main workload.
-- **Resolution home:** Requires AWS-console / API verification against a real account. **Deferred to first AWS bootstrap by the operator** — record outcome in ADR-0002 once the account is available.
+### G3. Region availability of Amazon S3 Vectors — RESOLVED, see Resolved section below
 
 ### G4. Region availability of Bedrock AgentCore Web Search
 - **Where:** §10 acknowledges that AgentCore regional availability may differ from the main workload region.
@@ -77,6 +74,9 @@ Each item names the section(s) of `MASTER_PLAN.md` that raised it, the impact, a
 
 ### G2. Test framework, linter, formatter
 - **Resolved in Milestone 0.** Confirmed **Vitest 2.x + ESLint 9 flat config + Prettier 3**. Recorded in the same ADR-0001 Revisions block.
+
+### G3. Region availability of Amazon S3 Vectors (and the embedding model)
+- **Resolved in Milestone 3.** Verified against the account on 2026-10-23 and 2026-10-26. S3 Vectors is available in `ap-southeast-1`, so the vector index stays with the main workload. Titan Text Embeddings V2 is **not** offered in `ap-southeast-1`; it is called on demand in `ap-southeast-2` (Sydney). The embedding region is configuration. Recorded in [ADR-0002](adr/0002-vector-store.md#revisions).
 
 ### G13. Session identity transport across origins
 - **Resolved in Milestone 1.** CloudFront now fronts both the SPA (`/*`) and the API (`/api/*`, with a viewer-request CloudFront Function that strips the `/api` prefix before forwarding to API Gateway). The browser reaches everything on the same origin, so the session cookie is a first-party `HttpOnly; Secure; SameSite=Lax` cookie, `fetch` uses `credentials: 'same-origin'`, and API Gateway has no CORS configuration. Recorded in [ADR-0007](adr/0007-cross-origin-session-cookies.md).

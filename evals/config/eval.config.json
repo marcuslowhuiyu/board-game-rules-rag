@@ -1,0 +1,5 @@
+{
+  "topK": 15,
+  "smallCorpusThreshold": 30,
+  "bars": { "simple": { "k": 3, "minRate": 0.9 }, "complex": { "k": 10, "minRate": 0.7 } }
+}

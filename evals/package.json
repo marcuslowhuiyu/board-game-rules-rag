@@ -4,7 +4,23 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "typecheck": "echo 'evals: nothing to typecheck yet' ",
-    "test": "echo 'evals: no tests yet' "
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "eval:retrieval": "tsx run-retrieval-eval.ts",
+    "eval:ingest": "tsx scripts/ingest-eval-games.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.679.0",
+    "@aws-sdk/client-s3": "^3.679.0",
+    "@bgr/ai": "workspace:*",
+    "@bgr/domain": "workspace:*",
+    "@bgr/persistence": "workspace:*",
+    "@bgr/retrieval": "workspace:*",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "tsx": "^4.23.13",
+    "typescript": "^5.6.2",
+    "vitest": "^4.1.12"
   }
 }

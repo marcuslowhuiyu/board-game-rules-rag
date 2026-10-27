@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { cpSync, existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,8 +14,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // dependency calling `require` inside an ESM bundle). This test loads each
 // real Lambda bundle in a plain Node process, the way the Lambda runtime does.
 //
-// `@aws-sdk/*` is left external by NodejsFunction (the runtime provides it),
-// so bundles are copied under apps/api, whose node_modules resolve it.
+// The AWS SDK is bundled, not taken from the runtime (whose copy may predate
+// newer services such as S3 Vectors). Bundles are still loaded from under
+// apps/api so that a dependency left external by mistake fails to resolve
+// the same way it would in Lambda.
 const SMOKE_ROOT = path.resolve(__dirname, '../../../apps/api/.bundle-smoke');
 
 describe('Lambda bundles', () => {
@@ -39,6 +41,12 @@ describe('Lambda bundles', () => {
   afterAll(() => {
     rmSync(SMOKE_ROOT, { recursive: true, force: true });
     rmSync(outdir, { recursive: true, force: true });
+  });
+
+  it('bundles the AWS SDK instead of relying on the copy in the Lambda runtime', () => {
+    for (const bundle of bundles) {
+      expect(readFileSync(bundle, 'utf8'), bundle).not.toMatch(/from\s*["']@aws-sdk\//);
+    }
   });
 
   it('produces the api, stage-runner and mark-job-failed bundles', () => {

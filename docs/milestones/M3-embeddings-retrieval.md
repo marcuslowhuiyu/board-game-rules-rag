@@ -39,7 +39,7 @@ Evaluation framework in `evals/`:
 CI:
 
 - Retrieval regression subset (fast, deterministic cases) runs on PRs that touch `packages/retrieval`, `packages/ai`, or `packages/ingestion`.
-- Full retrieval eval scheduled nightly (`eval-nightly.yml`).
+- Full retrieval eval runs on demand (`workflow_dispatch` or locally). The nightly schedule was dropped on 2026-10-26 to stay within the CI-minutes budget (ADR-0009).
 
 ## Explicitly out of scope
 
@@ -52,7 +52,7 @@ CI:
 1. Ingesting a rulebook produces embedded chunks in S3 Vectors, discoverable by a direct retriever call.
 2. Property-style test: retrieval for a session with a promo **disabled** never returns a chunk from that promo's document.
 3. Property test: retrieval for an old edition never returns chunks from the newer, superseded edition (and vice versa).
-4. Full retrieval eval runs green in CI and produces a report with all five metrics for each game.
+4. Full retrieval eval runs green (on demand) and produces a report with all five metrics for each game.
 5. Baseline metrics recorded in `CURRENT_STATE.md` for future comparisons.
 
 ## Definition of Done

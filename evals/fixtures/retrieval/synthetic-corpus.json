@@ -1,0 +1,113 @@
+{
+  "_comment": "Invented game 'Starfall' for the AWS-free retrieval regression subset. All text is original; no third-party rulebook content.",
+  "game": {
+    "key": "starfall",
+    "gameId": "g_starfall",
+    "editionId": "e_starfall_1",
+    "content": { "base": "c_starfall_base", "promo": "c_starfall_promo" }
+  },
+  "documents": [
+    {
+      "documentId": "doc_starfall_rules_v2",
+      "contentId": "c_starfall_base",
+      "status": "CURRENT",
+      "sourceType": "RULEBOOK",
+      "authority": "OFFICIAL_RULES"
+    },
+    {
+      "documentId": "doc_starfall_faq",
+      "contentId": "c_starfall_base",
+      "status": "CURRENT",
+      "sourceType": "FAQ",
+      "authority": "OFFICIAL_ERRATA"
+    },
+    {
+      "documentId": "doc_starfall_rules_v1",
+      "contentId": "c_starfall_base",
+      "status": "SUPERSEDED",
+      "sourceType": "RULEBOOK",
+      "authority": "OFFICIAL_RULES"
+    },
+    {
+      "documentId": "doc_starfall_promo",
+      "contentId": "c_starfall_promo",
+      "status": "CURRENT",
+      "sourceType": "PROMO_RULES",
+      "authority": "OFFICIAL_RULES"
+    }
+  ],
+  "chunks": [
+    {
+      "chunkId": "sf_rules_v2_01",
+      "documentId": "doc_starfall_rules_v2",
+      "headingPath": ["Turn Order"],
+      "text": "Each round, players take turns clockwise starting with the captain. On your turn you must take exactly one main action: Launch, Survey or Trade."
+    },
+    {
+      "chunkId": "sf_rules_v2_02",
+      "documentId": "doc_starfall_rules_v2",
+      "headingPath": ["Actions", "Launch"],
+      "text": "To launch a scout ship, pay 3 fuel and place the ship on any orbit adjacent to your home station."
+    },
+    {
+      "chunkId": "sf_rules_v2_03",
+      "documentId": "doc_starfall_rules_v2",
+      "headingPath": ["Actions", "Survey"],
+      "text": "When you survey a nebula, draw two star cards and keep one. Discard the other star card face down."
+    },
+    {
+      "chunkId": "sf_rules_v2_04",
+      "documentId": "doc_starfall_rules_v2",
+      "headingPath": ["Comets"],
+      "text": "Whenever a comet passes your scout ship, gain 1 renown immediately, even during another player's turn."
+    },
+    {
+      "chunkId": "sf_rules_v2_05",
+      "documentId": "doc_starfall_rules_v2",
+      "headingPath": ["Renown Milestones"],
+      "text": "Renown milestones are resolved at the end of the turn, after the active player finishes. Resolve the active player's milestones first, then continue clockwise."
+    },
+    {
+      "chunkId": "sf_rules_v2_06",
+      "documentId": "doc_starfall_rules_v2",
+      "headingPath": ["Beacons"],
+      "text": "Beacon effects trigger when a ship ends its movement on a beacon. Resolve beacon effects before milestones."
+    },
+    {
+      "chunkId": "sf_rules_v2_07",
+      "documentId": "doc_starfall_rules_v2",
+      "headingPath": ["End of Round"],
+      "text": "There is no hand limit during the round. At the end of the round, discard down to five star cards."
+    },
+    {
+      "chunkId": "sf_rules_v2_08",
+      "documentId": "doc_starfall_rules_v2",
+      "headingPath": ["Game End"],
+      "text": "At game end, each surveyed nebula scores 2 points and each completed constellation scores 5 points."
+    },
+    {
+      "chunkId": "sf_faq_01",
+      "documentId": "doc_starfall_faq",
+      "headingPath": ["Rulings", "Survey"],
+      "text": "Clarification: a survey that draws a comet card does not end your turn. Resolve the comet first, then keep one star card."
+    },
+    {
+      "chunkId": "sf_faq_02",
+      "documentId": "doc_starfall_faq",
+      "headingPath": ["Errata", "Launch"],
+      "text": "Errata: to launch a scout ship from a captured station costs 2 fuel instead of 3 fuel."
+    },
+    {
+      "chunkId": "sf_rules_v1_02",
+      "documentId": "doc_starfall_rules_v1",
+      "headingPath": ["Actions", "Launch"],
+      "text": "How much fuel to launch a scout ship? To launch a scout ship, pay 4 fuel and place the ship on any orbit adjacent to your home station."
+    },
+    {
+      "chunkId": "sf_promo_01",
+      "documentId": "doc_starfall_promo",
+      "headingPath": ["Pilot Promo"],
+      "text": "Promo rule: how much fuel to launch a scout ship? With the Pilot card, to launch a scout ship costs no fuel."
+    }
+  ]
+}
