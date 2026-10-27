@@ -15,6 +15,8 @@ import {
   type SourceDocument,
   type SourceDocumentId,
 } from '@bgr/domain';
+import type { EmbeddingsProvider } from '@bgr/ai';
+import type { ChunkVectorMetadata, VectorIndex, VectorItem } from '@bgr/retrieval';
 import type { Logger } from '@bgr/shared';
 import type {
   AtomicPublisher,
@@ -59,6 +61,10 @@ export interface StageContext {
   pdfParser: DocumentParser;
   htmlParser: DocumentParser;
   chunkerOptions?: ChunkerOptions;
+  /** Embeds chunk text at EMBED (ADR-0002: Titan V2). */
+  embeddings: EmbeddingsProvider;
+  /** Where INDEX writes chunk vectors (S3 Vectors in AWS). */
+  vectorIndex: VectorIndex;
   logger?: Logger;
 }
 
@@ -69,8 +75,8 @@ export interface StageContext {
  */
 const GARBLED_CHAR_RATIO_LIMIT = 0.05;
 
-/** Ordered list of stages that run in M2 (EMBED / INDEX skipped until M3). */
-export const M2_STAGE_ORDER: IngestionStage[] = [
+/** Ordered list of the stages the state machine runs. */
+export const INGESTION_STAGE_ORDER: IngestionStage[] = [
   'VALIDATE',
   'FETCH',
   'PARSE',
@@ -78,14 +84,25 @@ export const M2_STAGE_ORDER: IngestionStage[] = [
   'DISCOVER_ERRATA',
   'NORMALIZE',
   'CHUNK',
+  'EMBED',
+  'INDEX',
   'FINALIZE',
 ];
 
+/** Stages that turn fetched bytes into chunks; skipped when the bytes are already a document. */
+const CHUNKING_STAGES: IngestionStage[] = [
+  'PARSE',
+  'CLASSIFY',
+  'DISCOVER_ERRATA',
+  'NORMALIZE',
+  'CHUNK',
+];
+
 export function nextStage(stage: IngestionStage): IngestionStage | null {
-  const idx = M2_STAGE_ORDER.indexOf(stage);
+  const idx = INGESTION_STAGE_ORDER.indexOf(stage);
   if (idx === -1) return null;
-  if (idx === M2_STAGE_ORDER.length - 1) return null;
-  return M2_STAGE_ORDER[idx + 1] ?? null;
+  if (idx === INGESTION_STAGE_ORDER.length - 1) return null;
+  return INGESTION_STAGE_ORDER[idx + 1] ?? null;
 }
 
 export class StageError extends Error {
@@ -163,8 +180,8 @@ export async function runStage(
   }
 
   // A stage already recorded as done is a no-op: a redelivered invocation,
-  // or a stage FETCH skipped because a superseded document is being
-  // reinstated. FINALIZE always runs — it decides the terminal outcome.
+  // or a chunking stage FETCH skipped because the bytes are already a
+  // document. FINALIZE always runs — it decides the terminal outcome.
   if (stage !== 'FINALIZE' && job.completedStages.includes(stage)) {
     return {
       job,
@@ -207,13 +224,15 @@ export async function runStage(
       case 'CHUNK':
         mutated = await stageChunk(ctx, job);
         break;
+      case 'EMBED':
+        mutated = await stageEmbed(ctx, job);
+        break;
+      case 'INDEX':
+        mutated = await stageIndex(ctx, job);
+        break;
       case 'FINALIZE':
         mutated = await stageFinalize(ctx, job);
         break;
-      default:
-        // EMBED / INDEX are stubbed in the state machine but not exercised
-        // in M2; treat as no-op advances.
-        mutated = await advanceStage(ctx, job, stage, { status: 'RUNNING' });
     }
   } catch (err) {
     if (err instanceof RetryableStageError) {
@@ -306,14 +325,6 @@ async function stageFetch(ctx: StageContext, job: IngestionJob): Promise<Ingesti
     job.contentId,
     contentHash,
   );
-  if (dup && dup.status !== 'SUPERSEDED') {
-    ctx.logger?.info('duplicate upload — reusing existing document', {
-      jobId: job.jobId,
-      documentId: dup.documentId,
-    });
-    return markDuplicate(ctx, job, dup);
-  }
-
   // Snapshot the exact bytes we hashed under a content-addressed key, for
   // uploads too: a presigned PUT URL stays valid until expiry, so the upload
   // key may be overwritten before PARSE reads it.
@@ -333,22 +344,22 @@ async function stageFetch(ctx: StageContext, job: IngestionJob): Promise<Ingesti
   };
   await writeState(ctx, job.jobId, 'fetch', state);
   if (dup) {
-    // Bytes of a SUPERSEDED document: nothing to parse or chunk — its chunks
-    // still exist. Skip to FINALIZE, which reinstates it (and, unlike FETCH,
-    // retries on a conflicting concurrent publish).
-    ctx.logger?.info('re-upload of a superseded document — will reinstate', {
+    // The bytes are already a document, so its chunks exist: skip parsing and
+    // chunking. EMBED and INDEX still run for that document, so a re-upload
+    // repairs missing vectors (and backfills documents ingested before M3).
+    // FINALIZE then reports the duplicate (CURRENT) or reinstates the
+    // document (SUPERSEDED), retrying on a conflicting concurrent publish.
+    ctx.logger?.info('re-upload of an existing document — re-indexing it', {
       jobId: job.jobId,
       documentId: dup.documentId,
+      status: dup.status,
     });
     return ctx.jobs.updateJob(
       job.jobId,
       {
         status: 'RUNNING',
-        stage: 'FINALIZE',
-        completedStages: appendStage(
-          job.completedStages,
-          ...M2_STAGE_ORDER.filter((s) => s !== 'FINALIZE'),
-        ),
+        stage: 'EMBED',
+        completedStages: appendStage(job.completedStages, 'FETCH', ...CHUNKING_STAGES),
       },
       ctx.now().toISOString(),
     );
@@ -505,6 +516,104 @@ async function stageChunk(ctx: StageContext, jobIn: IngestionJob): Promise<Inges
   });
 }
 
+async function stageEmbed(ctx: StageContext, job: IngestionJob): Promise<IngestionJob> {
+  const documentId = await indexedDocumentId(ctx, job);
+  const chunks = await ctx.chunks.listChunksForDocument(documentId);
+  if (chunks.length === 0) {
+    throw new StageError('EMBED', `no chunks to embed for ${documentId}`, 'NO_CHUNKS');
+  }
+  const game = await ctx.games.getGame(job.gameId);
+  const content = (await ctx.games.listContent(job.gameId)).find(
+    (c) => c.contentId === job.contentId,
+  );
+  if (!game || !content) {
+    throw new StageError('EMBED', `game or content vanished for job ${job.jobId}`, 'GAME_MISSING');
+  }
+
+  const bodies = await Promise.all(chunks.map((c) => ctx.normalizedStore.getText(c.textUri)));
+  const { vectors, inputTokens } = await ctx.embeddings.embed(
+    chunks.map((c, i) =>
+      embeddingText({
+        gameName: game.name,
+        contentName: content.name,
+        headingPath: c.headingPath,
+        text: bodies[i]!,
+      }),
+    ),
+  );
+  const items: VectorItem[] = chunks.map((c, i) => ({
+    key: c.chunkId,
+    vector: vectors[i]!,
+    metadata: vectorMetadata(c, bodies[i]!),
+  }));
+  await writeState(ctx, job.jobId, 'vectors', items);
+  ctx.logger?.info('embedded chunks', {
+    jobId: job.jobId,
+    documentId,
+    chunks: items.length,
+    inputTokens,
+    modelId: ctx.embeddings.modelId,
+  });
+  return advanceStage(ctx, job, 'EMBED', { status: 'RUNNING' });
+}
+
+async function stageIndex(ctx: StageContext, job: IngestionJob): Promise<IngestionJob> {
+  const items = await readState<VectorItem[]>(ctx, job.jobId, 'vectors');
+  await ctx.vectorIndex.putVectors(items);
+  return advanceStage(ctx, job, 'INDEX', { status: 'RUNNING' });
+}
+
+/**
+ * The document whose chunks this job indexes: the one CHUNK planned, or —
+ * when FETCH found the bytes already published — that existing document.
+ */
+async function indexedDocumentId(ctx: StageContext, job: IngestionJob): Promise<SourceDocumentId> {
+  if (job.plannedDocumentId) return job.plannedDocumentId;
+  const fetchState = await readState<FetchState>(ctx, job.jobId, 'fetch');
+  const existing = await ctx.documents.findByContentHash(
+    job.gameId,
+    job.editionId,
+    job.contentId,
+    fetchState.contentHash,
+  );
+  if (!existing) {
+    throw new StageError('EMBED', 'no planned or existing document to index', 'NO_DOCUMENT');
+  }
+  return existing.documentId;
+}
+
+/**
+ * Text sent to the embedding model: the chunk prefixed with lightweight
+ * context (MASTER_PLAN §15), so a chunk that never names its game or section
+ * still matches questions that do.
+ */
+export function embeddingText(input: {
+  gameName: string;
+  contentName: string;
+  headingPath: readonly string[];
+  text: string;
+}): string {
+  const lines = [`Game: ${input.gameName}`, `Content: ${input.contentName}`];
+  if (input.headingPath.length > 0) lines.push(`Section: ${input.headingPath.join(' > ')}`);
+  return `${lines.join('\n')}\n\n${input.text}`;
+}
+
+function vectorMetadata(chunk: Chunk, text: string): ChunkVectorMetadata {
+  return {
+    gameId: chunk.gameId,
+    editionId: chunk.editionId,
+    contentId: chunk.contentId,
+    documentId: chunk.documentId,
+    authority: chunk.authority,
+    sourceType: chunk.sourceType,
+    headingPath: chunk.headingPath,
+    pageStart: chunk.pageStart,
+    pageEnd: chunk.pageEnd,
+    text,
+    ...(chunk.documentVersion !== undefined ? { documentVersion: chunk.documentVersion } : {}),
+  };
+}
+
 async function stageFinalize(ctx: StageContext, job: IngestionJob): Promise<IngestionJob> {
   const fetchState = await readState<FetchState>(ctx, job.jobId, 'fetch');
 
@@ -537,7 +646,7 @@ async function stageFinalize(ctx: StageContext, job: IngestionJob): Promise<Inge
         {
           status: 'SUCCEEDED',
           stage: 'FINALIZE',
-          completedStages: appendStage(job.completedStages, ...M2_STAGE_ORDER),
+          completedStages: appendStage(job.completedStages, ...INGESTION_STAGE_ORDER),
           documentId: dup.documentId,
           chunkCount: dup.chunkCount,
         },
@@ -619,7 +728,7 @@ async function stageFinalize(ctx: StageContext, job: IngestionJob): Promise<Inge
     ...job,
     status: 'SUCCEEDED',
     stage: 'FINALIZE',
-    completedStages: appendStage(job.completedStages, ...M2_STAGE_ORDER),
+    completedStages: appendStage(job.completedStages, ...INGESTION_STAGE_ORDER),
     documentId: newDoc.documentId,
     chunkCount: persistedChunks.length,
     ...(superseded ? { supersededDocumentId: superseded.documentId } : {}),
@@ -658,7 +767,7 @@ async function stageFinalize(ctx: StageContext, job: IngestionJob): Promise<Inge
           {
             status: 'SUCCEEDED',
             stage: 'FINALIZE',
-            completedStages: appendStage(job.completedStages, ...M2_STAGE_ORDER),
+            completedStages: appendStage(job.completedStages, ...INGESTION_STAGE_ORDER),
             documentId: existing.documentId,
             chunkCount: existing.chunkCount,
             ...(existing.supersedes.length > 0
@@ -690,7 +799,7 @@ function markDuplicate(
     {
       status: 'SUCCEEDED',
       stage: 'FINALIZE',
-      completedStages: appendStage(job.completedStages, ...M2_STAGE_ORDER),
+      completedStages: appendStage(job.completedStages, ...INGESTION_STAGE_ORDER),
       documentId: dup.documentId,
       duplicateOf: dup.documentId,
       chunkCount: dup.chunkCount,
@@ -750,7 +859,7 @@ async function reinstateDocument(
     ...job,
     status: 'SUCCEEDED',
     stage: 'FINALIZE',
-    completedStages: appendStage(job.completedStages, ...M2_STAGE_ORDER),
+    completedStages: appendStage(job.completedStages, ...INGESTION_STAGE_ORDER),
     documentId: doc.documentId,
     chunkCount: doc.chunkCount,
     ...(current ? { supersededDocumentId: current.documentId } : {}),
@@ -800,7 +909,7 @@ interface FetchState {
 function appendStage(existing: IngestionStage[], ...stages: IngestionStage[]): IngestionStage[] {
   const set = new Set(existing);
   for (const s of stages) set.add(s);
-  return M2_STAGE_ORDER.filter((s) => set.has(s));
+  return INGESTION_STAGE_ORDER.filter((s) => set.has(s));
 }
 
 async function advanceStage(

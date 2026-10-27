@@ -56,4 +56,10 @@ describe('InMemoryVectorIndex', () => {
     const hits = await index.query({ vector: [1, 0], topK: 10, filter });
     expect(hits.map((h) => h.metadata.text)).toEqual(['new']);
   });
+
+  it('lists every stored vector for inspection', async () => {
+    const index = new InMemoryVectorIndex();
+    await index.putVectors([{ key: 'a', vector: [1, 0], metadata: meta() }]);
+    expect(index.entries()).toEqual([{ key: 'a', vector: [1, 0], metadata: meta() }]);
+  });
 });

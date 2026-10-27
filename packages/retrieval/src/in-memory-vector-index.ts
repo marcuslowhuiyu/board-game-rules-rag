@@ -13,6 +13,11 @@ export class InMemoryVectorIndex implements VectorIndex {
     for (const item of items) this.items.set(item.key, structuredClone(item));
   }
 
+  /** Every stored vector, for tests and local inspection. */
+  entries(): VectorItem[] {
+    return Array.from(this.items.values(), (item) => structuredClone(item));
+  }
+
   async query(input: Parameters<VectorIndex['query']>[0]): Promise<VectorHit[]> {
     return Array.from(this.items.values())
       .filter((item) => matchesFilter(item.metadata, input.filter))

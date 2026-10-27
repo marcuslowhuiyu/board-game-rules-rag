@@ -1,6 +1,6 @@
 # Current State
 
-_Last updated: 2026-10-27 (M3 slices 1–2: embeddings provider, retriever)_
+_Last updated: 2026-10-27 (M3 slices 1–3: embeddings, retriever, EMBED/INDEX)_
 
 ## Current milestone
 
@@ -12,7 +12,10 @@ _Last updated: 2026-10-27 (M3 slices 1–2: embeddings provider, retriever)_
    - **Vector stores:** `S3VectorIndex` uses pre-filtered (`ENHANCED`) queries and writes in batches of 500. `InMemoryVectorIndex` serves tests.
    - **`selectEvidence`:** keeps the top N candidates by score.
    - **Tests:** seeded property tests check that a disabled promo, another edition or a superseded document never appears in results. Design: ADR-0002 revision 2026-10-27.
-3. Enable the EMBED and INDEX ingestion stages.
+3. **EMBED and INDEX stages.** Done; in review.
+   - **Stages:** EMBED embeds each chunk with a game/content/section prefix, and INDEX writes the vectors to S3 Vectors.
+   - **Infrastructure (CDK):** a vector bucket and a cosine `float32` index named `rule-chunks-titan-v2-1024`, with the chunk-body metadata keys non-filterable. The stage runner has least-privilege IAM (Titan in Sydney, `PutVectors` on that index) and its timeout is now 120 s.
+   - **Re-uploads:** a duplicate or reinstated upload now re-indexes the existing document before FINALIZE. That is how the three dev rulebooks, ingested before M3, get their vectors. Design: ADR-0008 revision 2026-10-27.
 4. Retrieval eval framework plus 30–50 cases for SETI, Ticket to Ride and Wingspan. Evals run on demand; the nightly schedule in the spec is dropped to save CI minutes (ADR-0009), and PRs run a small regression subset.
 5. Baseline metrics recorded here.
 
@@ -78,7 +81,6 @@ Load-bearing decisions from `docs/adr/`:
 Full tracker: `docs/CONTRADICTIONS_AND_GAPS.md`.
 
 - **G4 (AgentCore regional availability in `ap-southeast-1`).** Still unverified; verify before M6. G3 is resolved (ADR-0002).
-- **The live Titan smoke check for slice 1 is pending.** The AWS session expired before it ran; the account itself reached Titan in Sydney on 2026-10-26.
 - **DNS rebinding on URL ingestion** — mitigated at validation time (resolved IPs re-checked) but the subsequent `fetch()` performs its own resolution; a custom `undici.Agent` with a pinned resolver would fully close this. Tracked as an M2 residual risk in ADR-0008 §SSRF.
 - **No GSI on the documents table** — dev-scale scan with FilterExpression is fine at M2. Upgrade path noted.
 - **Fallback parser is a stub** — `createStubFallbackParser` throws. OCR/AI deferred.
@@ -93,5 +95,6 @@ Full tracker: `docs/CONTRADICTIONS_AND_GAPS.md`.
 
 ## Next expected work
 
-- M3 slice 3: enable the EMBED and INDEX stages (create the S3 Vectors bucket and index in CDK).
+- After the slice 3 deploy: re-upload SETI, Ticket to Ride and Wingspan in dev to index them.
+- M3 slice 4: retrieval eval framework and dataset.
 - A follow-up PR for the deferred minor review items (`M2-REVIEW-FIXES.md` §M2-R4).

@@ -17,8 +17,10 @@ import { HttpOrigin, S3BucketOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
 import { AttributeType, BillingMode, Table, TableEncryption } from 'aws-cdk-lib/aws-dynamodb';
 import { Runtime } from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction, OutputFormat } from 'aws-cdk-lib/aws-lambda-nodejs';
+import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import { LogGroup, RetentionDays } from 'aws-cdk-lib/aws-logs';
 import type { CfnBucket } from 'aws-cdk-lib/aws-s3';
+import { CfnIndex, CfnVectorBucket } from 'aws-cdk-lib/aws-s3vectors';
 import {
   BlockPublicAccess,
   Bucket,
@@ -40,6 +42,7 @@ import {
   type IChainable,
 } from 'aws-cdk-lib/aws-stepfunctions';
 import { LambdaInvoke } from 'aws-cdk-lib/aws-stepfunctions-tasks';
+import { NON_FILTERABLE_METADATA_KEYS } from '@bgr/retrieval';
 import type { Construct } from 'constructs';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -49,8 +52,13 @@ const __dirname = path.dirname(__filename);
 // CommonJS dependencies (e.g. the HTML parser's iconv-lite → safer-buffer)
 // call `require` for Node built-ins; without this banner the bundle throws
 // `Dynamic require of "buffer" is not supported` on load.
+//
+// The AWS SDK is bundled (`externalModules: []`) rather than taken from the
+// runtime: the runtime's copy may predate newer services (S3 Vectors), and
+// bundling ships exactly the SDK versions the tests ran against.
 const LAMBDA_BUNDLING = {
   format: OutputFormat.ESM,
+  externalModules: [],
   target: 'node22',
   sourceMap: true,
   minify: false,
@@ -58,7 +66,7 @@ const LAMBDA_BUNDLING = {
     "import { createRequire as __bgrCreateRequire } from 'node:module'; const require = __bgrCreateRequire(import.meta.url);",
 };
 
-const M2_STAGES = [
+const INGESTION_STAGES = [
   'VALIDATE',
   'FETCH',
   'PARSE',
@@ -66,8 +74,23 @@ const M2_STAGES = [
   'DISCOVER_ERRATA',
   'NORMALIZE',
   'CHUNK',
+  'EMBED',
+  'INDEX',
   'FINALIZE',
 ] as const;
+
+/** Embedding model settings (ADR-0002). Titan V2 is not offered in ap-southeast-1. */
+export interface EmbeddingConfig {
+  region: string;
+  modelId: string;
+  dimensions: 256 | 512 | 1024;
+}
+
+const DEFAULT_EMBEDDING: EmbeddingConfig = {
+  region: 'ap-southeast-2',
+  modelId: 'amazon.titan-embed-text-v2:0',
+  dimensions: 1024,
+};
 
 export interface DevStackProps extends StackProps {
   /** Session TTL in seconds. Defaults to 24h. */
@@ -76,6 +99,8 @@ export interface DevStackProps extends StackProps {
   uploadMaxBytes?: number;
   /** Presigned URL expiry (seconds). Defaults to 10 minutes. */
   presignExpirySeconds?: number;
+  /** Embedding model, region and dimension. Defaults to Titan V2, 1024, in Sydney. */
+  embedding?: EmbeddingConfig;
 }
 
 export class DevStack extends Stack {
@@ -85,6 +110,7 @@ export class DevStack extends Stack {
     const sessionTtlSeconds = props.sessionTtlSeconds ?? 60 * 60 * 24;
     const uploadMaxBytes = props.uploadMaxBytes ?? 50 * 1024 * 1024;
     const presignExpirySeconds = props.presignExpirySeconds ?? 600;
+    const embedding = props.embedding ?? DEFAULT_EMBEDDING;
 
     // ------ Application data (DynamoDB — see ADR-0006 / ADR-0008) --------
     const gamesTable = new Table(this, 'GamesTable', {
@@ -190,6 +216,19 @@ export class DevStack extends Stack {
       bundling: LAMBDA_BUNDLING,
     });
 
+    // ------ Rule-chunk vectors (S3 Vectors — ADR-0002) ------------------
+    const vectorBucket = new CfnVectorBucket(this, 'RuleVectorBucket');
+    // A different model or dimension needs a new index, so both are in its name.
+    const vectorIndexName = `rule-chunks-titan-v2-${embedding.dimensions}`;
+    const vectorIndex = new CfnIndex(this, 'RuleChunkIndex', {
+      vectorBucketArn: vectorBucket.attrVectorBucketArn,
+      indexName: vectorIndexName,
+      dataType: 'float32',
+      dimension: embedding.dimensions,
+      distanceMetric: 'cosine',
+      metadataConfiguration: { nonFilterableMetadataKeys: [...NON_FILTERABLE_METADATA_KEYS] },
+    });
+
     // ------ Ingestion stage-runner Lambda -------------------------------
     const stageRunnerLogGroup = new LogGroup(this, 'IngestionStageRunnerLogs', {
       retention: RetentionDays.ONE_WEEK,
@@ -201,7 +240,8 @@ export class DevStack extends Stack {
       entry: path.resolve(__dirname, '../../../apps/api/src/ingestion/stage-runner.ts'),
       handler: 'handler',
       memorySize: 1024,
-      timeout: Duration.seconds(60),
+      // EMBED makes one Bedrock call per chunk (bounded concurrency).
+      timeout: Duration.seconds(120),
       logGroup: stageRunnerLogGroup,
       environment: {
         NODE_OPTIONS: '--enable-source-maps',
@@ -212,9 +252,29 @@ export class DevStack extends Stack {
         CHUNKS_TABLE: chunksTable.tableName,
         INGESTION_JOBS_TABLE: ingestionJobsTable.tableName,
         INGESTION_BUCKET: ingestionBucket.bucketName,
+        EMBEDDING_REGION: embedding.region,
+        EMBEDDING_MODEL_ID: embedding.modelId,
+        EMBEDDING_DIMENSIONS: String(embedding.dimensions),
+        EMBEDDING_CONCURRENCY: '8',
+        VECTOR_REGION: this.region,
+        VECTOR_INDEX_ARN: vectorIndex.attrIndexArn,
       },
       bundling: LAMBDA_BUNDLING,
     });
+    stageRunnerFn.node.addDependency(vectorIndex);
+
+    stageRunnerFn.addToRolePolicy(
+      new PolicyStatement({
+        actions: ['bedrock:InvokeModel'],
+        resources: [`arn:aws:bedrock:${embedding.region}::foundation-model/${embedding.modelId}`],
+      }),
+    );
+    stageRunnerFn.addToRolePolicy(
+      new PolicyStatement({
+        actions: ['s3vectors:PutVectors'],
+        resources: [vectorIndex.attrIndexArn],
+      }),
+    );
 
     gamesTable.grantReadWriteData(stageRunnerFn);
     contentTable.grantReadData(stageRunnerFn);
@@ -264,20 +324,14 @@ export class DevStack extends Stack {
     });
 
     const succeed = new Succeed(this, 'PipelineSucceeded');
-    // Trailing Pass state — EMBED / INDEX slot in here in M3 without a
-    // definition rewrite. Both duplicate short-circuits and the last stage
-    // fan into it.
-    const skippedEmbedIndex = new Pass(this, 'SkipEmbedIndexInM2', {
-      comment: 'EMBED / INDEX declared but skipped in M2; the FINALIZE result flows here.',
-    }).next(succeed);
 
     // Build stage entry-points in reverse so each stage can wire its Choice
     // "continue" branch to the next stage's entry.
-    const stageEntries = new Map<(typeof M2_STAGES)[number], IChainable>();
-    for (let i = M2_STAGES.length - 1; i >= 0; i--) {
-      const stage = M2_STAGES[i]!;
+    const stageEntries = new Map<(typeof INGESTION_STAGES)[number], IChainable>();
+    for (let i = INGESTION_STAGES.length - 1; i >= 0; i--) {
+      const stage = INGESTION_STAGES[i]!;
       const nextEntry: IChainable =
-        i === M2_STAGES.length - 1 ? skippedEmbedIndex : stageEntries.get(M2_STAGES[i + 1]!)!;
+        i === INGESTION_STAGES.length - 1 ? succeed : stageEntries.get(INGESTION_STAGES[i + 1]!)!;
 
       const markFailedTask = new LambdaInvoke(this, `MarkJobFailed_${stage}`, {
         lambdaFunction: markJobFailedFn,
@@ -345,17 +399,16 @@ export class DevStack extends Stack {
         resultPath: '$.error',
       }).next(markFailedTask);
 
-      // Choice after each stage — a terminal SUCCEEDED result (e.g. FETCH
-      // dedup short-circuit or FINALIZE completion) skips the rest of the
-      // pipeline and jumps to the trailing Pass → Succeed. Any other terminal
-      // result fails the execution.
+      // Choice after each stage — a terminal SUCCEEDED result (FINALIZE
+      // completion, or a redelivery against a finished job) ends the
+      // execution successfully. Any other terminal result fails it.
       const choice = new Choice(this, `Check_After_${stage}`)
         .when(
           Condition.and(
             Condition.booleanEquals('$.terminal', true),
             Condition.stringEquals('$.status', 'SUCCEEDED'),
           ),
-          skippedEmbedIndex,
+          succeed,
         )
         .when(Condition.booleanEquals('$.terminal', true), terminalNotSucceeded)
         .otherwise(nextEntry);

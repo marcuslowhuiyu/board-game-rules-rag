@@ -6,7 +6,8 @@ import type { ChunkVectorMetadata } from './vector-index.js';
 
 const s3v = mockClient(S3VectorsClient);
 
-const options = { region: 'ap-southeast-1', vectorBucketName: 'bgr-vectors', indexName: 'chunks' };
+const indexArn = 'arn:aws:s3vectors:ap-southeast-1:000000000000:bucket/bgr-vectors/index/chunks';
+const options = { region: 'ap-southeast-1', indexArn };
 
 const meta: ChunkVectorMetadata = {
   gameId: 'g_1',
@@ -40,8 +41,7 @@ describe('S3VectorIndex', () => {
     expect(hits).toEqual([{ key: 'ch_1', score: 0.75, metadata: meta }]);
     const input = s3v.commandCalls(QueryVectorsCommand)[0]!.args[0].input;
     expect(input).toEqual({
-      vectorBucketName: 'bgr-vectors',
-      indexName: 'chunks',
+      indexArn,
       topK: 12,
       queryVector: { float32: [0.1, 0.2] },
       queryMode: 'ENHANCED',
@@ -117,7 +117,7 @@ describe('S3VectorIndex', () => {
 
     const calls = s3v.commandCalls(PutVectorsCommand).map((c) => c.args[0].input);
     expect(calls.map((c) => c.vectors?.length)).toEqual([500, 500, 1]);
-    expect(calls[0]).toMatchObject({ vectorBucketName: 'bgr-vectors', indexName: 'chunks' });
+    expect(calls[0]).toMatchObject({ indexArn });
     expect(calls[2]!.vectors![0]).toEqual({
       key: 'ch_1000',
       data: { float32: [1000, 1] },

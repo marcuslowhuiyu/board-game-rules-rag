@@ -3,6 +3,7 @@ import { Match, Template } from 'aws-cdk-lib/assertions';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { DevStack } from '../lib/dev-stack.js';
 import { GithubOidcStack } from '../lib/github-oidc.js';
+import { NON_FILTERABLE_METADATA_KEYS } from '@bgr/retrieval';
 
 describe('DevStack', () => {
   const app = new App();
@@ -205,7 +206,45 @@ describe('DevStack', () => {
     }
   });
 
-  it('state machine has one Choice after each M2 stage plus a MarkJobFailed_<STAGE> catch', () => {
+  it('provisions an S3 Vectors bucket and a cosine float32 index with the chunk-body keys non-filterable', () => {
+    template.resourceCountIs('AWS::S3Vectors::VectorBucket', 1);
+    template.hasResourceProperties('AWS::S3Vectors::Index', {
+      DataType: 'float32',
+      Dimension: 1024,
+      DistanceMetric: 'cosine',
+      MetadataConfiguration: { NonFilterableMetadataKeys: [...NON_FILTERABLE_METADATA_KEYS] },
+    });
+  });
+
+  it('configures the stage runner to embed with Titan V2 in Sydney and write to the vector index', () => {
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      Environment: {
+        Variables: Match.objectLike({
+          EMBEDDING_REGION: 'ap-southeast-2',
+          EMBEDDING_MODEL_ID: 'amazon.titan-embed-text-v2:0',
+          EMBEDDING_DIMENSIONS: '1024',
+          VECTOR_INDEX_ARN: Match.anyValue(),
+        }),
+      },
+    });
+  });
+
+  it('lets the stage runner invoke only the configured embedding model and write only vectors', () => {
+    const policies = JSON.stringify(template.findResources('AWS::IAM::Policy'));
+    expect(policies).toContain(
+      'arn:aws:bedrock:ap-southeast-2::foundation-model/amazon.titan-embed-text-v2:0',
+    );
+    template.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: {
+        Statement: Match.arrayWith([
+          Match.objectLike({ Action: 'bedrock:InvokeModel', Effect: 'Allow' }),
+          Match.objectLike({ Action: 's3vectors:PutVectors', Effect: 'Allow' }),
+        ]),
+      },
+    });
+  });
+
+  it('state machine has one Choice after each ingestion stage plus a MarkJobFailed_<STAGE> catch', () => {
     template.resourceCountIs('AWS::StepFunctions::StateMachine', 1);
     const machines = template.findResources('AWS::StepFunctions::StateMachine');
     const first = Object.values(machines)[0] as {
@@ -221,6 +260,8 @@ describe('DevStack', () => {
       'DISCOVER_ERRATA',
       'NORMALIZE',
       'CHUNK',
+      'EMBED',
+      'INDEX',
       'FINALIZE',
     ];
     for (const stage of stages) {
@@ -266,6 +307,8 @@ describe('DevStack', () => {
       'DISCOVER_ERRATA',
       'NORMALIZE',
       'CHUNK',
+      'EMBED',
+      'INDEX',
       'FINALIZE',
     ];
 
@@ -273,7 +316,7 @@ describe('DevStack', () => {
       const choice = states[`Check_After_${stage}`]!;
       expect(choice.Type).toBe('Choice');
       const [success, terminalOther] = choice.Choices!;
-      expect(success!.Next).toBe('SkipEmbedIndexInM2');
+      expect(success!.Next).toBe('PipelineSucceeded');
       expect(success!.And).toEqual(
         expect.arrayContaining([
           { Variable: '$.terminal', BooleanEquals: true },

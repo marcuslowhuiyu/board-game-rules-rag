@@ -26,7 +26,7 @@ AWS Step Functions Standard workflow. Each of the eight M2 stages (`VALIDATE`, `
 
 After every stage the state machine runs a `Choice` state on the runner's response, with two terminal branches:
 
-- `$.terminal === true && $.status === 'SUCCEEDED'` (duplicate short-circuit at FETCH, FINALIZE completion, or an already-SUCCEEDED job on redelivery) → `SkipEmbedIndexInM2 → PipelineSucceeded`. This is what fixes the "duplicate ran every subsequent stage anyway" bug reported in the first PR review.
+- `$.terminal === true && $.status === 'SUCCEEDED'` (FINALIZE completion, or an already-SUCCEEDED job on redelivery) → `PipelineSucceeded`. Until M3 this also covered a duplicate short-circuit at FETCH, through a `SkipEmbedIndexInM2` Pass state. This is what fixes the "duplicate ran every subsequent stage anyway" bug reported in the first PR review.
 - `$.terminal === true` with any other status (e.g. redelivery of a stage against an already-FAILED job) → `TerminalNotSucceeded_<STAGE>` (a Pass that synthesises the `$.error` shape the Catch path produces) → `MarkJobFailed_<STAGE>` → `PipelineFailed`. A FAILED job can never end in a successful execution.
 
 Non-terminal results continue to the next stage.
@@ -102,8 +102,8 @@ Scope: `(gameId, editionId, contentId, contentHash)`. `contentId` is part of the
 
 **What a hash match means depends on the matched document's status (M2-R4):**
 
-- `CURRENT` (or `ARCHIVED`) → duplicate: the job succeeds with `duplicateOf` set and nothing changes.
-- `SUPERSEDED` → **reinstate**. Re-uploading an old version means "make this the live version": the old document returns to `CURRENT` with its existing chunks, the present CURRENT document for its key is superseded, and `knowledgeRevision` bumps. FETCH marks PARSE…CHUNK complete (nothing to re-parse) and FINALIZE performs the publish with `reinstate: true`: the same four-item transaction, except the document `Put` is conditional on `status = SUPERSEDED` instead of `attribute_not_exists`. A failed condition is `DOC_NOT_SUPERSEDED`, retried like the other conflicts; the retry then sees the document CURRENT and reports a duplicate. If the CURRENT document for the key is the very document being reinstated (another job won the race after our lookup), FINALIZE retries without publishing. A transaction that both puts and supersedes one item is a DynamoDB validation error, not a condition failure, so it would otherwise end the job FAILED. Before M2-R4 a superseded match reported "duplicate" and left the newer version live, so the operator's revert silently did nothing.
+- `CURRENT` (or `ARCHIVED`) → duplicate: the job succeeds with `duplicateOf` set and no document, revision or chunk changes. Since M3 the job first runs EMBED and INDEX for that document (see the M3 revision below).
+- `SUPERSEDED` → **reinstate**. Re-uploading an old version means "make this the live version": the old document returns to `CURRENT` with its existing chunks, the present CURRENT document for its key is superseded, and `knowledgeRevision` bumps. FETCH marks PARSE…CHUNK complete (nothing to re-parse), EMBED and INDEX re-index the document, and FINALIZE performs the publish with `reinstate: true`: the same four-item transaction, except the document `Put` is conditional on `status = SUPERSEDED` instead of `attribute_not_exists`. A failed condition is `DOC_NOT_SUPERSEDED`, retried like the other conflicts; the retry then sees the document CURRENT and reports a duplicate. If the CURRENT document for the key is the very document being reinstated (another job won the race after our lookup), FINALIZE retries without publishing. A transaction that both puts and supersedes one item is a DynamoDB validation error, not a condition failure, so it would otherwise end the job FAILED. Before M2-R4 a superseded match reported "duplicate" and left the newer version live, so the operator's revert silently did nothing.
 
 ### FINALIZE — failure-safe publication
 
@@ -189,3 +189,16 @@ Ingestion bucket `AllowedOrigins` is pinned to the CloudFront distribution's `di
   - Post-merge dev acceptance: ingest at least two structurally different real PDF rulebooks and one real URL through the deployed pipeline; verify superseding + revision increment; inspect chunks. Do not commit copyrighted rulebooks.
   - Custom `undici.Agent` with a pinned DNS resolver to close the DNS-rebinding gap.
   - GSI upgrade for edition-scoped lookups (M6/M7 when the ruling cache / errata discovery expand the write pattern).
+
+### 2026-10-27 — EMBED and INDEX (M3 slice 3)
+
+- **Stage order:** `VALIDATE, FETCH, PARSE, CLASSIFY, DISCOVER_ERRATA, NORMALIZE, CHUNK, EMBED, INDEX, FINALIZE`. The trailing `SkipEmbedIndexInM2` Pass state is gone; terminal success goes straight to `PipelineSucceeded`.
+- **EMBED** reads the document's chunks and their full bodies from S3. It embeds each chunk with a context prefix (`Game:`, `Content:`, `Section:` heading path; MASTER_PLAN §15), using the configured `EmbeddingsProvider`, and writes the vectors and metadata to `stage-state/ingestion/{jobId}/vectors.json`. The input-token count is logged for cost tracking.
+- **INDEX** writes those vectors to S3 Vectors, keyed by `chunkId`. Writes are idempotent overwrites, so a retried stage is safe.
+- **Vectors land before FINALIZE.** A document's vectors exist before it is CURRENT, but the retriever only searches CURRENT documents (ADR-0002), so they stay invisible until the publish. If FINALIZE then finds a concurrent duplicate, the planned document's vectors remain but are never searched.
+- **A hash match no longer stops at FETCH.**
+  - FETCH marks only the chunking stages done, so EMBED and INDEX run for the existing document before FINALIZE reports the duplicate or reinstates it.
+  - A re-upload therefore repairs missing vectors, and it is how documents ingested before M3 get indexed.
+  - Cost: re-embedding a rulebook is about 30k tokens, roughly $0.001 with Titan V2.
+- **Configuration:** the stage runner gets the embedding region, model id, dimension and concurrency, plus the vector index ARN, from its environment. Its IAM role may invoke only that model and write only to that index. Its timeout went from 60 s to 120 s for EMBED.
+- **The AWS SDK is bundled into every Lambda** (`externalModules: []`), rather than taken from the Node 22 runtime. The runtime's SDK copy may predate S3 Vectors, and bundling ships exactly the versions the tests ran against. Bundles grew to at most about 8 MB. The bundle smoke test asserts that no bundle imports `@aws-sdk` externally.

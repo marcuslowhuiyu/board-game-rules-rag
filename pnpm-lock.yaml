@@ -50,6 +50,9 @@ importers:
       '@aws-sdk/s3-request-presigner':
         specifier: ^3.679.0
         version: 3.1134.0
+      '@bgr/ai':
+        specifier: workspace:*
+        version: link:../../packages/ai
       '@bgr/domain':
         specifier: workspace:*
         version: link:../../packages/domain
@@ -59,6 +62,9 @@ importers:
       '@bgr/persistence':
         specifier: workspace:*
         version: link:../../packages/persistence
+      '@bgr/retrieval':
+        specifier: workspace:*
+        version: link:../../packages/retrieval
       '@bgr/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -126,6 +132,9 @@ importers:
 
   infrastructure/cdk:
     dependencies:
+      '@bgr/retrieval':
+        specifier: workspace:*
+        version: link:../../packages/retrieval
       aws-cdk-lib:
         specifier: ^2.160.0
         version: 2.269.0(constructs@10.8.1)

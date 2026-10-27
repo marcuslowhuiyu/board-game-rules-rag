@@ -14,8 +14,8 @@ const MAX_VECTORS_PER_PUT = 500;
 
 export interface S3VectorIndexOptions {
   region: string;
-  vectorBucketName: string;
-  indexName: string;
+  /** `arn:aws:s3vectors:<region>:<account>:bucket/<bucket>/index/<index>`. */
+  indexArn: string;
 }
 
 /**
@@ -34,8 +34,7 @@ export class S3VectorIndex implements VectorIndex {
     for (let i = 0; i < items.length; i += MAX_VECTORS_PER_PUT) {
       await this.client.send(
         new PutVectorsCommand({
-          vectorBucketName: this.options.vectorBucketName,
-          indexName: this.options.indexName,
+          indexArn: this.options.indexArn,
           vectors: items.slice(i, i + MAX_VECTORS_PER_PUT).map((item) => ({
             key: item.key,
             data: { float32: item.vector },
@@ -60,8 +59,7 @@ export class S3VectorIndex implements VectorIndex {
     }
     const out = await this.client.send(
       new QueryVectorsCommand({
-        vectorBucketName: this.options.vectorBucketName,
-        indexName: this.options.indexName,
+        indexArn: this.options.indexArn,
         topK,
         queryVector: { float32: input.vector },
         queryMode: 'ENHANCED',
