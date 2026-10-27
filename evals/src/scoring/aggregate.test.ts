@@ -87,8 +87,9 @@ describe('aggregate', () => {
 describe('loadEvalConfig', () => {
   it('loads the committed config with the spec bars', async () => {
     const { loadEvalConfig } = await import('./aggregate.js');
+    const { fileURLToPath } = await import('node:url');
     const cfg = await loadEvalConfig(
-      new URL('../../config/eval.config.json', import.meta.url).pathname,
+      fileURLToPath(new URL('../../config/eval.config.json', import.meta.url)),
     );
     expect(cfg).toEqual(config);
   });
