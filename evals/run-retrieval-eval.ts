@@ -46,20 +46,25 @@ if (only) {
   const unknown = only.filter((g) => !(g in games));
   if (unknown.length > 0) throw new Error(`unknown --games ${unknown.join(', ')}`);
 }
+// Built before any network call, so a bad --dimensions fails straight away.
+const localEmbeddings =
+  values.dimensions === undefined ? undefined : createTitanEmbeddings(Number(values.dimensions));
 const live = await resolveLiveGames(cases, games, createDevDocuments());
 
-let retriever = createDevRetriever(config.topK);
-let index = 'live S3 Vectors index';
-if (values.dimensions !== undefined) {
-  const embeddings = createTitanEmbeddings(Number(values.dimensions));
+let retriever;
+let index;
+if (localEmbeddings) {
   const caseGames = new Set(cases.map((c) => c.game));
   const used = Object.fromEntries(Object.entries(games).filter(([k]) => caseGames.has(k)));
   const corpus = Object.values(await loadCorpus(used)).flat();
   retriever = createDevRetriever(config.topK, {
-    index: await buildLocalIndex(corpus, embeddings),
-    embeddings,
+    index: await buildLocalIndex(corpus, localEmbeddings),
+    embeddings: localEmbeddings,
   });
-  index = `local index, ${embeddings.dimensions} dimensions (${corpus.length} chunks re-embedded)`;
+  index = `local index, ${localEmbeddings.dimensions} dimensions (${corpus.length} chunks re-embedded)`;
+} else {
+  retriever = createDevRetriever(config.topK);
+  index = 'live S3 Vectors index';
 }
 
 const report = { index, ...(await runEval({ cases, games: live, retriever, config })) };

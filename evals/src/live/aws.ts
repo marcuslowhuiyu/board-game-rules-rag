@@ -81,6 +81,18 @@ export async function loadEvalGames(): Promise<EvalGames> {
 }
 
 /**
+ * A chunk body from S3. A missing body throws, as the ingestion store's read
+ * does, so the local index never embeds a header-only chunk.
+ */
+export async function readChunkBody(s3: Pick<S3Client, 'send'>, textUri: string): Promise<string> {
+  const [, bucket, ...rest] = /^s3:\/\/([^/]+)\/(.+)$/.exec(textUri) ?? [];
+  if (!bucket || rest.length === 0) throw new Error(`bad textUri ${textUri}`);
+  const res = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: rest.join('/') }));
+  if (!res.Body) throw new Error(`empty body reading ${textUri}`);
+  return res.Body.transformToString('utf-8');
+}
+
+/**
  * Every chunk of each eval game's CURRENT documents, with its body and the
  * game and content names the EMBED stage puts in its header.
  */
@@ -111,10 +123,7 @@ export async function loadCorpus(games: EvalGames): Promise<Record<string, Corpu
       const contentName = contentNames.get(doc.contentId);
       if (!contentName) throw new Error(`content ${doc.contentId} not found in CONTENT_TABLE`);
       for (const chunk of await chunks.listChunksForDocument(doc.documentId)) {
-        const [, bucket, ...rest] = /^s3:\/\/([^/]+)\/(.+)$/.exec(chunk.textUri) ?? [];
-        if (!bucket || rest.length === 0) throw new Error(`bad textUri ${chunk.textUri}`);
-        const res = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: rest.join('/') }));
-        const text = (await res.Body?.transformToString('utf-8')) ?? '';
+        const text = await readChunkBody(s3, chunk.textUri);
         out[key].push({ chunk, text, gameName, contentName });
       }
     }
