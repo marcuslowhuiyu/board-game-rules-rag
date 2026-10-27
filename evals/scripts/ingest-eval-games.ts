@@ -24,7 +24,7 @@ const games = await ingestEvalGames({
   fetch,
   readLocal: async (p) => new Uint8Array(await readFile(expandHome(p))),
   poll: { intervalMs: 5_000, timeoutMs: 15 * 60_000 },
-  log: (line) => console.log(line),
+  log: (line) => process.stdout.write(`${line}\n`),
 });
 await writeFile(configPath('eval-games.dev.json'), JSON.stringify(games, null, 2) + '\n');
-console.log(`wrote config/eval-games.dev.json`);
+process.stdout.write('wrote config/eval-games.dev.json\n');

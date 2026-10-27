@@ -1,10 +1,10 @@
 # Current State
 
-_Last updated: 2026-10-27 (M3 slices 1–3 done and deployed to dev; slice 4 next)_
+_Last updated: 2026-10-27 (M3 slices 1–4 done; slice 4's FAQ cases and a dev deploy are pending; slice 5 next)_
 
 ## Current milestone
 
-**Milestone 3 — Embeddings, Retrieval & Evaluation Foundation**, on `feature/m03-embeddings` (draft PR #26). It is built in slices, each reviewed before the next. Slices 1–3 are done, Codex-reviewed and in review on the PR; slice 3 is deployed to dev from the branch.
+**Milestone 3 — Embeddings, Retrieval & Evaluation Foundation**, on `feature/m03-embeddings` (draft PR #26). It is built in slices, each reviewed before the next. Slices 1–3 are done, Codex-reviewed and in review on the PR; slice 3 is deployed to dev from the branch. Slice 4 is built (see below).
 
 1. **`EmbeddingsProvider` plus the Titan Text Embeddings V2 adapter** (`packages/ai`). This slice is done and in review. The region, model id and dimension (256, 512 or 1024) are constructor options supplied from config. Titan has no batch call on demand, so a batch makes one request per text, with bounded concurrency (default 4), SDK retries for throttling and checks on vector size. It returns input-token counts for cost reporting.
 2. **`RulesRetriever`** (`packages/retrieval`). Done; in review.
@@ -17,7 +17,11 @@ _Last updated: 2026-10-27 (M3 slices 1–3 done and deployed to dev; slice 4 nex
    - **Infrastructure (CDK):** a vector bucket and a cosine `float32` index named `rule-chunks-titan-v2-1024`, with the chunk-body metadata keys non-filterable. The stage runner has least-privilege IAM (Titan in Sydney, `PutVectors` on that index) and its timeout is now 120 s.
    - **Re-uploads:** a duplicate or reinstated upload now re-indexes the existing document before FINALIZE. That is how the three dev rulebooks, ingested before M3, got their vectors. Design: ADR-0008 revision 2026-10-27.
    - **Lambdas bundle the AWS SDK**, because the runtime's copy may predate S3 Vectors.
-4. Retrieval eval framework plus 30–50 cases for SETI, Ticket to Ride and Wingspan. Evals run on demand; the nightly schedule in the spec is dropped to save CI minutes (ADR-0009), and PRs run a small regression subset.
+4. **Retrieval eval framework and dataset.** Done, apart from the FAQ cases.
+   - **Design:** `docs/superpowers/specs/2026-10-27-m3-retrieval-eval-design.md`.
+   - **Tiers:** simple cases pass if their one required rule is in the top 3 (bar ≥ 90 %). Complex cases pass only if *all* their evidence is in the top 10 (bar ≥ 70 %). Routing simple and complex questions differently is the operator's direction for M4; these per-tier numbers are its evidence.
+   - **Dataset:** 42 cases paraphrased from BGG rules threads (15 SETI, 13 Ticket to Ride, 14 Wingspan; 16 complex), each phrase checked against the fresh ingest. Usage: `evals/README.md`.
+   - **Regression subset:** an AWS-free subset runs inside `pnpm test`. The full eval is a local command, not a CI job (ADR-0009).
 5. Baseline metrics recorded here.
 
 Spec: `docs/milestones/M3-embeddings-retrieval.md`. Decision: `docs/adr/0002-vector-store.md` (revision 2026-10-26: S3 Vectors in `ap-southeast-1`, Titan V2 in `ap-southeast-2`).
@@ -50,6 +54,22 @@ API: `https://d1wbjv971ead09.cloudfront.net/api`. Vector index: `rule-chunks-tit
 | Wingspan (Rulepop URL) | `g_7955d4ac94a74025` | `e_907eee2eead94e37` | `c_68c3c6f0951a48da` | `doc_7883959006c3439b` |
 
 Real rulebooks stay out of the repo. SETI comes from the operator's local copy, Ticket to Ride from the Days of Wonder PDF, and Wingspan from `https://wingspan.rulepop.com/`.
+
+### Slice 4 in dev (2026-10-27)
+
+- **Eval games**, ingested through the public API with today's chunking: SETI (eval) 78 chunks, Ticket to Ride (eval) 7, Wingspan (eval) 186 (rulepop plus the Stonemaier rules page). Ids are in `evals/config/eval-games.dev.json`. The old dev games are untouched.
+- **First live run** (1024 dimensions, topK 15). This is also the first live run of the `ENHANCED` filtered query path, which works:
+
+| Game | Cases | R@1 | R@3 | R@5 | MRR | Simple pass | Complex full coverage |
+|---|---|---|---|---|---|---|---|
+| SETI | 15 | 0.54 | 0.78 | 0.84 | 0.74 | 89 % | 67 % |
+| Ticket to Ride (small corpus, excluded from bars) | 13 | 0.73 | 0.97 | 1.00 | 0.87 | 100 % | 100 % |
+| Wingspan | 14 | 0.46 | 0.82 | 0.82 | 0.72 | 89 % | 80 % |
+
+  Tiers: simple 89 % (16/18, bar 90 %, ❌ by one case), complex 73 % (8/11, bar 70 %, ✅). Failures: `seti-rotate-icon-once`, `wingspan-pink-after-last-turn`, `seti-computer-tech-under-data`, `seti-hand-limit`, `wingspan-tiebreak-cached`.
+- **Bug found and fixed:** the HTML parser took a WordPress reader comment as the whole page (ADR-0008 revision 2026-10-27). The fix is on the branch but **not deployed**, so the Stonemaier page in the Wingspan eval game is still the single-comment chunk until a redeploy and re-ingest.
+- **BGG access rule:** questions are paraphrased with a thread link. No requests go through BGG's internal `api.geekdo.com` API; M6 forum search must use the official XML API with a token.
+- **SETI heading paths are often wrong in the fresh ingest** (missions under "END-OF-GAME SCORING CARDS", scan rules under "JUPIT"), so SETI evidence is matched by phrase only.
 
 ## Completed work
 
@@ -123,15 +143,17 @@ Full tracker: `docs/CONTRADICTIONS_AND_GAPS.md`.
 ## Requires operator decision, if you want them
 
 - **A second region for AgentCore** — pending G4 verification.
+- **Slice 4 FAQ sources.** Download into `~/bgr-eval-sources/` by hand, because BGG blocks automated downloads. Then unskip them in `evals/config/eval-sources.json`, re-run `eval:ingest`, and add the 10 deferred FAQ cases from the candidates file. The files:
+  - the SETI CGE FAQ as `seti-faq.pdf` (BGG filepage 289980);
+  - an official copy of the Wingspan appendix as `wingspan-appendix.pdf`. The only copy found so far is a third-party rehost.
+- **Deploy the HTML parser fix to dev** (`pnpm -C infrastructure/cdk deploy:dev`), then re-ingest the Stonemaier page.
 
 ## Next expected work
 
-**M3 slice 4: retrieval eval framework and dataset.**
-
-1. **Fresh eval games.** Create new eval games in dev for SETI, Ticket to Ride and Wingspan, and ingest the three rulebooks into them. They are new games, so the bytes are not duplicates and get today's M2-T1 chunking. Leave the old dev games alone.
-2. **Dataset.** Draft 30–50 retrieval cases for the operator to review: question, game, edition, enabled content and required evidence. The evidence is a stable rule key, a heading plus a key phrase, not a chunk id, so re-chunking does not break cases. JSONL in `evals/`.
-3. **Runner.** `evals/run-retrieval-eval.ts` reports Recall@1/3/5, MRR and the irrelevant-result rate per game. It writes a JSON report to `evals/reports/` (gitignored) and has a `--markdown` mode. It runs on demand against dev with the real `VectorRulesRetriever` and `S3VectorIndex`, which also exercises the ENHANCED query path live.
-4. **PR regression subset.** A fast, deterministic subset that runs without AWS (in-memory index plus a fake embedder), on PRs touching `packages/retrieval`, `packages/ai` or `packages/ingestion`. Keep CI minutes minimal (ADR-0009).
+**Finish M3 slice 4:**
+- the operator reviews the 42 cases;
+- add the FAQ cases once the PDFs arrive;
+- deploy the parser fix.
 
 **M3 slice 5:** record baseline metrics here, compare 512 vs 1024 dimensions, then take PR #26 out of draft for the final CI run, Codex review of the whole milestone and merge.
 

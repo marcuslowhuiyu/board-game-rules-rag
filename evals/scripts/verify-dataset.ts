@@ -16,6 +16,6 @@ const files = (await readdir(dir)).filter((f) => f.endsWith('.jsonl')).map((f) =
 const cases = await loadDataset(files);
 const chunks = await loadGameChunks(await loadEvalGames());
 const issues = verifyDataset(cases, chunks);
-for (const i of issues) console.log(`${i.caseId}  ${i.itemKey}  ${i.problem}`);
-console.log(`${cases.length} cases, ${issues.length} issues`);
+for (const i of issues) process.stdout.write(`${i.caseId}  ${i.itemKey}  ${i.problem}\n`);
+process.stdout.write(`${cases.length} cases, ${issues.length} issues\n`);
 process.exit(issues.length === 0 ? 0 : 1);

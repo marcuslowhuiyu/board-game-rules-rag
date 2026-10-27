@@ -32,5 +32,5 @@ const report = await runEval({ cases, games, retriever: createDevRetriever(confi
 await mkdir(here('./reports/'), { recursive: true });
 const out = here(`./reports/retrieval-${report.generatedAt.replace(/[:.]/g, '-')}.json`);
 await writeFile(out, JSON.stringify(report, null, 2) + '\n');
-console.log(`${cases.length} cases → ${out}`);
-if (values.markdown) console.log('\n' + toMarkdown(report));
+process.stdout.write(`${cases.length} cases → ${out}\n`);
+if (values.markdown) process.stdout.write('\n' + toMarkdown(report));
