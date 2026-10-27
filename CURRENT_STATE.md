@@ -1,6 +1,6 @@
 # Current State
 
-_Last updated: 2026-10-27 (M3 slices 1–4 done; slice 5 baseline recorded; FAQ cases and the case review pending)_
+_Last updated: 2026-10-27 (M3 slices 1–4 done; slice 5 baseline recorded; FAQ cases pending; the operator's case review moves to M4)_
 
 ## Current milestone
 
@@ -168,10 +168,9 @@ Full tracker: `docs/CONTRADICTIONS_AND_GAPS.md`.
 
 ## Next expected work
 
-**Finish M3:**
-- the operator reviews the 42 cases;
-- add the FAQ cases once the PDFs arrive;
-- then take PR #26 out of draft for the final CI run, Codex review of the whole milestone and merge.
+**Finish M3:** take PR #26 out of draft for the final CI run, Codex review of the whole milestone and merge. The FAQ cases are added whenever the PDFs arrive; they don't block M3.
+
+**In M4:** the operator reviews the 42 cases once the system produces answers, which makes the questions easier to judge. A review page with every case, its answer-key quote and its latest result is at https://claude.ai/artifact/2c7iAbKnrybaCf5vgGtmu5 (private to the operator); marks saved there are readable by Claude.
 
 **After M3:**
 - A follow-up PR for the deferred minor review items (`M2-REVIEW-FIXES.md` §M2-R4).
