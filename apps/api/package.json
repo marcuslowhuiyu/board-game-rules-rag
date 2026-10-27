@@ -9,10 +9,10 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@aws-sdk/client-dynamodb": "^3.679.0",
-    "@aws-sdk/client-s3": "^3.679.0",
-    "@aws-sdk/client-sfn": "^3.679.0",
-    "@aws-sdk/s3-request-presigner": "^3.679.0",
+    "@aws-sdk/client-dynamodb": "^3.1156.0",
+    "@aws-sdk/client-s3": "^3.1156.0",
+    "@aws-sdk/client-sfn": "^3.1156.0",
+    "@aws-sdk/s3-request-presigner": "^3.1156.0",
     "@bgr/domain": "workspace:*",
     "@bgr/ingestion": "workspace:*",
     "@bgr/persistence": "workspace:*",
@@ -20,10 +20,10 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@aws-sdk/lib-dynamodb": "^3.679.0",
-    "@types/aws-lambda": "^8.10.145",
+    "@aws-sdk/lib-dynamodb": "^3.1156.0",
+    "@types/aws-lambda": "^8.10.164",
     "aws-sdk-client-mock": "^4.1.0",
-    "typescript": "^5.6.2",
-    "vitest": "^4.1.12"
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
   }
 }
