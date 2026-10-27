@@ -1,10 +1,10 @@
 # Current State
 
-_Last updated: 2026-10-27 (M3 slices 1–4 done; slice 4's FAQ cases and a dev deploy are pending; slice 5 next)_
+_Last updated: 2026-10-27 (M3 slices 1–4 done; slice 5 baseline recorded as provisional until the parser-fix deploy; FAQ cases pending)_
 
 ## Current milestone
 
-**Milestone 3 — Embeddings, Retrieval & Evaluation Foundation**, on `feature/m03-embeddings` (draft PR #26). It is built in slices, each reviewed before the next. Slices 1–3 are done, Codex-reviewed and in review on the PR; slice 3 is deployed to dev from the branch. Slice 4 is built (see below).
+**Milestone 3 — Embeddings, Retrieval & Evaluation Foundation**, on `feature/m03-embeddings` (draft PR #26). It is built in slices, each reviewed before the next. Slices 1–3 are done, Codex-reviewed and in review on the PR; slice 3 is deployed to dev from the branch. Slice 4 is built, and slice 5's dimension comparison and provisional baseline are done (see below).
 
 1. **`EmbeddingsProvider` plus the Titan Text Embeddings V2 adapter** (`packages/ai`). This slice is done and in review. The region, model id and dimension (256, 512 or 1024) are constructor options supplied from config. Titan has no batch call on demand, so a batch makes one request per text, with bounded concurrency (default 4), SDK retries for throttling and checks on vector size. It returns input-token counts for cost reporting.
 2. **`RulesRetriever`** (`packages/retrieval`). Done; in review.
@@ -22,7 +22,8 @@ _Last updated: 2026-10-27 (M3 slices 1–4 done; slice 4's FAQ cases and a dev d
    - **Tiers:** simple cases pass if their one required rule is in the top 3 (bar ≥ 90 %). Complex cases pass only if *all* their evidence is in the top 10 (bar ≥ 70 %). Routing simple and complex questions differently is the operator's direction for M4; these per-tier numbers are its evidence.
    - **Dataset:** 42 cases paraphrased from BGG rules threads (15 SETI, 13 Ticket to Ride, 14 Wingspan; 16 complex), each phrase checked against the fresh ingest. Usage: `evals/README.md`.
    - **Regression subset:** an AWS-free subset runs inside `pnpm test`. The full eval is a local command, not a CI job (ADR-0009).
-5. Baseline metrics recorded here.
+5. **Baseline and 512 vs 1024 dimensions.** Provisional; see "Slice 5 baseline" below.
+   - **Tooling:** `eval:retrieval --dimensions <n>` re-embeds the eval games' current chunks into an exact in-memory index, so dimensions compare on identical chunks without a second deployed index. The EMBED stage and the eval share `embeddingText` and `chunkVectorMetadata` (now in `@bgr/retrieval`).
 
 Spec: `docs/milestones/M3-embeddings-retrieval.md`. Decision: `docs/adr/0002-vector-store.md` (revision 2026-10-26: S3 Vectors in `ap-southeast-1`, Titan V2 in `ap-southeast-2`).
 
@@ -70,6 +71,23 @@ Real rulebooks stay out of the repo. SETI comes from the operator's local copy, 
 - **Bug found and fixed:** the HTML parser took a WordPress reader comment as the whole page (ADR-0008 revision 2026-10-27). The fix is on the branch but **not deployed**, so the Stonemaier page in the Wingspan eval game is still the single-comment chunk until a redeploy and re-ingest.
 - **BGG access rule:** questions are paraphrased with a thread link. No requests go through BGG's internal `api.geekdo.com` API; M6 forum search must use the official XML API with a token.
 - **SETI heading paths are often wrong in the fresh ingest** (missions under "END-OF-GAME SCORING CARDS", scan rules under "JUPIT"), so SETI evidence is matched by phrase only.
+
+### Slice 5 baseline (2026-10-27, provisional)
+
+Same 42 cases and 271 chunks for all three runs. **Provisional:** the HTML parser fix is not deployed yet, so the Stonemaier page in the Wingspan eval game is still one reader-comment chunk. Re-run after the deploy and re-ingest.
+
+| Run | Simple (top 3, bar 90 %) | Complex (all in top 10, bar 70 %) | SETI R@3 / MRR | Wingspan R@3 / MRR |
+|---|---|---|---|---|
+| Live S3 Vectors, 1024 | 89 % (16/18) ❌ | 73 % (8/11) ✅ | 0.78 / 0.74 | 0.82 / 0.72 |
+| Local exact, 1024 | 89 % (16/18) ❌ | 73 % (8/11) ✅ | 0.78 / 0.74 | 0.82 / 0.72 |
+| Local exact, 512 | 78 % (14/18) ❌ | 91 % (10/11) ✅ | 0.74 / 0.73 | 0.68 / 0.66 |
+
+Ticket to Ride (7 chunks, excluded from the bars) scores the same in all three: R@3 0.97, MRR 0.87, every case passing.
+
+- **The live index matches exact search.** The local 1024 run is identical to the live one, case for case, so S3 Vectors' approximate search costs nothing measurable at this size, and the local index is a faithful stand-in.
+- **Decision: keep 1024 dimensions.** 512 passes the same total (24 of 29 counted cases) but moves two failures into the simple tier, the tier that is already short of its bar. Storage and query costs at this scale are negligible either way, and 1024 needs no re-index. With 18 simple and 11 complex cases, one case moves a tier by 6–9 points, so the difference is within noise. Revisit only if the dataset grows.
+- **Decision: don't fix the PDF heading limits before M4.** Every required item of the five failing cases is retrieved (ranks 4–15); they fail on ranking, not on missing chunks. Of SETI's 78 chunks, 4 have letter-spaced headings and 1 has none. The failing SETI evidence sits under correct headings ("RESEARCH A TECH") or under letter-spaced ones whose fixed text wouldn't match the question better ("BET WEEN ROUNDS" for a hand-limit question). One bonus rule is filed under "ROTATING THE SOL AR SYSTEM" instead of its tech section; that is a missed heading, not letter-spacing. Ranking improvements in M4 (query handling, reranking, routing by tier) are the better lever. Revisit if M4's answer evals show wrong section citations.
+- **Failures (1024):** simple `seti-rotate-icon-once` (rank 4), `wingspan-pink-after-last-turn` (rank 8); complex `seti-computer-tech-under-data` (8, 12), `seti-hand-limit` (15, 15), `wingspan-tiebreak-cached` (13, 1).
 
 ## Completed work
 
@@ -138,7 +156,7 @@ Full tracker: `docs/CONTRADICTIONS_AND_GAPS.md`.
 - **Fallback parser is a stub** — `createStubFallbackParser` throws. OCR/AI deferred.
 - **`InMemorySessionsRepository`'s TTL check uses wall-clock time** — tests that hardcode a past NOW would falsely see sessions as expired; worked around by using a far-future NOW. Consider clock-injecting in a later cleanup.
 - **No static security analysis.** CodeQL was removed in ADR-0009 while the repo was private. The repo is now public (recreated 2026-10-21), so CodeQL is free and can be reinstated.
-- **PDF extraction limits seen on real rulebooks (deferred).** Large display fonts come out letter-spaced ("PL AYER PIECES", "BET WEEN ROUNDS"), and mixed-case headings (Ticket to Ride's "Claiming a Route") are not detected, so that document's rules carry an empty heading path. Both need font-size and position data from pdf.js rather than plain text; that is a bigger change. The slice 4 baseline will show how much they cost retrieval, which decides whether to fix them before M4.
+- **PDF extraction limits seen on real rulebooks (deferred past M4's start).** Large display fonts come out letter-spaced ("PL AYER PIECES", "BET WEEN ROUNDS"), and mixed-case headings (Ticket to Ride's "Claiming a Route") are not detected, so that document's rules carry an empty heading path. Both need font-size and position data from pdf.js rather than plain text; that is a bigger change. The slice 5 baseline shows the failing cases are ranking problems, not heading problems (see "Slice 5 baseline"), so this waits for evidence from M4's answer evals.
 
 ## Requires operator decision, if you want them
 
@@ -153,14 +171,12 @@ Full tracker: `docs/CONTRADICTIONS_AND_GAPS.md`.
 
 ## Next expected work
 
-**Finish M3 slice 4:**
+**Finish M3:**
+- deploy the parser fix, re-ingest, and re-run the three baseline runs (live, `--dimensions 1024`, `--dimensions 512`) to replace the provisional table;
 - the operator reviews the 42 cases;
 - add the FAQ cases once the PDFs arrive;
-- deploy the parser fix.
-
-**M3 slice 5:** record baseline metrics here, compare 512 vs 1024 dimensions, then take PR #26 out of draft for the final CI run, Codex review of the whole milestone and merge.
+- then take PR #26 out of draft for the final CI run, Codex review of the whole milestone and merge.
 
 **After M3:**
 - A follow-up PR for the deferred minor review items (`M2-REVIEW-FIXES.md` §M2-R4).
-- Decide on the PDF heading limits above, based on the baseline.
 - Open Dependabot PRs: #24 (grouped npm bump, superseded by #23/#25; close it) and #18 (GitHub Actions bumps).
