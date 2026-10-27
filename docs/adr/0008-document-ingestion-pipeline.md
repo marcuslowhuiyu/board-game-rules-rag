@@ -202,3 +202,9 @@ Ingestion bucket `AllowedOrigins` is pinned to the CloudFront distribution's `di
   - Cost: re-embedding a rulebook is about 30k tokens, roughly $0.001 with Titan V2.
 - **Configuration:** the stage runner gets the embedding region, model id, dimension and concurrency, plus the vector index ARN, from its environment. Its IAM role may invoke only that model and write only to that index. Its timeout went from 60 s to 120 s for EMBED.
 - **The AWS SDK is bundled into every Lambda** (`externalModules: []`), rather than taken from the Node 22 runtime. The runtime's SDK copy may predate S3 Vectors, and bundling ships exactly the versions the tests ran against. Bundles grew to at most about 8 MB. The bundle smoke test asserts that no bundle imports `@aws-sdk` externally.
+
+### 2026-10-27 — HTML content root (M3 slice 4)
+
+- **Bug:** the HTML parser took the first `main` / `article` / … match as the page's content. On WordPress pages with no `<main>`, every reader comment is an `<article>`. Ingesting Stonemaier's Wingspan rules and FAQ page therefore produced one chunk holding a single reader's question.
+- **Fix:** a candidate root is used only if it holds at least half the page's text; otherwise the parser falls back to `<body>`. WordPress comment sections (`#comments`, `.comments-area`, `.comment-list`) are stripped as boilerplate, so community text never enters a document labelled as an official source.
+- **Checked on real pages:** the Stonemaier page now yields its errata and rules text (6 chunks) and no comments. The Wingspan rulepop reference is unchanged (185 chunks).

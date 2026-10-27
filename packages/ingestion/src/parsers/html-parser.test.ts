@@ -24,6 +24,55 @@ describe('createHtmlParser', () => {
     ]);
   });
 
+  // A WordPress page with no <main>, whose only <article>s are reader comments
+  // (Stonemaier's Wingspan rules & FAQ page): the first <article> was taken
+  // as the whole document, so the FAQ was replaced by one reader's question.
+  it('uses the page body when the only <article> candidates are small comments', async () => {
+    const parser = createHtmlParser();
+    const html = `<html><body>
+      <div class="page">
+        <h2>Frequently Asked Questions</h2>
+        <p>Can you use the 2-for-1 food exchange for a power? No, only to play a bird.</p>
+        <p>Do star nests count as every nest type? Yes, star nests are wild.</p>
+      </div>
+      <div id="comments" class="comments-area">
+        <ol class="comment-list">
+          <li><article class="comment-body"><p>Which birds count as white with no power?</p></article></li>
+          <li><article class="comment-body"><p>Great game, thanks!</p></article></li>
+        </ol>
+      </div>
+    </body></html>`;
+    const doc = await parser.parse(encode(html), { contentType: 'text/html' });
+    const text = doc.blocks.map((b) => b.text).join('\n');
+    expect(text).toContain('only to play a bird');
+    expect(text).toContain('star nests are wild');
+  });
+
+  it('strips WordPress comment sections', async () => {
+    const parser = createHtmlParser();
+    const html = `<html><body>
+      <main>
+        <p>Official rule text, long enough to be the main content of the page.</p>
+        <div id="comments"><article class="comment-body"><p>A reader question.</p></article></div>
+        <ol class="comment-list"><li>Another reader.</li></ol>
+      </main>
+    </body></html>`;
+    const doc = await parser.parse(encode(html), { contentType: 'text/html' });
+    const text = doc.blocks.map((b) => b.text).join('\n');
+    expect(text).toContain('Official rule text');
+    expect(text).not.toContain('reader');
+  });
+
+  it('still prefers a <main> that holds the page content', async () => {
+    const parser = createHtmlParser();
+    const html = `<html><body>
+      <div class="promo">Buy the expansion today!</div>
+      <main><h1>Rules</h1><p>The real rules are here and they are much longer than the promo text.</p></main>
+    </body></html>`;
+    const doc = await parser.parse(encode(html), { contentType: 'text/html' });
+    expect(doc.blocks.map((b) => b.text).join(' ')).not.toContain('Buy the expansion');
+  });
+
   it('strips scripts, styles, nav', async () => {
     const parser = createHtmlParser();
     const html = `<html><body>
