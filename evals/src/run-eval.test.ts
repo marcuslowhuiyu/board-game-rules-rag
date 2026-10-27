@@ -18,7 +18,7 @@ import {
 import { describe, expect, it } from 'vitest';
 import { loadDataset } from './dataset/case-schema.js';
 import type { EvalConfig } from './scoring/aggregate.js';
-import { EvalConfigError, runEval, type EvalGames } from './run-eval.js';
+import { EvalConfigError, resolveLiveGames, runEval, type EvalGames } from './run-eval.js';
 import { HashEmbedder } from './testing/hash-embedder.js';
 
 const fixture = (name: string) =>
@@ -105,7 +105,7 @@ async function setup() {
     },
   };
   const cases = await loadDataset([fixture('synthetic-cases.jsonl')]);
-  return { cases, games, retriever, seen };
+  return { cases, games, retriever, seen, documents };
 }
 
 describe('retrieval regression subset', () => {
@@ -153,5 +153,34 @@ describe('HashEmbedder', () => {
     expect(a.vectors[0]).toHaveLength(256);
     const norm = Math.sqrt(a.vectors[0]!.reduce((s, x) => s + x * x, 0));
     expect(norm).toBeCloseTo(1);
+  });
+});
+
+describe('resolveLiveGames', () => {
+  it('replaces the chunk snapshot with the live count of CURRENT documents in referenced content', async () => {
+    const { cases, games, documents } = await setup();
+    for (const d of await documents.listDocumentsForEdition(
+      games['starfall']!.gameId as never,
+      games['starfall']!.editionId as never,
+    )) {
+      documents.putDocument({ ...d, chunkCount: 10 });
+    }
+    const live = await resolveLiveGames(
+      cases,
+      { ...games, starfall: { ...games['starfall']!, chunks: 1 } },
+      documents,
+    );
+    // rules v2 + FAQ are CURRENT base documents; v1 is superseded and promo is not enabled.
+    expect(live['starfall']!.chunks).toBe(20);
+  });
+
+  it('fails when a referenced game has no CURRENT documents (deleted or re-created)', async () => {
+    const { cases, games, documents } = await setup();
+    const stale = { starfall: { ...games['starfall']!, editionId: 'e_gone' } };
+    await expect(resolveLiveGames(cases, stale, documents)).rejects.toThrow(
+      new EvalConfigError(
+        'game "starfall" (g_starfall / e_gone) has no CURRENT documents in content base; re-run eval:ingest',
+      ),
+    );
   });
 });

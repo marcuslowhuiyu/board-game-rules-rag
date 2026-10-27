@@ -56,6 +56,16 @@ describe('RetrievalCaseSchema', () => {
     expect(r.success).toBe(false);
   });
 
+  it('rejects two evidence items with the same key in one case', () => {
+    const r = RetrievalCaseSchema.safeParse({
+      ...baseCase,
+      tier: 'complex',
+      requiredEvidence: [item('a'), { ...item('a'), phrase: 'another phrase' }],
+    });
+    expect(r.success).toBe(false);
+    expect(JSON.stringify(r.error?.issues)).toMatch(/duplicate evidence key a/);
+  });
+
   it('rejects a phrase over 15 words', () => {
     const long = Array.from({ length: 16 }, (_, i) => `w${i}`).join(' ');
     const r = RetrievalCaseSchema.safeParse({

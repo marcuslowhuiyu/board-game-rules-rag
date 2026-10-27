@@ -234,17 +234,23 @@ export function createHtmlParser(): DocumentParser {
   };
 }
 
+/** Landmarks that declare the page's main content; trusted as given. */
+const TRUSTED_ROOTS = new Set(['main', '[role="main"]']);
+
 /**
- * The first content-region candidate that holds most of the page's text.
- * A candidate that holds little of it (WordPress marks each reader comment
- * up as an `<article>`) is not the content, so the page falls back to body.
+ * The page's content root. `<main>` and `role="main"` are authoritative.
+ * Weaker candidates (`article`, `#content`, `.content`, …) are used only when
+ * they hold most of the page's text: WordPress marks each reader comment up
+ * as an `<article>`, and a small one is not the content, so the page falls
+ * back to body.
  */
 function pickRoot($: cheerio.CheerioAPI): cheerio.Cheerio<never> | null {
   const textLength = (el: cheerio.Cheerio<never>) => collapseWhitespace(el.text()).length;
   const total = textLength($('body') as unknown as cheerio.Cheerio<never>);
   for (const sel of MAIN_CANDIDATES) {
     const $node = $(sel).first() as unknown as cheerio.Cheerio<never>;
-    if ($node.length > 0 && textLength($node) >= total * MIN_ROOT_TEXT_SHARE) return $node;
+    if ($node.length === 0) continue;
+    if (TRUSTED_ROOTS.has(sel) || textLength($node) >= total * MIN_ROOT_TEXT_SHARE) return $node;
   }
   return null;
 }

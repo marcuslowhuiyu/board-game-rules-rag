@@ -1,4 +1,5 @@
 import { asContentId, asEditionId, asGameId } from '@bgr/domain';
+import type { DocumentsRepository } from '@bgr/persistence';
 import type { RulesRetriever } from '@bgr/retrieval';
 import type { RetrievalCase } from './dataset/case-schema.js';
 import { aggregate, type EvalConfig, type EvalReport } from './scoring/aggregate.js';
@@ -63,4 +64,40 @@ export async function runEval(input: {
 
   const corpusSize = Object.fromEntries(Object.entries(games).map(([k, g]) => [k, g.chunks]));
   return aggregate(results, corpusSize, config);
+}
+
+/**
+ * Checks the eval games against the live documents table before a run: every
+ * game and content package the cases use must still have CURRENT documents,
+ * or a deleted or re-created game would silently score zeros. Also replaces
+ * the chunk count written at ingest with the live one (CURRENT documents in
+ * the referenced content), which decides the small-corpus exclusion.
+ */
+export async function resolveLiveGames(
+  cases: readonly RetrievalCase[],
+  games: EvalGames,
+  documents: Pick<DocumentsRepository, 'listDocumentsForEdition'>,
+): Promise<EvalGames> {
+  const out: EvalGames = { ...games };
+  for (const key of new Set(cases.map((c) => c.game))) {
+    const game = games[key];
+    if (!game) throw new EvalConfigError(`unknown game "${key}" in the dataset`);
+    const slugs = new Set(cases.filter((c) => c.game === key).flatMap((c) => c.enabledContent));
+    const current = (
+      await documents.listDocumentsForEdition(asGameId(game.gameId), asEditionId(game.editionId))
+    ).filter((d) => d.status === 'CURRENT');
+    let chunks = 0;
+    for (const slug of slugs) {
+      const contentId = game.content[slug];
+      const docs = current.filter((d) => d.contentId === contentId);
+      if (docs.length === 0) {
+        throw new EvalConfigError(
+          `game "${key}" (${game.gameId} / ${game.editionId}) has no CURRENT documents in content ${slug}; re-run eval:ingest`,
+        );
+      }
+      chunks += docs.reduce((sum, d) => sum + d.chunkCount, 0);
+    }
+    out[key] = { ...game, chunks };
+  }
+  return out;
 }

@@ -41,6 +41,18 @@ export const RetrievalCaseSchema = z
     futureEvidence: z.array(z.unknown()).optional(),
   })
   .superRefine((c, ctx) => {
+    // Items are scored by key, so a repeated key would let one item mask another.
+    const keys = new Set<string>();
+    for (const e of c.requiredEvidence) {
+      if (keys.has(e.key)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['requiredEvidence'],
+          message: `duplicate evidence key ${e.key}`,
+        });
+      }
+      keys.add(e.key);
+    }
     const required = c.requiredEvidence.filter((e) => e.required).length;
     if (c.tier === 'simple' && required !== 1) {
       ctx.addIssue({

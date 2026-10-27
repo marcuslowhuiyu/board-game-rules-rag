@@ -73,6 +73,34 @@ describe('createHtmlParser', () => {
     expect(doc.blocks.map((b) => b.text).join(' ')).not.toContain('Buy the expansion');
   });
 
+  it('trusts <main> even when other page chrome holds more text', async () => {
+    const parser = createHtmlParser();
+    const html = `<html><body>
+      <main><h1>Rules</h1><p>Each player takes one action per turn.</p></main>
+      <div class="content">We use cookies to improve your experience. By continuing to browse you
+        agree to our cookie policy, our privacy policy and our terms of service, which describe
+        how we collect, store and process personal information across all of our websites.</div>
+    </body></html>`;
+    const doc = await parser.parse(encode(html), { contentType: 'text/html' });
+    const text = doc.blocks.map((b) => b.text).join(' ');
+    expect(text).toContain('one action per turn');
+    expect(text).not.toContain('cookies');
+  });
+
+  it('falls back to body when a weaker candidate such as <article> holds little of the page', async () => {
+    const parser = createHtmlParser();
+    const html = `<html><body>
+      <article class="promo"><p>New expansion out now!</p></article>
+      <div class="page">
+        <h2>Setup</h2>
+        <p>Shuffle the deck and deal five cards to each player, then reveal the first event.</p>
+        <p>The youngest player goes first and play continues clockwise around the table.</p>
+      </div>
+    </body></html>`;
+    const doc = await parser.parse(encode(html), { contentType: 'text/html' });
+    expect(doc.blocks.map((b) => b.text).join(' ')).toContain('deal five cards');
+  });
+
   it('strips scripts, styles, nav', async () => {
     const parser = createHtmlParser();
     const html = `<html><body>

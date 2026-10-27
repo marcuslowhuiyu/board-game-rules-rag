@@ -69,4 +69,11 @@ describe('evidenceMatches', () => {
     const item = { key: 'k', phrase: 'RESOLVE ALL of the sectors', required: true };
     expect(evidenceMatches(item, chunk)).toBe(true);
   });
+
+  it('does not match a phrase whose word boundary falls inside a word', () => {
+    const item = { key: 'k', phrase: 'the card is now here', required: true };
+    expect(
+      evidenceMatches(item, { text: 'The card is nowhere to be seen.', headingPath: [] }),
+    ).toBe(false);
+  });
 });

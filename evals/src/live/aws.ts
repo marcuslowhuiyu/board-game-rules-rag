@@ -20,6 +20,13 @@ export function requireEnv(key: string): string {
   return v;
 }
 
+export function createDevDocuments(): DynamoDocumentsRepository {
+  const region = process.env['VECTOR_REGION'] ?? 'ap-southeast-1';
+  return new DynamoDocumentsRepository(new DynamoDBClient({ region }), {
+    documentsTable: requireEnv('DOCUMENTS_TABLE'),
+  });
+}
+
 export function createDevRetriever(topK: number): VectorRulesRetriever {
   const dimensions = Number(requireEnv('EMBEDDING_DIMENSIONS'));
   if (!TITAN_V2_DIMENSIONS.includes(dimensions as TitanDimensions)) {
@@ -33,9 +40,7 @@ export function createDevRetriever(topK: number): VectorRulesRetriever {
       dimensions: dimensions as TitanDimensions,
     }),
     index: new S3VectorIndex({ region, indexArn: requireEnv('VECTOR_INDEX_ARN') }),
-    documents: new DynamoDocumentsRepository(new DynamoDBClient({ region }), {
-      documentsTable: requireEnv('DOCUMENTS_TABLE'),
-    }),
+    documents: createDevDocuments(),
     topK,
   });
 }

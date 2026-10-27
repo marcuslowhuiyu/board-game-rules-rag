@@ -64,7 +64,7 @@ Real rulebooks stay out of the repo. SETI comes from the operator's local copy, 
 |---|---|---|---|---|---|---|---|
 | SETI | 15 | 0.54 | 0.78 | 0.84 | 0.74 | 89 % | 67 % |
 | Ticket to Ride (small corpus, excluded from bars) | 13 | 0.73 | 0.97 | 1.00 | 0.87 | 100 % | 100 % |
-| Wingspan | 14 | 0.46 | 0.82 | 0.82 | 0.72 | 89 % | 80 % |
+| Wingspan (corpus includes 1 reader-comment chunk, see below) | 14 | 0.46 | 0.82 | 0.82 | 0.72 | 89 % | 80 % |
 
   Tiers: simple 89 % (16/18, bar 90 %, ❌ by one case), complex 73 % (8/11, bar 70 %, ✅). Failures: `seti-rotate-icon-once`, `wingspan-pink-after-last-turn`, `seti-computer-tech-under-data`, `seti-hand-limit`, `wingspan-tiebreak-cached`.
 - **Bug found and fixed:** the HTML parser took a WordPress reader comment as the whole page (ADR-0008 revision 2026-10-27). The fix is on the branch but **not deployed**, so the Stonemaier page in the Wingspan eval game is still the single-comment chunk until a redeploy and re-ingest.
@@ -146,7 +146,10 @@ Full tracker: `docs/CONTRADICTIONS_AND_GAPS.md`.
 - **Slice 4 FAQ sources.** Download into `~/bgr-eval-sources/` by hand, because BGG blocks automated downloads. Then unskip them in `evals/config/eval-sources.json`, re-run `eval:ingest`, and add the 10 deferred FAQ cases from the candidates file. The files:
   - the SETI CGE FAQ as `seti-faq.pdf` (BGG filepage 289980);
   - an official copy of the Wingspan appendix as `wingspan-appendix.pdf`. The only copy found so far is a third-party rehost.
-- **Deploy the HTML parser fix to dev** (`pnpm -C infrastructure/cdk deploy:dev`), then re-ingest the Stonemaier page.
+- **Deploy the HTML parser fix to dev** (`pnpm -C infrastructure/cdk deploy:dev`), then re-run `pnpm -C evals eval:ingest`.
+  - **Check:** the "Wingspan Rules & FAQ (Stonemaier)" line should report about 6 chunks, not 1.
+  - **If it still reports 1:** the fetched page bytes were identical. Identical bytes short-circuit as a duplicate and keep the old single-comment document.
+  - **Then:** archive that document (`doc_e308ec1e33524a06`) before re-ingesting, or ingest it into a fresh eval game.
 
 ## Next expected work
 

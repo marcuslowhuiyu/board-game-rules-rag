@@ -38,7 +38,7 @@ export function toMarkdown(report: EvalReport): string {
   ];
 
   for (const name of ['simple', 'complex'] as const) {
-    const k = bars[name].k as 1 | 3 | 5 | 10;
+    const k = bars[name].k;
     const failed = report.cases.filter((c) => c.tier === name && !c.fullCoverageAt[k]);
     if (failed.length === 0) continue;
     lines.push('', `Failed ${name} cases:`, failed.map((c) => `\`${c.id}\``).join(', '));

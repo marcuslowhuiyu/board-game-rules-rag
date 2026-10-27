@@ -12,14 +12,24 @@ export function normalize(text: string): string {
     .toLowerCase();
 }
 
+const escape = (ch: string) => ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 /**
- * Whitespace-free form used for matching. PDF extraction splits large display
- * fonts at arbitrary points ("L AUNCH A PROBE", "BET WEEN ROUNDS"), so word
- * boundaries in extracted text cannot be trusted; comparing without spaces
- * is immune to that and to line breaks inside a phrase.
+ * Pattern for a phrase in extracted text. PDF extraction splits large display
+ * fonts inside words ("L AUNCH A PROBE", "BET WEEN ROUNDS"), so a single stray
+ * space may appear between any two letters; but a space in the phrase must be
+ * a space in the text, so "now here" never matches "nowhere".
  */
-function compact(text: string): string {
-  return normalize(text).replace(/\s+/g, '');
+function phrasePattern(phrase: string): RegExp {
+  const chars = [...normalize(phrase)];
+  const source = chars
+    .map((ch, i) => {
+      if (ch === ' ') return '\\s+';
+      const next = chars[i + 1];
+      return escape(ch) + (next !== undefined && next !== ' ' ? ' ?' : '');
+    })
+    .join('');
+  return new RegExp(source);
 }
 
 /** A chunk satisfies an item when it contains the phrase (and, if set, the heading). */
@@ -27,8 +37,8 @@ export function evidenceMatches(
   item: EvidenceItem,
   chunk: Pick<RetrievedChunk, 'text' | 'headingPath'>,
 ): boolean {
-  if (!compact(chunk.text).includes(compact(item.phrase))) return false;
+  if (!phrasePattern(item.phrase).test(normalize(chunk.text))) return false;
   if (item.heading === undefined) return true;
-  const heading = compact(item.heading);
-  return chunk.headingPath.some((h) => compact(h).includes(heading));
+  const heading = phrasePattern(item.heading);
+  return chunk.headingPath.some((h) => heading.test(normalize(h)));
 }

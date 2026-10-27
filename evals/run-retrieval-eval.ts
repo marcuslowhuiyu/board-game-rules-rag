@@ -9,9 +9,9 @@ import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { loadDataset } from './src/dataset/case-schema.js';
-import { createDevRetriever, loadEvalGames } from './src/live/aws.js';
+import { createDevDocuments, createDevRetriever, loadEvalGames } from './src/live/aws.js';
 import { toMarkdown } from './src/report/markdown.js';
-import { runEval } from './src/run-eval.js';
+import { resolveLiveGames, runEval } from './src/run-eval.js';
 import { loadEvalConfig } from './src/scoring/aggregate.js';
 
 const here = (p: string) => fileURLToPath(new URL(p, import.meta.url));
@@ -28,7 +28,17 @@ const files = (await readdir(datasetDir))
 const only = values.games?.split(',');
 const cases = (await loadDataset(files)).filter((c) => !only || only.includes(c.game));
 
-const report = await runEval({ cases, games, retriever: createDevRetriever(config.topK), config });
+if (only) {
+  const unknown = only.filter((g) => !(g in games));
+  if (unknown.length > 0) throw new Error(`unknown --games ${unknown.join(', ')}`);
+}
+const live = await resolveLiveGames(cases, games, createDevDocuments());
+const report = await runEval({
+  cases,
+  games: live,
+  retriever: createDevRetriever(config.topK),
+  config,
+});
 await mkdir(here('./reports/'), { recursive: true });
 const out = here(`./reports/retrieval-${report.generatedAt.replace(/[:.]/g, '-')}.json`);
 await writeFile(out, JSON.stringify(report, null, 2) + '\n');

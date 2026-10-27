@@ -206,5 +206,5 @@ Ingestion bucket `AllowedOrigins` is pinned to the CloudFront distribution's `di
 ### 2026-10-27 — HTML content root (M3 slice 4)
 
 - **Bug:** the HTML parser took the first `main` / `article` / … match as the page's content. On WordPress pages with no `<main>`, every reader comment is an `<article>`. Ingesting Stonemaier's Wingspan rules and FAQ page therefore produced one chunk holding a single reader's question.
-- **Fix:** a candidate root is used only if it holds at least half the page's text; otherwise the parser falls back to `<body>`. WordPress comment sections (`#comments`, `.comments-area`, `.comment-list`) are stripped as boilerplate, so community text never enters a document labelled as an official source.
+- **Fix:** `<main>` and `role="main"` are trusted as given. A weaker candidate (`article`, `#content`, `.content`, …) is used only if it holds at least half the page's text; otherwise the parser falls back to `<body>`. WordPress comment sections (`#comments`, `.comments-area`, `.comment-list`) are stripped as boilerplate, so community text never enters a document labelled as an official source.
 - **Checked on real pages:** the Stonemaier page now yields its errata and rules text (6 chunks) and no comments. The Wingspan rulepop reference is unchanged (185 chunks).

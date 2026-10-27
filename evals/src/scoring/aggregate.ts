@@ -1,8 +1,12 @@
 import { readFile } from 'node:fs/promises';
 import { z } from 'zod';
-import type { CaseResult } from './score-case.js';
+import { K_VALUES, type CaseResult } from './score-case.js';
 
-const BarSchema = z.object({ k: z.number().int().positive(), minRate: z.number().min(0).max(1) });
+// k must be one of the cutoffs scoreCase computes; any other value would fail every case.
+const BarSchema = z.object({
+  k: z.union(K_VALUES.map((k) => z.literal(k))),
+  minRate: z.number().min(0).max(1),
+});
 
 export const EvalConfigSchema = z.object({
   /** Candidates the retriever returns per question. */
@@ -56,7 +60,7 @@ export function aggregate(
   corpusSize: Record<string, number>,
   config: EvalConfig,
 ): EvalReport {
-  const passes = (r: CaseResult) => r.fullCoverageAt[config.bars[r.tier].k as 1 | 3 | 5 | 10];
+  const passes = (r: CaseResult) => r.fullCoverageAt[config.bars[r.tier].k];
   const isSmall = (game: string) => (corpusSize[game] ?? 0) < config.smallCorpusThreshold;
   const passRate = (rs: CaseResult[]) =>
     rs.length === 0 ? null : rs.filter(passes).length / rs.length;

@@ -94,3 +94,11 @@ describe('loadEvalConfig', () => {
     expect(cfg).toEqual(config);
   });
 });
+
+describe('EvalConfigSchema', () => {
+  it('rejects a bar k the scorer does not compute', async () => {
+    const { EvalConfigSchema } = await import('./aggregate.js');
+    const bad = { ...config, bars: { ...config.bars, complex: { k: 15, minRate: 0.7 } } };
+    expect(EvalConfigSchema.safeParse(bad).success).toBe(false);
+  });
+});
