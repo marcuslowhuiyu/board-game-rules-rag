@@ -1,7 +1,7 @@
-import { SourceDocumentSchema, type SourceDocument } from '@bgr/domain';
+import { ConflictError, SourceDocumentSchema, type SourceDocument } from '@bgr/domain';
 import { InMemoryDocumentsRepository } from '@bgr/persistence';
 import { describe, expect, it } from 'vitest';
-import { applyBackfill, planBackfill } from './backfill.js';
+import { applyBackfill, BackfillPlanSchema, planBackfill, scanAll } from './backfill.js';
 
 const T0 = '2026-10-01T00:00:00.000Z';
 const NOW = '2026-10-28T00:00:00.000Z';
@@ -95,5 +95,57 @@ describe('applyBackfill', () => {
     expect(again.applied).toEqual([]);
     expect(again.skipped).toEqual([{ documentId: 'doc_a', reason: 'already has provenance' }]);
     expect((await repo.getDocument(a.documentId))?.provenance).toHaveLength(2);
+  });
+});
+
+describe('applyBackfill races', () => {
+  it('skips when setProvenance reports a ConflictError', async () => {
+    const a = doc({ documentId: 'doc_a' });
+    const plan = planBackfill([a], NOW).map((e) => ({ ...e, confirmed: true }));
+    const stub = {
+      getDocument: async () => a,
+      setProvenance: async () => {
+        throw new ConflictError('moved');
+      },
+    };
+    const result = await applyBackfill(plan, stub, NOW);
+    expect(result.applied).toEqual([]);
+    expect(result.skipped).toEqual([
+      { documentId: 'doc_a', reason: 'changed since the plan was written' },
+    ]);
+  });
+});
+
+describe('BackfillPlanSchema', () => {
+  const entry = () => planBackfill([doc({ documentId: 'doc_a' })], NOW)[0]!;
+
+  it('accepts a planned entry', () => {
+    expect(BackfillPlanSchema.parse([{ ...entry(), confirmed: true }])).toHaveLength(1);
+  });
+
+  it('rejects a non-boolean confirmed', () => {
+    expect(() => BackfillPlanSchema.parse([{ ...entry(), confirmed: 'false' }])).toThrow();
+  });
+
+  it('rejects a malformed proposed item', () => {
+    const bad = { ...entry(), proposed: [{ kind: 'NOT_A_KIND' }] };
+    expect(() => BackfillPlanSchema.parse([bad])).toThrow();
+  });
+});
+
+describe('scanAll', () => {
+  it('follows the continuation key until it runs out', async () => {
+    const pages: Record<string, { items: number[]; next?: string }> = {
+      start: { items: [1, 2], next: 'p2' },
+      p2: { items: [3], next: 'p3' },
+      p3: { items: [4] },
+    };
+    const seen: Array<string | undefined> = [];
+    const all = await scanAll(async (key) => {
+      seen.push(key);
+      return pages[key ?? 'start']!;
+    });
+    expect(all).toEqual([1, 2, 3, 4]);
+    expect(seen).toEqual([undefined, 'p2', 'p3']);
   });
 });

@@ -1,26 +1,14 @@
+import { z } from 'zod';
 import {
+  AuthoritySchema,
   ConflictError,
+  ProvenanceSchema,
+  SourceTypeSchema,
   asSourceDocumentId,
-  type Authority,
-  type ProvenanceEvidence,
   type SourceDocument,
-  type SourceType,
 } from '@bgr/domain';
 import { buildProvenance } from '@bgr/ingestion';
 import type { DocumentsRepository } from '@bgr/persistence';
-
-export interface BackfillEntry {
-  documentId: string;
-  title: string;
-  sourceType: SourceType;
-  authority: Authority;
-  canonicalUrl?: string;
-  /** Pins the version the operator saw; a changed row is never overwritten. */
-  updatedAt: string;
-  proposed: ProvenanceEvidence[];
-  /** The operator flips this to true after reviewing the entry. */
-  confirmed: boolean;
-}
 
 /**
  * Proposals for CURRENT documents that have no provenance. Old documents
@@ -46,6 +34,38 @@ export function planBackfill(docs: SourceDocument[], now: string): BackfillEntry
       }),
       confirmed: false,
     }));
+}
+
+/** The plan file as the operator edited it; anything else is rejected whole. */
+export const BackfillEntrySchema = z.object({
+  documentId: z.string().min(1),
+  title: z.string(),
+  sourceType: SourceTypeSchema,
+  authority: AuthoritySchema,
+  canonicalUrl: z.string().optional(),
+  updatedAt: z.string().min(1),
+  proposed: ProvenanceSchema,
+  confirmed: z.boolean(),
+});
+export const BackfillPlanSchema = z.array(BackfillEntrySchema);
+/**
+ * `updatedAt` pins the version the operator saw (a changed row is never
+ * overwritten); the operator flips `confirmed` to true after review.
+ */
+export type BackfillEntry = z.infer<typeof BackfillEntrySchema>;
+
+/** Collects every item of a paged scan, following the continuation key. */
+export async function scanAll<T, K = string>(
+  page: (startKey: K | undefined) => Promise<{ items: T[]; next?: K | undefined }>,
+): Promise<T[]> {
+  const out: T[] = [];
+  let key: K | undefined;
+  do {
+    const res = await page(key);
+    out.push(...res.items);
+    key = res.next;
+  } while (key);
+  return out;
 }
 
 const CHANGED = 'changed since the plan was written';

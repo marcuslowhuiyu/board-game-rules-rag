@@ -83,9 +83,9 @@ Documents ingested before provenance existed have none. The backfill proposes ev
 
 ```bash
 source evals/scripts/dev-env.sh
-pnpm -C evals provenance:backfill plan                                # writes evals/reports/provenance-plan.json
+pnpm -C evals provenance:backfill plan                                # writes evals/reports/provenance-plan.json ; the apply path is relative to evals/
 # review every entry; set "confirmed": true on the ones you accept
-pnpm -C evals provenance:backfill apply evals/reports/provenance-plan.json
+pnpm -C evals provenance:backfill apply reports/provenance-plan.json
 ```
 
 The proposal records the stored tier as the operator's declaration, the upload or source host, and nothing about removed comments (unknown for old documents). A document changed since the plan was written is skipped, and a second apply is a no-op. A page that may contain reader-comment text should be re-ingested instead of backfilled.
