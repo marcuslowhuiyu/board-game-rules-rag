@@ -26,18 +26,14 @@ const SOURCE_TYPE_OPTIONS: SourceType[] = [
   'OTHER',
 ];
 
-const AUTHORITY_FOR_TYPE: Record<SourceType, Authority> = {
-  RULEBOOK: 'OFFICIAL_RULES',
-  RULES_REFERENCE: 'OFFICIAL_RULES',
-  LIVING_RULES: 'OFFICIAL_RULES',
-  FAQ: 'OFFICIAL_ERRATA',
-  ERRATA: 'OFFICIAL_ERRATA',
-  PROMO_RULES: 'OFFICIAL_RULES',
-  DESIGNER_RULING: 'DESIGNER_OR_PUBLISHER',
-  PUBLISHER_RULING: 'DESIGNER_OR_PUBLISHER',
-  COMMUNITY_THREAD: 'COMMUNITY_DISCUSSION',
-  OTHER: 'UNKNOWN',
-};
+const AUTHORITY_OPTIONS: { value: Authority; label: string }[] = [
+  { value: 'OFFICIAL_RULES', label: 'Official rules (publisher rulebook or reference)' },
+  { value: 'OFFICIAL_ERRATA', label: 'Official errata or FAQ (from the publisher)' },
+  { value: 'DESIGNER_OR_PUBLISHER', label: 'Designer or publisher ruling' },
+  { value: 'COMMUNITY_CONSENSUS', label: 'Community consensus' },
+  { value: 'COMMUNITY_DISCUSSION', label: 'Community discussion' },
+  { value: 'UNKNOWN', label: 'Unknown' },
+];
 
 export const SourcesScreen = ({ api, gameId, onBack }: Props): JSX.Element => {
   const [game, setGame] = useState<GameWithContent | null>(null);
@@ -45,6 +41,7 @@ export const SourcesScreen = ({ api, gameId, onBack }: Props): JSX.Element => {
   const [contentId, setContentId] = useState<string>('');
   const [title, setTitle] = useState('');
   const [sourceType, setSourceType] = useState<SourceType>('RULEBOOK');
+  const [authority, setAuthority] = useState<Authority | ''>('');
   const [urlValue, setUrlValue] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [job, setJob] = useState<IngestionJobView | null>(null);
@@ -115,7 +112,7 @@ export const SourcesScreen = ({ api, gameId, onBack }: Props): JSX.Element => {
   };
 
   const startFile = async (): Promise<void> => {
-    if (!file || !editionId || !contentId || !title.trim()) return;
+    if (!file || !authority || !editionId || !contentId || !title.trim()) return;
     setError(null);
     setBusy(true);
     try {
@@ -131,7 +128,7 @@ export const SourcesScreen = ({ api, gameId, onBack }: Props): JSX.Element => {
         contentId,
         title: title.trim(),
         sourceType,
-        authority: AUTHORITY_FOR_TYPE[sourceType],
+        authority,
         source: {
           kind: 'S3',
           s3Key: presign.key,
@@ -149,7 +146,7 @@ export const SourcesScreen = ({ api, gameId, onBack }: Props): JSX.Element => {
   };
 
   const startUrl = async (): Promise<void> => {
-    if (!urlValue.trim() || !editionId || !contentId || !title.trim()) return;
+    if (!urlValue.trim() || !authority || !editionId || !contentId || !title.trim()) return;
     setError(null);
     setBusy(true);
     try {
@@ -159,7 +156,7 @@ export const SourcesScreen = ({ api, gameId, onBack }: Props): JSX.Element => {
         contentId,
         title: title.trim(),
         sourceType,
-        authority: AUTHORITY_FOR_TYPE[sourceType],
+        authority,
         source: { kind: 'URL', url: urlValue.trim() },
       });
       trackJob(created);
@@ -251,6 +248,30 @@ export const SourcesScreen = ({ api, gameId, onBack }: Props): JSX.Element => {
         </select>
       </div>
 
+      <div className="field">
+        <label htmlFor="src-authority">Trust tier</label>
+        <select
+          id="src-authority"
+          className="select"
+          value={authority}
+          aria-describedby="src-authority-help"
+          onChange={(e) => setAuthority(e.target.value as Authority)}
+        >
+          <option value="" disabled>
+            Choose how official this source is…
+          </option>
+          {AUTHORITY_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        <p id="src-authority-help" className="meta">
+          Pick "official" only if this file or page comes from the publisher. A FAQ written by
+          players is community discussion.
+        </p>
+      </div>
+
       <fieldset className="stack">
         <legend>Upload PDF</legend>
         <input
@@ -261,7 +282,7 @@ export const SourcesScreen = ({ api, gameId, onBack }: Props): JSX.Element => {
         <button
           className="button primary"
           type="button"
-          disabled={busy || !file || !contentId || !title.trim()}
+          disabled={busy || !file || !authority || !contentId || !title.trim()}
           onClick={() => void startFile()}
         >
           {busy ? 'Uploading…' : 'Upload & ingest PDF'}
@@ -279,7 +300,7 @@ export const SourcesScreen = ({ api, gameId, onBack }: Props): JSX.Element => {
         <button
           className="button"
           type="button"
-          disabled={busy || !urlValue.trim() || !contentId || !title.trim()}
+          disabled={busy || !urlValue.trim() || !authority || !contentId || !title.trim()}
           onClick={() => void startUrl()}
         >
           {busy ? 'Starting…' : 'Ingest URL'}

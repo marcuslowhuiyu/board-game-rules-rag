@@ -98,11 +98,65 @@ describe('SourcesScreen', () => {
 
   const fillUrlForm = async (user: ReturnType<typeof userEvent.setup>) => {
     await user.type(screen.getByLabelText('Title'), 'Living Rules');
+    const tier = screen.getByLabelText<HTMLSelectElement>('Trust tier');
+    if (!tier.value) await user.selectOptions(tier, 'OFFICIAL_RULES');
     await user.type(
       screen.getByPlaceholderText('https://publisher.example.com/living-rules'),
       'https://publisher.example.com/rules',
     );
   };
+
+  it('upload and URL buttons stay disabled until a trust tier is chosen', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const { api, created } = fakeApi();
+    render(<SourcesScreen api={api} gameId="g_1" onBack={() => {}} />);
+    await screen.findByLabelText('Edition');
+    await user.type(screen.getByLabelText('Title'), 'Living Rules');
+    const urlInput = screen.getByPlaceholderText('https://publisher.example.com/living-rules');
+    await user.type(urlInput, 'https://publisher.example.com/rules');
+    const file = new File(['%PDF'], 'rules.pdf', { type: 'application/pdf' });
+    await user.upload(document.querySelector<HTMLInputElement>('input[type="file"]')!, file);
+
+    expect(screen.getByRole('button', { name: 'Ingest URL' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Upload & ingest PDF' })).toBeDisabled();
+
+    await user.type(urlInput, '{Enter}');
+    expect(created).toHaveLength(0);
+    expect(api.createIngestion).not.toHaveBeenCalled();
+
+    await user.selectOptions(screen.getByLabelText('Trust tier'), 'OFFICIAL_RULES');
+    expect(screen.getByRole('button', { name: 'Ingest URL' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Upload & ingest PDF' })).toBeEnabled();
+  });
+
+  it('choosing FAQ does not pick a tier', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const { api } = fakeApi();
+    render(<SourcesScreen api={api} gameId="g_1" onBack={() => {}} />);
+    await screen.findByLabelText('Edition');
+
+    await user.selectOptions(screen.getByLabelText('Source type'), 'FAQ');
+    const tier = screen.getByLabelText<HTMLSelectElement>('Trust tier');
+    expect(tier.value).toBe('');
+    expect(
+      screen.getByRole('option', { name: 'Choose how official this source is…' }),
+    ).toBeDisabled();
+    expect(tier).toHaveAccessibleDescription(/A FAQ written by players is community discussion\./);
+  });
+
+  it('sends the chosen tier', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const { api, created } = fakeApi();
+    render(<SourcesScreen api={api} gameId="g_1" onBack={() => {}} />);
+    await screen.findByLabelText('Edition');
+
+    await user.selectOptions(screen.getByLabelText('Source type'), 'FAQ');
+    await user.selectOptions(screen.getByLabelText('Trust tier'), 'COMMUNITY_DISCUSSION');
+    await fillUrlForm(user);
+    await user.click(screen.getByRole('button', { name: 'Ingest URL' }));
+    await waitFor(() => expect(created).toHaveLength(1));
+    expect(created[0]).toMatchObject({ sourceType: 'FAQ', authority: 'COMMUNITY_DISCUSSION' });
+  });
 
   it('switches the content package to the new edition’s when the edition changes', async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
