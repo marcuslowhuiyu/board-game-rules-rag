@@ -7,7 +7,7 @@
 
 ## Context
 
-Milestone 0 gave us two hosts: the SPA on CloudFront and the API on API Gateway HTTP API. Master plan §45 prefers cookie-based session identity and ADR-0004 pins that cookie to `HttpOnly`. `docs/CONTRADICTIONS_AND_GAPS.md` G13 called out that the two hosts sit on different origins.
+Milestone 0 gave us two hosts: the SPA on CloudFront and the API on API Gateway HTTP API. Master plan §45 prefers cookie-based session identity and ADR-0004 pins that cookie to `HttpOnly`. `planning/CONTRADICTIONS_AND_GAPS.md` G13 called out that the two hosts sit on different origins.
 
 Modern browsers (Safari especially, but Chrome and Firefox are trending the same way) treat cookies on requests to a different site as third-party — even when the cookie carries `SameSite=None; Secure`. Safari's ITP already refuses to send third-party cookies in most contexts; Chrome's third-party cookie phase-out is ongoing. That behaviour would silently break the session as soon as we exercised the app in a real browser (especially on mobile Safari — the primary target).
 

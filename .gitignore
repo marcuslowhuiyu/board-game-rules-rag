@@ -24,3 +24,6 @@ apps/api/.bundle-smoke/
 
 # Superpowers local scratch (brainstorm mockups, plan ledgers)
 .superpowers/
+
+# Private planning docs: a separate private repo cloned here (see CLAUDE.md)
+planning/

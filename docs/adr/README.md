@@ -27,7 +27,7 @@ Write a new ADR whenever you make a decision that:
 
 - constrains future work (e.g. choice of vector store, model provider, session strategy),
 - would be surprising to a new contributor,
-- resolves an item listed in `docs/CONTRADICTIONS_AND_GAPS.md`, or
+- resolves an item listed in `planning/CONTRADICTIONS_AND_GAPS.md`, or
 - overrides an existing ADR.
 
 Do **not** write ADRs for routine implementation choices (variable names, file layout inside a package, minor library picks). Those live in code.

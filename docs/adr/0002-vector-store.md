@@ -24,7 +24,7 @@ The system needs a vector index for rule chunks and, later, for cached ruling qu
 ## Consequences
 
 - **Positive:** cost scales to zero when idle; no clusters to size, patch, or scale.
-- **Negative:** S3 Vectors is a young service — regional availability, per-request performance, and metadata filter semantics need to be verified during Milestone 0 bootstrap and Milestone 3. If ap-southeast-1 does not offer S3 Vectors at implementation time, retrieval infrastructure may need to live in a different region than the main workload (see `docs/CONTRADICTIONS_AND_GAPS.md`).
+- **Negative:** S3 Vectors is a young service — regional availability, per-request performance, and metadata filter semantics need to be verified during Milestone 0 bootstrap and Milestone 3. If ap-southeast-1 does not offer S3 Vectors at implementation time, retrieval infrastructure may need to live in a different region than the main workload (see `planning/CONTRADICTIONS_AND_GAPS.md`).
 - **Negative:** pure semantic retrieval may underperform on exact-keyword rules terms; Milestone 7 is designed to catch this.
 - **Follow-up:** the ruling cache (Milestone 6) will also need a semantic index. Same S3 Vectors service, separate logical index — record shape in the Milestone 6 spec or a follow-up ADR.
 
