@@ -138,6 +138,7 @@ export const SourcesScreen = ({ api, gameId, onBack }: Props): JSX.Element => {
         },
       });
       trackJob(created);
+      setAuthority('');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'ingestion failed');
     } finally {
@@ -160,6 +161,7 @@ export const SourcesScreen = ({ api, gameId, onBack }: Props): JSX.Element => {
         source: { kind: 'URL', url: urlValue.trim() },
       });
       trackJob(created);
+      setAuthority('');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'ingestion failed');
     } finally {

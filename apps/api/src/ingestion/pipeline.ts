@@ -432,6 +432,7 @@ async function stageParse(ctx: StageContext, job: IngestionJob): Promise<Ingesti
 }
 
 async function stageClassify(ctx: StageContext, job: IngestionJob): Promise<IngestionJob> {
+  // job.authority holds the operator's declaration only until CLASSIFY completes (this stage overwrites it with the classified tier in the same atomic update); any future "retry from CLASSIFY" path must restore the declared tier.
   const fetchState = await readState<FetchState>(ctx, job.jobId, 'fetch');
   const classification = classifySource({
     sourceType: job.sourceType,

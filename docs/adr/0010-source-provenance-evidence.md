@@ -33,7 +33,7 @@ Answers cite sources, and the answer policy weighs them by trust tier. A tier th
 
 ## Consequences
 
-- **Positive:** every source can answer why it has its tier. Operator declarations are explicit and dated. Downgrades and content removals are visible and countable. M6 can add verification kinds without a schema migration, because the list is open to new kinds.
+- **Positive:** every source can answer why it has its tier. Operator declarations are explicit and dated. Downgrades and content removals are visible and countable. M6 can add verification kinds without a data migration, because the list is open to new kinds. Because `ProvenanceEvidenceSchema` is a closed discriminated union, code older than a newly added kind (including a rollback) fails to parse documents carrying that kind, so a new kind must ship before any document is written with it, and rollbacks across it need care.
 - **Negative:**
   - Evidence from the operator is still only a declaration. Nothing checks it yet.
   - **Known limit:** the parser removes only the comment markup it recognises (the WordPress selectors above). A mixed page with other forum or comment markup is not caught by the parser. The operator's check when adding the source is the safeguard until M6's per-post tiers.

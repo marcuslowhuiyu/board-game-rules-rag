@@ -90,6 +90,8 @@ pnpm -C evals provenance:backfill apply reports/provenance-plan.json
 
 The proposal records the stored tier as the operator's declaration, the upload or source host, and nothing about removed comments (unknown for old documents). A document changed since the plan was written is skipped, and a second apply is a no-op. A page that may contain reader-comment text should be re-ingested instead of backfilled.
 
+Re-running `plan` overwrites the plan file and discards any confirmations in it. Only CURRENT documents are planned, so a legacy document reinstated later is picked up by a later `plan` run.
+
 ## Regression subset
 
 `src/run-eval.test.ts` runs the whole pipeline over an invented game ("Starfall", `fixtures/retrieval/`). It uses the real `VectorRulesRetriever`, an in-memory index and a deterministic hash embedder. It guards scoring and the retriever's filtering: superseded documents and disabled promos never come back. It does not measure embedding quality. It needs no AWS and no network, and it runs in about a second inside `pnpm test`.

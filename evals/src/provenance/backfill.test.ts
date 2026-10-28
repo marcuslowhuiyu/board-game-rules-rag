@@ -86,6 +86,44 @@ describe('applyBackfill', () => {
     expect((await repo.getDocument(a.documentId))?.provenance).toEqual([]);
   });
 
+  it('skips when the stored tier changed since planning', async () => {
+    const a = doc({ documentId: 'doc_a' });
+    const plan = planBackfill([a], NOW).map((e) => ({ ...e, confirmed: true }));
+    const stub = {
+      getDocument: async () => doc({ documentId: 'doc_a', authority: 'COMMUNITY_DISCUSSION' }),
+      setProvenance: async () => {
+        throw new Error('must not write');
+      },
+    };
+    const result = await applyBackfill(plan, stub, NOW);
+    expect(result.applied).toEqual([]);
+    expect(result.skipped).toEqual([
+      { documentId: 'doc_a', reason: 'tier changed since the plan was written' },
+    ]);
+  });
+
+  it('skips when the attested tier does not match the stored tier', async () => {
+    const a = doc({ documentId: 'doc_a' });
+    const plan = planBackfill([a], NOW).map((e) => ({
+      ...e,
+      confirmed: true,
+      proposed: [
+        {
+          kind: 'OPERATOR_ATTESTED' as const,
+          authority: 'OFFICIAL_ERRATA' as const,
+          recordedAt: NOW,
+        },
+      ],
+    }));
+    const repo = await repoWith(a);
+    const result = await applyBackfill(plan, repo, NOW);
+    expect(result.applied).toEqual([]);
+    expect(result.skipped).toEqual([
+      { documentId: 'doc_a', reason: 'attested tier does not match the stored tier' },
+    ]);
+    expect((await repo.getDocument(a.documentId))?.provenance).toEqual([]);
+  });
+
   it('a second apply is a no-op', async () => {
     const a = doc({ documentId: 'doc_a' });
     const repo = await repoWith(a);
@@ -125,6 +163,10 @@ describe('BackfillPlanSchema', () => {
 
   it('rejects a non-boolean confirmed', () => {
     expect(() => BackfillPlanSchema.parse([{ ...entry(), confirmed: 'false' }])).toThrow();
+  });
+
+  it('rejects an empty proposed list', () => {
+    expect(() => BackfillPlanSchema.parse([{ ...entry(), proposed: [] }])).toThrow();
   });
 
   it('rejects a malformed proposed item', () => {

@@ -106,7 +106,7 @@ describe('SourcesScreen', () => {
     );
   };
 
-  it('upload and URL buttons stay disabled until a trust tier is chosen', async () => {
+  it('upload and URL buttons stay disabled until a trust tier is chosen (and Enter does not submit)', async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const { api, created } = fakeApi();
     render(<SourcesScreen api={api} gameId="g_1" onBack={() => {}} />);
@@ -120,6 +120,7 @@ describe('SourcesScreen', () => {
     expect(screen.getByRole('button', { name: 'Ingest URL' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Upload & ingest PDF' })).toBeDisabled();
 
+    // Pins that pressing Enter does not submit; the guard itself is the disabled buttons.
     await user.type(urlInput, '{Enter}');
     expect(created).toHaveLength(0);
     expect(api.createIngestion).not.toHaveBeenCalled();
@@ -173,6 +174,24 @@ describe('SourcesScreen', () => {
     expect(created[0]).toMatchObject({ editionId: 'e_2', contentId: 'c_2' });
   });
 
+  it('resets the trust tier after a successful submit', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const { api, created } = fakeApi();
+    render(<SourcesScreen api={api} gameId="g_1" onBack={() => {}} />);
+    await screen.findByLabelText('Edition');
+    await fillUrlForm(user);
+    const file = new File(['%PDF'], 'rules.pdf', { type: 'application/pdf' });
+    await user.upload(document.querySelector<HTMLInputElement>('input[type="file"]')!, file);
+    await user.click(screen.getByRole('button', { name: 'Ingest URL' }));
+    await waitFor(() => expect(created).toHaveLength(1));
+
+    await waitFor(() =>
+      expect(screen.getByLabelText<HTMLSelectElement>('Trust tier').value).toBe(''),
+    );
+    expect(screen.getByRole('button', { name: 'Ingest URL' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Upload & ingest PDF' })).toBeDisabled();
+  });
+
   it('stops polling the previous job when a new ingestion starts', async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const { api, getIngestion } = fakeApi();
@@ -182,6 +201,7 @@ describe('SourcesScreen', () => {
 
     await user.click(screen.getByRole('button', { name: 'Ingest URL' }));
     await waitFor(() => expect(getIngestion).toHaveBeenCalledWith('job_1'));
+    await user.selectOptions(screen.getByLabelText('Trust tier'), 'OFFICIAL_RULES');
     await user.click(screen.getByRole('button', { name: 'Ingest URL' }));
     await waitFor(() => expect(getIngestion).toHaveBeenCalledWith('job_2'));
 

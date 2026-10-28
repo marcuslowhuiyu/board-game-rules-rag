@@ -147,8 +147,8 @@ export function createHtmlParser(): DocumentParser {
         if (t) symbolTitles.set($(el).attr('id')!, t);
       });
       // Counted before removal: the count is provenance (how much community
-      // text was stripped), and nested regions each count.
-      const communityRegionsRemoved = COMMUNITY_SELECTORS.reduce((n, sel) => n + $(sel).length, 0);
+      // text was stripped), and nested regions each count once (distinct elements).
+      const communityRegionsRemoved = $(COMMUNITY_SELECTORS.join(',')).length;
       for (const sel of [...STRIP_SELECTORS, ...COMMUNITY_SELECTORS]) $(sel).remove();
       const $root = pickRoot($) ?? $('body');
       const blocks: ParsedBlock[] = [];

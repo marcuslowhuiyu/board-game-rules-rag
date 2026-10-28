@@ -204,6 +204,15 @@ describe('createHtmlParser', () => {
     expect(doc.blocks.some((b) => b.text === 'Body only.')).toBe(true);
   });
 
+  it('counts a region matching several selectors once', async () => {
+    const parser = createHtmlParser();
+    const html = `<html><body><main><p>Star nests are wild.</p></main>
+      <div id="comments" class="comments-area"><ol class="comment-list"><li>Reader.</li></ol></div>
+    </body></html>`;
+    const doc = await parser.parse(encode(html), { contentType: 'text/html' });
+    expect(doc.communityRegionsRemoved).toBe(2);
+  });
+
   it('counts removed WordPress comment regions', async () => {
     const parser = createHtmlParser();
     const withComments = `<html><body><main><h2>FAQ</h2><p>Star nests are wild.</p></main>

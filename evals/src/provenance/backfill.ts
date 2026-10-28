@@ -44,7 +44,7 @@ export const BackfillEntrySchema = z.object({
   authority: AuthoritySchema,
   canonicalUrl: z.string().optional(),
   updatedAt: z.string().min(1),
-  proposed: ProvenanceSchema,
+  proposed: ProvenanceSchema.min(1),
   confirmed: z.boolean(),
 });
 export const BackfillPlanSchema = z.array(BackfillEntrySchema);
@@ -92,6 +92,14 @@ export async function applyBackfill(
       skip('already has provenance');
     } else if (current.updatedAt !== entry.updatedAt) {
       skip(CHANGED);
+    } else if (current.authority !== entry.authority) {
+      skip('tier changed since the plan was written');
+    } else if (
+      entry.proposed.some(
+        (p) => p.kind === 'OPERATOR_ATTESTED' && p.authority !== current.authority,
+      )
+    ) {
+      skip('attested tier does not match the stored tier');
     } else {
       try {
         await repo.setProvenance(id, entry.proposed, entry.updatedAt, now);
