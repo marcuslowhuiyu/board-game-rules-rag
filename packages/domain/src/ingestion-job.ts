@@ -6,6 +6,7 @@ import {
   IngestionJobIdSchema,
   SourceDocumentIdSchema,
 } from './ids.js';
+import { ProvenanceSchema } from './provenance.js';
 import { AuthoritySchema, SourceTypeSchema } from './source-document.js';
 
 /**
@@ -130,6 +131,10 @@ export const IngestionJobSchema = z.object({
   duplicateOf: SourceDocumentIdSchema.optional(),
   supersededDocumentId: SourceDocumentIdSchema.optional(),
   qualityReport: IngestionQualityReportSchema.optional(),
+  /** Reader-comment regions the HTML parser removed, recorded at PARSE. */
+  communityRegionsRemoved: z.number().int().nonnegative().optional(),
+  /** Evidence built at CLASSIFY; FINALIZE copies it onto the published document. */
+  provenance: ProvenanceSchema.optional(),
   version: z.string().max(80).optional(),
   forceFailureStage: IngestionStageSchema.optional(),
   error: z

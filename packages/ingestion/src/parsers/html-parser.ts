@@ -20,11 +20,10 @@ const STRIP_SELECTORS = [
   '[role="navigation"]',
   '[role="banner"]',
   '[role="contentinfo"]',
-  // WordPress reader comments: community text, never part of the source.
-  '#comments',
-  '.comments-area',
-  '.comment-list',
 ];
+
+/** WordPress reader comments: community text, never part of the source. */
+const COMMUNITY_SELECTORS = ['#comments', '.comments-area', '.comment-list'];
 
 /** A candidate root must hold at least this share of the page's text. */
 const MIN_ROOT_TEXT_SHARE = 0.5;
@@ -147,7 +146,10 @@ export function createHtmlParser(): DocumentParser {
         const t = collapseWhitespace($(el).children('title').first().text());
         if (t) symbolTitles.set($(el).attr('id')!, t);
       });
-      for (const sel of STRIP_SELECTORS) $(sel).remove();
+      // Counted before removal: the count is provenance (how much community
+      // text was stripped), and nested regions each count.
+      const communityRegionsRemoved = COMMUNITY_SELECTORS.reduce((n, sel) => n + $(sel).length, 0);
+      for (const sel of [...STRIP_SELECTORS, ...COMMUNITY_SELECTORS]) $(sel).remove();
       const $root = pickRoot($) ?? $('body');
       const blocks: ParsedBlock[] = [];
       const headingStack: { depth: number; text: string }[] = [];
@@ -229,7 +231,7 @@ export function createHtmlParser(): DocumentParser {
 
       const combined = blocks.map((b) => b.text).join('\n');
       const quality = analyzeQuality({ pageCount: 1, pageTexts: [combined] });
-      return { pageCount: 1, blocks, quality };
+      return { pageCount: 1, blocks, quality, communityRegionsRemoved };
     },
   };
 }

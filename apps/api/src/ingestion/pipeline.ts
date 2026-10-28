@@ -29,6 +29,7 @@ import type {
 } from '@bgr/persistence';
 import { PublishConflictError } from '@bgr/persistence';
 import {
+  buildProvenance,
   classifySource,
   chunkDocument,
   createHtmlParser,
@@ -383,7 +384,16 @@ async function stageParse(ctx: StageContext, job: IngestionJob): Promise<Ingesti
   // knowledge. Fail here (never inside FINALIZE) so `knowledgeRevision`
   // remains untouched.
   const qualityReport = normalizeQualityReport(parsed.quality);
-  await ctx.jobs.updateJob(job.jobId, { qualityReport }, ctx.now().toISOString());
+  await ctx.jobs.updateJob(
+    job.jobId,
+    {
+      qualityReport,
+      ...(parsed.communityRegionsRemoved !== undefined
+        ? { communityRegionsRemoved: parsed.communityRegionsRemoved }
+        : {}),
+    },
+    ctx.now().toISOString(),
+  );
   if (parsed.blocks.length === 0) {
     throw new StageError(
       'PARSE',
@@ -435,9 +445,21 @@ async function stageClassify(ctx: StageContext, job: IngestionJob): Promise<Inge
       warnings: classification.warnings,
     });
   }
+  const provenance = buildProvenance({
+    declaredAuthority: job.authority,
+    classifiedAuthority: classification.authority,
+    origin: job.source.kind === 'S3' ? 'UPLOAD' : 'URL',
+    ...(fetchState.canonicalUrl !== undefined ? { canonicalUrl: fetchState.canonicalUrl } : {}),
+    ...(fetchState.filename !== undefined ? { filename: fetchState.filename } : {}),
+    ...(job.communityRegionsRemoved !== undefined
+      ? { communityRegionsRemoved: job.communityRegionsRemoved }
+      : {}),
+    now: ctx.now().toISOString(),
+  });
   return advanceStage(ctx, job, 'CLASSIFY', {
     status: 'RUNNING',
     authority: classification.authority,
+    provenance,
     sourceType: classification.sourceType,
   });
 }
@@ -668,6 +690,7 @@ async function stageFinalize(ctx: StageContext, job: IngestionJob): Promise<Inge
     title: job.title,
     sourceType: job.sourceType,
     authority: job.authority,
+    provenance: job.provenance ?? [],
     origin: job.source.kind === 'S3' ? 'UPLOAD' : 'URL',
     contentHash: fetchState.contentHash,
     rawObjectUri: fetchState.rawUri,
