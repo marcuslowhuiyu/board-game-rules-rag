@@ -66,6 +66,7 @@ function doc(
     chunkCount: 1,
     status: over.status ?? 'CURRENT',
     supersedes: [],
+    provenance: [],
     knowledgeRevision: 1,
     createdAt: iso,
     updatedAt: iso,

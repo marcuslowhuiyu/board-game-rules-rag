@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { AuthoritySchema } from './authority.js';
+import { ProvenanceSchema } from './provenance.js';
 import { ContentIdSchema, EditionIdSchema, GameIdSchema, SourceDocumentIdSchema } from './ids.js';
 
 export const SOURCE_TYPES = [
@@ -16,16 +18,8 @@ export const SOURCE_TYPES = [
 export const SourceTypeSchema = z.enum(SOURCE_TYPES);
 export type SourceType = z.infer<typeof SourceTypeSchema>;
 
-export const AUTHORITIES = [
-  'OFFICIAL_RULES',
-  'OFFICIAL_ERRATA',
-  'DESIGNER_OR_PUBLISHER',
-  'COMMUNITY_CONSENSUS',
-  'COMMUNITY_DISCUSSION',
-  'UNKNOWN',
-] as const;
-export const AuthoritySchema = z.enum(AUTHORITIES);
-export type Authority = z.infer<typeof AuthoritySchema>;
+// Defined in authority.ts so provenance.ts can use it without an import cycle.
+export { AUTHORITIES, AuthoritySchema, type Authority } from './authority.js';
 
 /**
  * Lifecycle of a source document (MASTER_PLAN §18):
@@ -70,6 +64,8 @@ export const SourceDocumentSchema = z.object({
   status: SourceStatusSchema,
   supersedes: z.array(SourceDocumentIdSchema).default([]),
   knowledgeRevision: z.number().int().nonnegative().default(0),
+  /** Evidence behind the authority tier. Legacy rows have none. */
+  provenance: ProvenanceSchema.default([]),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
 });

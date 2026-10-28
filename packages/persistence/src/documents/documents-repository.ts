@@ -2,6 +2,7 @@ import type {
   ContentId,
   EditionId,
   GameId,
+  ProvenanceEvidence,
   SourceDocument,
   SourceDocumentId,
   SourceType,
@@ -43,6 +44,17 @@ export interface DocumentsRepository {
   ): Promise<SourceDocument | null>;
   /** Flip a document to SUPERSEDED. Idempotent — safe to call twice. */
   markSuperseded(documentId: SourceDocumentId, updatedAt: string): Promise<void>;
+  /**
+   * Replace the provenance list. Optimistic: throws `NotFoundError` if the
+   * document is missing and `ConflictError` if its stored `updatedAt` differs
+   * from `expectedUpdatedAt`.
+   */
+  setProvenance(
+    documentId: SourceDocumentId,
+    provenance: ProvenanceEvidence[],
+    expectedUpdatedAt: string,
+    updatedAt: string,
+  ): Promise<void>;
   /** Record the number of chunks emitted for a document (fills after CHUNK stage). */
   updateChunkCount(
     documentId: SourceDocumentId,
