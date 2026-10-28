@@ -87,6 +87,39 @@ export type Authority =
   | 'COMMUNITY_DISCUSSION'
   | 'UNKNOWN';
 
+export type ProvenanceEvidence =
+  | { kind: 'OPERATOR_ATTESTED'; authority: Authority; recordedAt: string }
+  | { kind: 'SOURCE_HOST'; host: string }
+  | { kind: 'UPLOADED_FILE'; filename?: string }
+  | { kind: 'COMMUNITY_HOST_DOWNGRADE'; host: string; from: Authority; to: Authority }
+  | { kind: 'COMMUNITY_CONTENT_REMOVED'; regions: number };
+
+export interface SourceDocumentView {
+  documentId: string;
+  gameId: string;
+  editionId: string;
+  contentId: string;
+  title: string;
+  sourceType: SourceType;
+  authority: Authority;
+  origin: 'UPLOAD' | 'URL';
+  version?: string;
+  publicationDate?: string;
+  effectiveDate?: string;
+  canonicalUrl?: string;
+  publisherDomain?: string;
+  contentHash: string;
+  rawObjectUri: string;
+  pageCount?: number;
+  chunkCount: number;
+  status: 'CURRENT' | 'SUPERSEDED' | 'ARCHIVED';
+  supersedes: string[];
+  knowledgeRevision: number;
+  provenance: ProvenanceEvidence[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type IngestionStage =
   | 'VALIDATE'
   | 'FETCH'
@@ -197,6 +230,7 @@ export interface ApiClient {
   uploadFile(presign: PresignedUploadResponse, file: File): Promise<void>;
   createIngestion(input: CreateIngestionJobInput): Promise<IngestionJobView>;
   getIngestion(jobId: string): Promise<IngestionJobView>;
+  getSource(sourceId: string): Promise<SourceDocumentView>;
 }
 
 export function createApiClient(baseUrl: string): ApiClient {
@@ -243,5 +277,7 @@ export function createApiClient(baseUrl: string): ApiClient {
       }),
     getIngestion: (jobId) =>
       request<IngestionJobView>(`${base}/ingestion/${encodeURIComponent(jobId)}`),
+    getSource: (sourceId) =>
+      request<SourceDocumentView>(`${base}/sources/${encodeURIComponent(sourceId)}`),
   };
 }
