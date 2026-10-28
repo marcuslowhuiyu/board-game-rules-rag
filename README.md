@@ -2,8 +2,9 @@
 
 Mobile-friendly board-game rules referee. Source-aware retrieval, bounded generative reasoning, and explicit uncertainty.
 
-Product and architecture reference: [`MASTER_PLAN.md`](./MASTER_PLAN.md).
-Working documentation and where to look next: [`CLAUDE.md`](./CLAUDE.md), [`CURRENT_STATE.md`](./CURRENT_STATE.md), [`docs/`](./docs).
+Architecture decisions: [`docs/adr/`](./docs/adr). Contributor and agent workflow: [`CLAUDE.md`](./CLAUDE.md).
+
+The planning docs (master plan, milestone specs, design docs, current state) live in a separate private repo, cloned locally as `planning/` and ignored here. Code comments that cite `MASTER_PLAN §N` refer to it.
 
 ## Repository layout
 

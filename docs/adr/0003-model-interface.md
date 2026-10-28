@@ -34,4 +34,4 @@ Model selection is an evaluation question, not an architectural commitment. The 
 
 - **Positive:** model swaps are configuration + one adapter file. Judge models in Milestone 7 use the same interface with a different config profile. Unit tests can inject fake `RulesModel` implementations.
 - **Negative:** two layers to keep in sync (interface + adapter). The Bedrock Converse structured-output feature is not uniformly supported across all Nova/Claude models — the adapter must have a JSON-mode + validation fallback and skip cleanly to it.
-- **Follow-up:** the initial `RulesQuestionInput` / `RulesAnswer` / evidence types are defined in Milestone 4. The "Nova 2 Lite" model id in the plan is a plan-time name; the concrete Bedrock model id gets pinned in config during Milestone 4 (see `docs/CONTRADICTIONS_AND_GAPS.md`).
+- **Follow-up:** the initial `RulesQuestionInput` / `RulesAnswer` / evidence types are defined in Milestone 4. The "Nova 2 Lite" model id in the plan is a plan-time name; the concrete Bedrock model id gets pinned in config during Milestone 4 (see `planning/CONTRADICTIONS_AND_GAPS.md`).

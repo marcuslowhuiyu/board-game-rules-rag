@@ -2,24 +2,33 @@
 
 You are the primary implementation agent for the **Board Game Rules RAG** project.
 
+## Planning docs are private
+
+The planning docs live in a separate private repo, `marcuslowhuiyu/board-game-rules-rag-planning`, cloned into `planning/`. The public repo ignores that folder. If `planning/` is missing, clone it there before starting.
+
+- Write design docs to `planning/specs/` and implementation plans to `planning/plans/`, not `docs/superpowers/`.
+- Commit planning changes in `planning/` itself and push them to the private repo. A change to code and docs is two commits: one in each repo.
+- Never copy planning content, the dev API URL, or other deployment details into the public repo. Scripts read the URL from the environment (`evals/scripts/dev-env.sh`).
+- ADRs stay public in `docs/adr/`.
+
 ## Read before every task, in order
 
-1. `CURRENT_STATE.md` — where the project is right now, which milestone is active, and known issues.
-2. `docs/milestones/<current-milestone>.md` — the spec for the milestone you are working on.
+1. `planning/CURRENT_STATE.md` — where the project is right now, which milestone is active, and known issues.
+2. `planning/milestones/<current-milestone>.md` — the spec for the milestone you are working on.
 3. Any ADR under `docs/adr/` that the current milestone spec references.
 4. Only the source files under `apps/`, `packages/`, `infrastructure/`, or `evals/` that are relevant to the change you are making.
 
-**Do not read `MASTER_PLAN.md` in full unless the milestone spec tells you to.** It is the long-form product/architecture reference; the milestone spec and ADRs already extract what you need. Read specific sections of it on demand.
+**Do not read `planning/MASTER_PLAN.md` in full unless the milestone spec tells you to.** It is the long-form product/architecture reference; the milestone spec and ADRs already extract what you need. Read specific sections of it on demand.
 
-**Do not read `docs/CONTRADICTIONS_AND_GAPS.md`** unless the milestone spec references a decision that is listed there as unresolved.
+**Do not read `planning/CONTRADICTIONS_AND_GAPS.md`** unless the milestone spec references a decision that is listed there as unresolved.
 
 ## Rules of engagement
 
 - Implement **only the current milestone**. Do not proactively pull in scope from future milestones. Stubs for future interfaces are allowed only when a milestone spec explicitly requires them.
 - Work on a feature branch named `feature/m<NN>-<short-slug>` (e.g. `feature/m01-domain-model`). `main` is protected.
-- Follow the workflow in `MASTER_PLAN.md` §59 (Claude Code Execution Rules): branch → read docs → implement → tests → quality checks → docs → update `CURRENT_STATE.md` → **independent Codex review** (see below) → PR.
-- Every milestone follows the Definition of Done in `MASTER_PLAN.md` §71.
-- If a required decision is missing or the plan contradicts itself, **stop and consult `docs/CONTRADICTIONS_AND_GAPS.md`**. If the answer isn't there, escalate to the user and record the new decision as an ADR before proceeding.
+- Follow the workflow in `planning/MASTER_PLAN.md` §59 (Claude Code Execution Rules): branch → read docs → implement → tests → quality checks → docs → update `planning/CURRENT_STATE.md` → **independent Codex review** (see below) → PR.
+- Every milestone follows the Definition of Done in `planning/MASTER_PLAN.md` §71.
+- If a required decision is missing or the plan contradicts itself, **stop and consult `planning/CONTRADICTIONS_AND_GAPS.md`**. If the answer isn't there, escalate to the user and record the new decision as an ADR before proceeding.
 
 ## Architectural non-negotiables
 
@@ -35,7 +44,7 @@ These are load-bearing choices; violating them requires a new ADR, not an inline
 
 ## Prioritization when values conflict
 
-`MASTER_PLAN.md` §74:
+`planning/MASTER_PLAN.md` §74:
 
 1. Correctness
 2. Evidence / provenance
@@ -64,7 +73,7 @@ If Codex fails with `400 … model is not supported when using Codex with a Chat
 ## When you finish a milestone
 
 1. All Definition-of-Done boxes ticked.
-2. `CURRENT_STATE.md` updated (replace stale entries; do not append history).
+2. `planning/CURRENT_STATE.md` updated (replace stale entries; do not append history).
 3. New ADR added under `docs/adr/` if you made an architectural decision.
 4. Independent Codex review run on the full milestone branch, with findings triaged (see above).
 5. PR description summarizes what changed, references the milestone, lists any deferred follow-ups, and includes the Codex review triage.

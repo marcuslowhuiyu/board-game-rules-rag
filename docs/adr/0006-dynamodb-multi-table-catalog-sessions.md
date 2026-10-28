@@ -6,7 +6,7 @@
 
 ## Context
 
-Milestone 1 introduces the first DynamoDB-backed entities: `Game` (with embedded `Edition[]`), `ContentPackage`, `Session`, and `Message`. `docs/CONTRADICTIONS_AND_GAPS.md` G7 flagged single-table vs multi-table as an open question. The four entities have very different access patterns:
+Milestone 1 introduces the first DynamoDB-backed entities: `Game` (with embedded `Edition[]`), `ContentPackage`, `Session`, and `Message`. `planning/CONTRADICTIONS_AND_GAPS.md` G7 flagged single-table vs multi-table as an open question. The four entities have very different access patterns:
 
 - **Games** — small dataset (dozens of games initially), read on every page load, occasionally created. Editions embedded on the row.
 - **ContentPackages** — small per game (a handful of expansions), queried by `gameId`.

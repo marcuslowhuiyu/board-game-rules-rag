@@ -4,7 +4,7 @@
  *
  *   pnpm -C evals eval:ingest
  *
- * API_BASE overrides the dev API. Local files listed in eval-sources.json
+ * API_BASE (exported by scripts/dev-env.sh) is the dev API. Local files listed in eval-sources.json
  * (official FAQ PDFs) live outside the repo; `~` is expanded.
  */
 import { readFile, writeFile } from 'node:fs/promises';
@@ -15,11 +15,14 @@ import { EvalSourcesSchema, ingestEvalGames } from '../src/ingest/plan.js';
 const configPath = (name: string) => fileURLToPath(new URL(`../config/${name}`, import.meta.url));
 const expandHome = (p: string) => (p.startsWith('~/') ? `${homedir()}${p.slice(1)}` : p);
 
+const apiBase = process.env['API_BASE'];
+if (!apiBase) throw new Error('API_BASE is not set; run `source evals/scripts/dev-env.sh` first');
+
 const sources = EvalSourcesSchema.parse(
   JSON.parse(await readFile(configPath('eval-sources.json'), 'utf8')),
 );
 const games = await ingestEvalGames({
-  apiBase: process.env['API_BASE'] ?? 'https://d1wbjv971ead09.cloudfront.net/api',
+  apiBase,
   sources,
   fetch,
   readLocal: async (p) => new Uint8Array(await readFile(expandHome(p))),

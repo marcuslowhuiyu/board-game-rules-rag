@@ -1,6 +1,6 @@
 # Evaluation Framework
 
-Retrieval evaluation (Milestone 3). Rules-answering evals arrive in M4, and the model comparison and LLM-as-judge harness in M7. Design: `docs/superpowers/specs/2026-10-27-m3-retrieval-eval-design.md`.
+Retrieval evaluation (Milestone 3). Rules-answering evals arrive in M4, and the model comparison and LLM-as-judge harness in M7. The design doc is in the private planning repo (`planning/specs/2026-10-27-m3-retrieval-eval-design.md`).
 
 ## What it measures
 
@@ -48,7 +48,7 @@ Reported per game: Recall@1/3/5, MRR, the irrelevant-result rate (top-5 chunks t
 
 ## Commands
 
-The live commands read AWS settings from env. `scripts/dev-env.sh` exports them from the deployed ingestion stage runner (embedding region, model id, dimension, vector index ARN, and table names), so the eval queries exactly what the pipeline indexed. Use Node 22 (`nvm use`).
+The live commands read AWS settings from env. `scripts/dev-env.sh` exports them from the deployed ingestion stage runner (embedding region, model id, dimension, vector index ARN, and table names), so the eval queries exactly what the pipeline indexed. It also exports `API_BASE` from the `BgrDevStack` outputs. Use Node 22 (`nvm use`).
 
 ```bash
 pnpm -C evals test                     # unit tests + the AWS-free regression subset (also part of pnpm test)
