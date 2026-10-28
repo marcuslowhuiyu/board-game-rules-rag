@@ -7,13 +7,15 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "eval:retrieval": "tsx run-retrieval-eval.ts",
-    "eval:ingest": "tsx scripts/ingest-eval-games.ts"
+    "eval:ingest": "tsx scripts/ingest-eval-games.ts",
+    "provenance:backfill": "tsx scripts/backfill-provenance.ts"
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.679.0",
     "@aws-sdk/client-s3": "^3.679.0",
     "@bgr/ai": "workspace:*",
     "@bgr/domain": "workspace:*",
+    "@bgr/ingestion": "workspace:*",
     "@bgr/persistence": "workspace:*",
     "@bgr/retrieval": "workspace:*",
     "zod": "^4.6.7"

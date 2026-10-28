@@ -142,6 +142,9 @@ importers:
       '@bgr/domain':
         specifier: workspace:*
         version: link:../packages/domain
+      '@bgr/ingestion':
+        specifier: workspace:*
+        version: link:../packages/ingestion
       '@bgr/persistence':
         specifier: workspace:*
         version: link:../packages/persistence
