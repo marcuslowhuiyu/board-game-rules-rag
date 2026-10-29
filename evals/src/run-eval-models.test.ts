@@ -1,0 +1,177 @@
+import type { PassageRanker, QuestionClassifier, ModelCallRecord } from '@bgr/ai';
+import type { RetrievedChunk, RulesRetriever } from '@bgr/retrieval';
+import { describe, expect, it } from 'vitest';
+import { CostMeter } from './cost-meter.js';
+import type { RetrievalCase } from './dataset/case-schema.js';
+import { runEval, type EvalGames } from './run-eval.js';
+import type { EvalConfig } from './scoring/aggregate.js';
+
+const config: EvalConfig = {
+  topK: 15,
+  smallCorpusThreshold: 0,
+  bars: { simple: { k: 3, minRate: 0.9 }, complex: { k: 10, minRate: 0.7 } },
+};
+const games: EvalGames = {
+  g: { gameId: 'g1', editionId: 'e1', content: { base: 'c1' }, chunks: 3 },
+};
+const chunk = (id: string, text: string, score: number): RetrievedChunk => ({
+  chunkId: id,
+  documentId: 'd',
+  gameId: 'g1',
+  editionId: 'e1',
+  contentId: 'c1',
+  authority: 'OFFICIAL_RULES',
+  sourceType: 'RULEBOOK',
+  headingPath: [],
+  pageStart: 1,
+  pageEnd: 1,
+  text,
+  score,
+});
+const retriever: RulesRetriever = {
+  async retrieve() {
+    return [
+      chunk('a', 'alpha text', 0.9),
+      chunk('b', 'beta text', 0.8),
+      chunk('c', 'gamma text', 0.7),
+    ];
+  },
+};
+const mkCase = (id: string, tier: 'simple' | 'complex' = 'simple'): RetrievalCase => ({
+  id,
+  game: 'g',
+  edition: 'base',
+  enabledContent: ['base'],
+  tier,
+  question: 'q?',
+  requiredEvidence: [{ key: `${id}/gamma`, phrase: 'gamma text', required: true }],
+  source: { url: 'https://example.com', title: 't' },
+});
+const record = (role: 'router' | 'reranker', costUsd: number): ModelCallRecord => ({
+  role,
+  modelKey: 'k',
+  modelId: 'm',
+  promptVersion: 'v',
+  inputTokens: 1,
+  outputTokens: 1,
+  latencyMs: 1,
+  costUsd,
+  attempts: 1,
+  ok: true,
+});
+
+function fakeRanker(meter: CostMeter, order: string[], fail = false) {
+  const ranker: PassageRanker & { calls: number } = {
+    calls: 0,
+    async rank() {
+      ranker.calls++;
+      meter.record(record('reranker', 0.1));
+      if (fail) throw new Error('boom');
+      return { orderedIds: order, record: record('reranker', 0.1) };
+    },
+  };
+  return ranker;
+}
+
+describe('runEval with models', () => {
+  it('scores the reordered list from a reranker', async () => {
+    const meter = new CostMeter(10);
+    const ranker = fakeRanker(meter, ['c', 'a', 'b']);
+    const report = await runEval({
+      cases: [mkCase('one')],
+      games,
+      retriever,
+      config,
+      meter,
+      ranker,
+    });
+    expect(report.cases[0]!.fullCoverageAt[1]).toBe(true);
+    expect(report.cutShort).toBe(false);
+    expect(report.rerankFallbacks).toBe(0);
+  });
+
+  it('without a reranker the retrieval order is scored', async () => {
+    const report = await runEval({ cases: [mkCase('one')], games, retriever, config });
+    expect(report.cases[0]!.fullCoverageAt[1]).toBe(false);
+    expect(report.cutShort).toBe(false);
+  });
+
+  it('counts a failed reranker call as a fallback, still costing money', async () => {
+    const meter = new CostMeter(10);
+    const ranker = fakeRanker(meter, [], true);
+    const report = await runEval({
+      cases: [mkCase('one')],
+      games,
+      retriever,
+      config,
+      meter,
+      ranker,
+    });
+    expect(report.rerankFallbacks).toBe(1);
+    expect(meter.spentUsd).toBeCloseTo(0.1);
+    // score order a, b, c: gamma is third
+    expect(report.cases[0]!.itemRanks['one/gamma']).toBe(3);
+  });
+
+  it('stops reranking once the meter is exhausted and marks cutShort', async () => {
+    const meter = new CostMeter(0);
+    const ranker = fakeRanker(meter, ['c', 'a', 'b']);
+    const report = await runEval({
+      cases: [mkCase('one'), mkCase('two')],
+      games,
+      retriever,
+      config,
+      meter,
+      ranker,
+    });
+    expect(ranker.calls).toBe(0);
+    expect(report.cutShort).toBe(true);
+    expect(report.cases).toHaveLength(2);
+  });
+
+  it('stops mid-run when the spend reaches the cap', async () => {
+    const meter = new CostMeter(0.15);
+    const ranker = fakeRanker(meter, ['c', 'a', 'b']);
+    const report = await runEval({
+      cases: [mkCase('one'), mkCase('two'), mkCase('three')],
+      games,
+      retriever,
+      config,
+      meter,
+      ranker,
+    });
+    expect(ranker.calls).toBe(2);
+    expect(report.cutShort).toBe(true);
+  });
+
+  it('reports routing against labelled tiers, using the labelled tier for scoring', async () => {
+    const meter = new CostMeter(10);
+    const classifier: QuestionClassifier = {
+      async classify() {
+        meter.record(record('router', 0.01));
+        return { tier: 'simple', record: record('router', 0.01) };
+      },
+    };
+    const report = await runEval({
+      cases: [
+        mkCase('one', 'simple'),
+        {
+          ...mkCase('two', 'complex'),
+          requiredEvidence: [
+            { key: 'two/a', phrase: 'alpha text', required: true },
+            { key: 'two/b', phrase: 'beta text', required: true },
+          ],
+        },
+      ],
+      games,
+      retriever,
+      config,
+      meter,
+      classifier,
+    });
+    expect(report.routing?.cases).toBe(2);
+    expect(report.routing?.correct).toBe(1);
+    expect(report.routing?.confusion.complex.simple).toBe(1);
+    expect(report.cases[1]!.tier).toBe('complex');
+  });
+});

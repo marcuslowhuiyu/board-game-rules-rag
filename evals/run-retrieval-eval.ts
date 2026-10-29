@@ -6,6 +6,10 @@
  * Without --dimensions it queries the deployed S3 Vectors index. With it, it
  * re-embeds the eval games' current chunks with Titan at that dimension into
  * an exact in-memory index and queries that instead (the dimension comparison).
+ *
+ * --rerank [key] reranks each case's candidates with a model and scores the whole reordered
+ * list; --route also classifies each question and reports accuracy (not gated). Both cost
+ * money and need --max-cost <usd>; paid runs need the operator's OK (see README).
  * Writes reports/retrieval-<timestamp>.json (gitignored).
  */
 import { mkdir, readdir, writeFile } from 'node:fs/promises';
@@ -20,17 +24,36 @@ import {
   loadEvalGames,
 } from './src/live/aws.js';
 import { buildLocalIndex } from './src/live/local-index.js';
+import { checkModelFlags } from './src/cli-args.js';
+import { createEvalModels } from './src/live/models.js';
 import { toMarkdown } from './src/report/markdown.js';
 import { resolveLiveGames, runEval } from './src/run-eval.js';
 import { loadEvalConfig } from './src/scoring/aggregate.js';
 
 const here = (p: string) => fileURLToPath(new URL(p, import.meta.url));
+// `--rerank` takes an optional key: a bare flag means the catalog default.
+const argv = process.argv.slice(2).flatMap((arg, i, all) => {
+  const next = all[i + 1];
+  return arg === '--rerank' && (next === undefined || next.startsWith('--'))
+    ? [arg, 'default']
+    : [arg];
+});
 const { values } = parseArgs({
+  args: argv,
   options: {
     markdown: { type: 'boolean', default: false },
     games: { type: 'string' },
     dimensions: { type: 'string' },
+    rerank: { type: 'string' },
+    route: { type: 'boolean', default: false },
+    'max-cost': { type: 'string' },
   },
+});
+const rerankRequested = values.rerank !== undefined;
+const maxCost = checkModelFlags({
+  ...(values.rerank !== undefined ? { rerank: values.rerank } : {}),
+  route: values.route,
+  ...(values['max-cost'] !== undefined ? { maxCost: values['max-cost'] } : {}),
 });
 
 const config = await loadEvalConfig(here('./config/eval.config.json'));
@@ -67,7 +90,44 @@ if (localEmbeddings) {
   index = 'live S3 Vectors index';
 }
 
-const report = { index, ...(await runEval({ cases, games: live, retriever, config })) };
+const rerankKey = values.rerank === 'default' ? undefined : values.rerank;
+const wired =
+  maxCost === undefined
+    ? undefined
+    : createEvalModels({
+        maxUsd: maxCost,
+        rerank: rerankRequested,
+        rerankKey,
+        route: values.route,
+      });
+if (wired) {
+  const planned = cases.length * ((rerankRequested ? 1 : 0) + (values.route ? 1 : 0));
+  process.stdout.write(`planned model calls: ${planned} (cap $${maxCost})\n`);
+}
+
+const result = await runEval({
+  cases,
+  games: live,
+  retriever,
+  config,
+  ...(wired ? { meter: wired.meter, ranker: wired.ranker, classifier: wired.classifier } : {}),
+});
+const report = {
+  index,
+  ...result,
+  ...(wired
+    ? {
+        models: wired.models,
+        promptVersions: wired.promptVersions,
+        modelCost: {
+          usd: wired.meter.spentUsd,
+          calls: wired.meter.calls,
+          inputTokens: wired.meter.inputTokens,
+          outputTokens: wired.meter.outputTokens,
+        },
+      }
+    : {}),
+};
 await mkdir(here('./reports/'), { recursive: true });
 const out = here(`./reports/retrieval-${report.generatedAt.replace(/[:.]/g, '-')}.json`);
 await writeFile(out, JSON.stringify(report, null, 2) + '\n');

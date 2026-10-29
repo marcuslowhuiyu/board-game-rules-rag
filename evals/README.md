@@ -59,11 +59,18 @@ pnpm -C evals exec tsx scripts/verify-dataset.ts   # check every evidence phrase
 pnpm -C evals eval:retrieval --markdown            # full eval; JSON report in evals/reports/ (gitignored)
 pnpm -C evals eval:retrieval --games seti          # one game
 pnpm -C evals eval:retrieval --dimensions 512 --markdown   # local index at 512 dimensions
+pnpm -C evals eval:retrieval --rerank --route --max-cost 1 --markdown   # paid: rerank and routing
 ```
 
 ### Comparing embedding settings
 
 `--dimensions <256|512|1024>` leaves the deployed index alone. It reads the eval games' current chunks from dev, re-embeds them with Titan at that dimension into an exact in-memory index, and runs the same cases against it. The embedding text and metadata come from `@bgr/retrieval` (`embeddingText`, `chunkVectorMetadata`), the same functions the EMBED stage uses, so only the dimension differs. Compare `--dimensions 512` with `--dimensions 1024` rather than with the live run: the live index is approximate and its vectors were written at ingest time. Re-embedding about 270 chunks costs well under a cent.
+
+### Reranking and routing
+
+`--rerank [key]` reranks each case's candidates (`topK`, 15) with the reranker model (`key` must be an approved reranker in `packages/ai/models.config.json`; bare `--rerank` uses the catalog default). The **whole reordered list** is scored, so the top-3 and top-10 bars measure the reranker. Scoring uses the case's labelled tier, never the router's. `--route` also classifies every question and reports routing accuracy and a confusion table against the labelled tiers; it is reported, not gated.
+
+Both flags call Bedrock and cost money, so **`--max-cost <usd>` is required** with either. The run prints the planned number of model calls first, counts the cost of every call (failed calls included) and stops issuing model calls once the cap is reached. Remaining cases are scored without rerank and the report is marked `cutShort`. Rerank failures fall back to retrieval-score order and are counted in `rerankFallbacks`. The report also records the models, prompt versions and total model cost. **Paid runs need the operator's OK.**
 
 The full eval is a **local, on-demand command**. It has no CI job. CI minutes are tight (ADR-0009), and a dispatch job would also need AWS access through OIDC.
 

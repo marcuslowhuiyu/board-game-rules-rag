@@ -40,6 +40,39 @@ export function toMarkdown(report: EvalReport, label?: string): string {
     }),
   ];
 
+  if (report.models && Object.keys(report.models).length > 0) {
+    const models = Object.entries(report.models)
+      .map(
+        ([role, m]) => `${role} ${m.key} (${m.modelId}, ${report.promptVersions?.[role] ?? '?'})`,
+      )
+      .join('; ');
+    lines.push('', `Models: ${models}`);
+  }
+  if (report.modelCost) {
+    const c = report.modelCost;
+    lines.push(
+      `Model cost: $${c.usd.toFixed(4)} over ${c.calls} calls (${c.inputTokens} input, ${c.outputTokens} output tokens). Rerank fallbacks: ${report.rerankFallbacks}.`,
+    );
+  }
+  if (report.cutShort) {
+    lines.push(
+      '',
+      '⚠️ Cut short: the cost cap was reached; remaining cases were scored without model calls.',
+    );
+  }
+  if (report.routing) {
+    const r = report.routing;
+    lines.push(
+      '',
+      `Routing accuracy: ${pct(r.accuracy)} (${r.correct}/${r.cases}; ${r.fallbacks} router fallbacks). Not gated.`,
+      '',
+      '| Expected / predicted | simple | complex |',
+      '|---|---|---|',
+      `| simple | ${r.confusion.simple.simple} | ${r.confusion.simple.complex} |`,
+      `| complex | ${r.confusion.complex.simple} | ${r.confusion.complex.complex} |`,
+    );
+  }
+
   for (const name of ['simple', 'complex'] as const) {
     const k = bars[name].k;
     const failed = report.cases.filter((c) => c.tier === name && !c.fullCoverageAt[k]);

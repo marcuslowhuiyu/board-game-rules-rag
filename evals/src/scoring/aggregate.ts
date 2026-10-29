@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { z } from 'zod';
+import type { RoutingResult } from './routing.js';
 import { K_VALUES, type CaseResult } from './score-case.js';
 
 // k must be one of the cutoffs scoreCase computes; any other value would fail every case.
@@ -51,6 +52,16 @@ export interface EvalReport {
   games: GameRow[];
   tiers: { simple: TierRow; complex: TierRow };
   cases: CaseResult[];
+  /** True when the cost cap stopped model calls before every case had them. */
+  cutShort: boolean;
+  /** Cases whose rerank call failed and fell back to retrieval-score order. */
+  rerankFallbacks: number;
+  /** Present when the router ran; reported, not gated. */
+  routing?: RoutingResult;
+  /** Added by the CLI. */
+  models?: Record<string, { key: string; modelId: string }>;
+  promptVersions?: Record<string, string>;
+  modelCost?: { usd: number; calls: number; inputTokens: number; outputTokens: number };
 }
 
 const mean = (xs: number[]) => (xs.length === 0 ? 0 : xs.reduce((a, b) => a + b, 0) / xs.length);
@@ -103,5 +114,7 @@ export function aggregate(
     games,
     tiers: { simple: tier('simple'), complex: tier('complex') },
     cases: results,
+    cutShort: false,
+    rerankFallbacks: 0,
   };
 }

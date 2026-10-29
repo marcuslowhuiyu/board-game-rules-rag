@@ -29,6 +29,8 @@ const report: EvalReport = {
     simple: { cases: 10, passRate: 0.95, bar: 0.9, passed: true },
     complex: { cases: 5, passRate: 0.4, bar: 0.7, passed: false },
   },
+  cutShort: false,
+  rerankFallbacks: 0,
   cases: [
     {
       id: 'seti-milestone-order',
@@ -60,5 +62,29 @@ describe('toMarkdown', () => {
     expect(toMarkdown(report, 'local index, 512 dimensions')).toMatch(
       /^## Retrieval eval — local index, 512 dimensions — 2026-10-27T00:00:00.000Z\n/,
     );
+  });
+
+  it('reports models, cost, the cut-short warning and routing', () => {
+    const md = toMarkdown({
+      ...report,
+      cutShort: true,
+      rerankFallbacks: 2,
+      models: { reranker: { key: 'nova-micro', modelId: 'apac.amazon.nova-micro-v1:0' } },
+      promptVersions: { reranker: 'reranker-v1' },
+      modelCost: { usd: 0.0123, calls: 30, inputTokens: 1000, outputTokens: 200 },
+      routing: {
+        cases: 3,
+        correct: 2,
+        accuracy: 2 / 3,
+        confusion: { simple: { simple: 1, complex: 0 }, complex: { simple: 1, complex: 1 } },
+        fallbacks: 0,
+      },
+    });
+    expect(md).toContain('Models: reranker nova-micro (apac.amazon.nova-micro-v1:0, reranker-v1)');
+    expect(md).toContain('$0.0123 over 30 calls');
+    expect(md).toContain('Rerank fallbacks: 2');
+    expect(md).toContain('Cut short');
+    expect(md).toContain('Routing accuracy: 67% (2/3');
+    expect(md).toContain('| complex | 1 | 1 |');
   });
 });
