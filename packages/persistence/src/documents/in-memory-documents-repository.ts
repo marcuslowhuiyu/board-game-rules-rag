@@ -4,6 +4,7 @@ import {
   type ContentId,
   type EditionId,
   type GameId,
+  type ProvenanceEvidence,
   type SourceDocument,
   type SourceDocumentId,
   type SourceType,
@@ -93,5 +94,19 @@ export class InMemoryDocumentsRepository implements DocumentsRepository {
     const doc = this.byId.get(documentId);
     if (!doc) throw new NotFoundError('sourceDocument', documentId);
     this.byId.set(documentId, { ...doc, chunkCount, updatedAt });
+  }
+
+  async setProvenance(
+    documentId: SourceDocumentId,
+    provenance: ProvenanceEvidence[],
+    expectedUpdatedAt: string,
+    updatedAt: string,
+  ): Promise<void> {
+    const doc = this.byId.get(documentId);
+    if (!doc) throw new NotFoundError('sourceDocument', documentId);
+    if (doc.updatedAt !== expectedUpdatedAt) {
+      throw new ConflictError(`document changed concurrently: ${documentId}`);
+    }
+    this.byId.set(documentId, { ...doc, provenance, updatedAt });
   }
 }

@@ -4,6 +4,7 @@ export * from './ids.js';
 export * from './content.js';
 export * from './game.js';
 export * from './source-document.js';
+export * from './provenance.js';
 export * from './chunk.js';
 export * from './ingestion-job.js';
 export * from './session.js';

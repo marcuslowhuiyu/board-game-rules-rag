@@ -5,6 +5,7 @@ import {
   type ContentId,
   type EditionId,
   type GameId,
+  type ProvenanceEvidence,
   type SourceDocument,
   type SourceDocumentId,
   type SourceType,
@@ -183,6 +184,38 @@ export class DynamoDocumentsRepository implements DocumentsRepository {
     } catch (err) {
       if (err instanceof ConditionalCheckFailedException) {
         throw new NotFoundError('sourceDocument', documentId);
+      }
+      throw err;
+    }
+  }
+
+  async setProvenance(
+    documentId: SourceDocumentId,
+    provenance: ProvenanceEvidence[],
+    expectedUpdatedAt: string,
+    updatedAt: string,
+  ): Promise<void> {
+    try {
+      await this.doc.send(
+        new UpdateCommand({
+          TableName: this.tables.documentsTable,
+          Key: { documentId },
+          UpdateExpression: 'SET provenance = :p, updatedAt = :u',
+          ExpressionAttributeValues: {
+            ':p': provenance,
+            ':u': updatedAt,
+            ':expected': expectedUpdatedAt,
+          },
+          ConditionExpression: 'attribute_exists(documentId) AND updatedAt = :expected',
+        }),
+      );
+    } catch (err) {
+      if (err instanceof ConditionalCheckFailedException) {
+        // The condition covers both missing and stale; tell them apart.
+        if ((await this.getDocument(documentId)) === null) {
+          throw new NotFoundError('sourceDocument', documentId);
+        }
+        throw new ConflictError(`document changed concurrently: ${documentId}`);
       }
       throw err;
     }

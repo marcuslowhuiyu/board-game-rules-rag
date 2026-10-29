@@ -1218,3 +1218,125 @@ describe('ingestion pipeline (M2 acceptance)', () => {
     });
   });
 });
+
+describe('ingestion provenance', () => {
+  let ctx: AppContext;
+  beforeEach(async () => {
+    ctx = makeTestContext({ ids: sequentialIds() });
+    await seed(ctx);
+  });
+
+  async function runUrlJob(url: string, html: string, overrides: Partial<IngestionJob> = {}) {
+    const stageCtx = makeStageContext(ctx, {
+      urlFetcher: {
+        fetch: async () => ({
+          bytes: new TextEncoder().encode(html),
+          contentType: 'text/html; charset=utf-8',
+          canonicalUrl: url,
+        }),
+      },
+    });
+    const nowIso = ctx.clock.now().toISOString();
+    const jobId = asIngestionJobId(ctx.ids.ingestionJobId());
+    await ctx.ingestionJobs.createJob(
+      IngestionJobSchema.parse({
+        jobId,
+        gameId,
+        editionId,
+        contentId,
+        title: 'FAQ',
+        sourceType: 'FAQ',
+        authority: 'OFFICIAL_ERRATA',
+        source: { kind: 'URL', url },
+        status: 'PENDING',
+        stage: 'VALIDATE',
+        completedStages: [],
+        createdAt: nowIso,
+        updatedAt: nowIso,
+        ...overrides,
+      }),
+    );
+    const result = await runFullPipeline(jobId, stageCtx);
+    return (await ctx.documents.getDocument(asSourceDocumentId(result.job.documentId!)))!;
+  }
+
+  const FAQ_HTML = `<html><body><main><h1>FAQ</h1><p>Star nests are wild.</p></main>
+    <div id="comments"><p>My house rule differs.</p></div></body></html>`;
+
+  it('URL ingest records provenance on the published document', async () => {
+    const doc = await runUrlJob('https://stonemaiergames.com/games/wingspan/rules/', FAQ_HTML);
+    expect(doc.authority).toBe('OFFICIAL_ERRATA');
+    expect(doc.provenance).toEqual([
+      { kind: 'OPERATOR_ATTESTED', authority: 'OFFICIAL_ERRATA', recordedAt: expect.any(String) },
+      { kind: 'SOURCE_HOST', host: 'stonemaiergames.com' },
+      { kind: 'COMMUNITY_CONTENT_REMOVED', regions: 1 },
+    ]);
+  });
+
+  it('community host downgrade is explained', async () => {
+    const doc = await runUrlJob(
+      'https://boardgamegeek.com/thread/1',
+      '<html><body><main><p>Star nests are wild.</p></main></body></html>',
+    );
+    expect(doc.authority).toBe('COMMUNITY_DISCUSSION');
+    expect(doc.provenance).toContainEqual({
+      kind: 'COMMUNITY_HOST_DOWNGRADE',
+      host: 'boardgamegeek.com',
+      from: 'OFFICIAL_ERRATA',
+      to: 'COMMUNITY_DISCUSSION',
+    });
+  });
+
+  it('records the uploaded file for a PDF upload', async () => {
+    const stageCtx = makeStageContext(ctx, { pdfExtractor: makeExtractor(RULEBOOK_V1_PAGES) });
+    const job = await createPdfJob(ctx, 'raw/prov.pdf', new Uint8Array([8, 8, 8]));
+    const result = await runFullPipeline(job.jobId, stageCtx);
+    const doc = await ctx.documents.getDocument(asSourceDocumentId(result.job.documentId!));
+    expect(doc?.provenance.map((e) => e.kind)).toEqual(['OPERATOR_ATTESTED', 'UPLOADED_FILE']);
+  });
+
+  it('re-upload keeps the existing document provenance (duplicate path)', async () => {
+    const stageCtx = makeStageContext(ctx, { pdfExtractor: makeExtractor(RULEBOOK_V1_PAGES) });
+    const bytes = new Uint8Array([6, 1, 6]);
+    const one = await runFullPipeline(
+      (await createPdfJob(ctx, 'raw/p1.pdf', bytes)).jobId,
+      stageCtx,
+    );
+    const docId = asSourceDocumentId(one.job.documentId!);
+    const before = (await ctx.documents.getDocument(docId))!;
+
+    const two = await runFullPipeline(
+      (await createPdfJob(ctx, 'raw/p2.pdf', bytes, { authority: 'COMMUNITY_DISCUSSION' })).jobId,
+      stageCtx,
+    );
+    expect(two.duplicate).toBe(true);
+    const after = (await ctx.documents.getDocument(docId))!;
+    expect(after.provenance).toEqual(before.provenance);
+    expect(after.authority).toBe(before.authority);
+  });
+
+  it('re-upload keeps the existing document provenance (reinstate path)', async () => {
+    const v1Bytes = new Uint8Array([6, 2, 6]);
+    const stageV1 = makeStageContext(ctx, { pdfExtractor: makeExtractor(RULEBOOK_V1_PAGES) });
+    const one = await runFullPipeline(
+      (await createPdfJob(ctx, 'raw/q1.pdf', v1Bytes)).jobId,
+      stageV1,
+    );
+    const v1Id = asSourceDocumentId(one.job.documentId!);
+    const before = (await ctx.documents.getDocument(v1Id))!;
+    await runFullPipeline(
+      (await createPdfJob(ctx, 'raw/q2.pdf', new Uint8Array([6, 3, 6]))).jobId,
+      makeStageContext(ctx, { pdfExtractor: makeExtractor(RULEBOOK_V2_PAGES) }),
+    );
+    expect((await ctx.documents.getDocument(v1Id))?.status).toBe('SUPERSEDED');
+
+    await runFullPipeline(
+      (await createPdfJob(ctx, 'raw/q3.pdf', v1Bytes, { authority: 'COMMUNITY_DISCUSSION' })).jobId,
+      stageV1,
+    );
+    const after = (await ctx.documents.getDocument(v1Id))!;
+    expect(after.status).toBe('CURRENT');
+    expect(after.provenance).toEqual(before.provenance);
+    expect(after.authority).toBe(before.authority);
+  });
+});

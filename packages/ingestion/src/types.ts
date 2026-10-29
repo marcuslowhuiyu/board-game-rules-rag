@@ -31,6 +31,8 @@ export interface ParsedDocument {
   pageCount: number;
   blocks: ParsedBlock[];
   quality: DocumentQualityReport;
+  /** Reader-comment regions the parser removed (HTML only). */
+  communityRegionsRemoved?: number;
 }
 
 export interface ChunkOutput {

@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ConflictError,
+  NotFoundError,
+  type ProvenanceEvidence,
   asContentId,
   asEditionId,
   asGameId,
@@ -24,6 +27,7 @@ const makeDoc = (over: Partial<SourceDocument> = {}): SourceDocument => ({
   chunkCount: 0,
   status: 'CURRENT',
   supersedes: [],
+  provenance: [],
   knowledgeRevision: 0,
   createdAt: iso,
   updatedAt: iso,
@@ -122,5 +126,42 @@ describe('InMemoryDocumentsRepository', () => {
     );
     const list = await repo.listDocumentsForEdition(asGameId('g_ti4'), asEditionId('e_1'));
     expect(list.map((d) => d.documentId)).toEqual(['doc_1']);
+  });
+
+  describe('setProvenance', () => {
+    const provenance: ProvenanceEvidence[] = [{ kind: 'SOURCE_HOST', host: 'example.com' }];
+    const later = '2026-10-28T00:00:00.000Z';
+
+    it('stores the list and bumps updatedAt', async () => {
+      const repo = new InMemoryDocumentsRepository();
+      await repo.createDocument(makeDoc());
+      await repo.setProvenance(asSourceDocumentId('doc_1'), provenance, iso, later);
+      const doc = await repo.getDocument(asSourceDocumentId('doc_1'));
+      expect(doc?.provenance).toEqual(provenance);
+      expect(doc?.updatedAt).toBe(later);
+    });
+
+    it('rejects a stale expectedUpdatedAt', async () => {
+      const repo = new InMemoryDocumentsRepository();
+      await repo.createDocument(makeDoc());
+      await expect(
+        repo.setProvenance(
+          asSourceDocumentId('doc_1'),
+          provenance,
+          '2020-01-01T00:00:00.000Z',
+          later,
+        ),
+      ).rejects.toBeInstanceOf(ConflictError);
+      const doc = await repo.getDocument(asSourceDocumentId('doc_1'));
+      expect(doc?.provenance).toEqual([]);
+      expect(doc?.updatedAt).toBe(iso);
+    });
+
+    it('on a missing document throws NotFoundError', async () => {
+      const repo = new InMemoryDocumentsRepository();
+      await expect(
+        repo.setProvenance(asSourceDocumentId('nope'), provenance, iso, later),
+      ).rejects.toBeInstanceOf(NotFoundError);
+    });
   });
 });

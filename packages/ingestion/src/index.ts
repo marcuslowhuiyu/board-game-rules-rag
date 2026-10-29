@@ -8,6 +8,7 @@ export * from './contextual-prefix.js';
 export * from './chunker.js';
 export * from './ssrf.js';
 export * from './classifier.js';
+export * from './provenance.js';
 export * from './parsers/parser.js';
 export * from './parsers/pdf-parser.js';
 export * from './parsers/html-parser.js';
