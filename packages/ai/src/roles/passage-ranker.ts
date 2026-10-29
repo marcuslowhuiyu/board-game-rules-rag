@@ -35,14 +35,18 @@ The passages are labelled P1, P2, ... and each is wrapped in <passage id="Pn"> .
 
 Return every passage label exactly once, most relevant first, as JSON of the form {"order": ["P7", "P2", ...]}.`;
 
-// Keep passage text from closing its own delimiter.
-const escapeClosingTag = (text: string): string => text.replace(/<\/passage/gi, '<\\/passage');
+// Passage text and heading paths come from an untrusted document: neutralise any
+// opening or closing passage tag so they cannot forge or end a delimiter.
+const escapeDelimiters = (text: string): string => text.replace(/<(\/?)passage/gi, '<\\$1passage');
 
 const labelFor = (index: number): string => `P${index + 1}`;
 
 function renderPassage(passage: RankablePassage, index: number): string {
-  const path = passage.headingPath.length > 0 ? passage.headingPath.join(' > ') : '(no heading)';
-  return `<passage id="${labelFor(index)}">\nHeading: ${path}\n${escapeClosingTag(passage.text)}\n</passage>`;
+  const path =
+    passage.headingPath.length > 0
+      ? passage.headingPath.map(escapeDelimiters).join(' > ')
+      : '(no heading)';
+  return `<passage id="${labelFor(index)}">\nHeading: ${path}\n${escapeDelimiters(passage.text)}\n</passage>`;
 }
 
 export function createPassageRanker(model: StructuredModel, entry: ModelEntry): PassageRanker {
