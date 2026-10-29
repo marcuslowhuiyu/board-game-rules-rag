@@ -74,6 +74,10 @@ Both flags call Bedrock and cost money, so **`--max-cost <usd>` is required** wi
 
 The full eval is a **local, on-demand command**. It has no CI job. CI minutes are tight (ADR-0009), and a dispatch job would also need AWS access through OIDC.
 
+### Model availability check
+
+`pnpm -C evals models:check` makes one tiny structured call (a router-style tier question) to every model in the catalog, using each entry's own region and structured-output mode, and prints a table with latency, cost and any error plus the total cost. An entry is called with the first role it is approved for (router before reranker); an entry approved for no role is reported as failed and not called. It exits non-zero if any model fails. It costs a fraction of a cent, needs AWS credentials and **needs the operator's OK**.
+
 ### Eval games and sources
 
 `config/eval-sources.json` lists each eval game's documents. Each document has a **distinct `sourceType`**, because a second document with the same type in the same content package would supersede the first. The ingest script checks this. Each source is one of:
