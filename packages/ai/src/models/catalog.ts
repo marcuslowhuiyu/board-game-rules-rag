@@ -1,0 +1,100 @@
+import { z } from 'zod';
+// A static JSON import is inlined by esbuild, so it survives the Lambda bundle.
+import bundledConfig from '../../models.config.json' with { type: 'json' };
+
+export const MODEL_ROLES = ['router', 'reranker'] as const; // 'answerer' is added in plan 3
+export type ModelRole = (typeof MODEL_ROLES)[number];
+
+export interface ModelEntry {
+  key: string;
+  displayName: string;
+  modelId: string; // Bedrock model or inference-profile id
+  region: string;
+  inputUsdPerMTok: number;
+  outputUsdPerMTok: number;
+  structuredOutput: 'native' | 'json';
+  maxTokens: number;
+  temperature: number;
+  additionalModelRequestFields?: Record<string, unknown>;
+}
+
+export interface ModelCatalog {
+  models: Record<string, ModelEntry>;
+  approved: Record<ModelRole, string[]>;
+  defaults: Record<ModelRole, string>;
+}
+
+const ModelEntrySchema = z.object({
+  key: z.string().min(1),
+  displayName: z.string().min(1),
+  modelId: z.string().min(1),
+  region: z.string().min(1),
+  inputUsdPerMTok: z.number().nonnegative(),
+  outputUsdPerMTok: z.number().nonnegative(),
+  structuredOutput: z.enum(['native', 'json']),
+  maxTokens: z.number().int().positive(),
+  temperature: z.number().min(0),
+  additionalModelRequestFields: z.record(z.string(), z.unknown()).optional(),
+});
+
+const roleRecord = <T extends z.ZodType>(value: T) => z.object({ router: value, reranker: value });
+
+export const ModelCatalogSchema = z
+  .object({
+    models: z.record(z.string(), ModelEntrySchema),
+    approved: roleRecord(z.array(z.string())),
+    defaults: roleRecord(z.string()),
+  })
+  .superRefine((catalog, ctx) => {
+    for (const [key, entry] of Object.entries(catalog.models)) {
+      if (entry.key !== key) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['models', key, 'key'],
+          message: `key must be "${key}"`,
+        });
+      }
+    }
+    for (const role of MODEL_ROLES) {
+      for (const key of catalog.approved[role]) {
+        if (!(key in catalog.models)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['approved', role],
+            message: `approved model "${key}" has no entry in models`,
+          });
+        }
+      }
+      if (!catalog.approved[role].includes(catalog.defaults[role])) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['defaults', role],
+          message: `default "${catalog.defaults[role]}" is not approved for ${role}`,
+        });
+      }
+    }
+  }) as unknown as z.ZodType<ModelCatalog>;
+
+export function loadModelCatalog(raw: unknown = bundledConfig): ModelCatalog {
+  return ModelCatalogSchema.parse(raw);
+}
+
+export function modelFor(catalog: ModelCatalog, role: ModelRole, key?: string): ModelEntry {
+  const chosen = key ?? catalog.defaults[role];
+  if (!catalog.approved[role].includes(chosen)) {
+    throw new Error(`Model "${chosen}" is not approved for ${role}`);
+  }
+  const entry = catalog.models[chosen];
+  if (!entry) throw new Error(`Model "${chosen}" has no catalog entry`);
+  return entry;
+}
+
+export function costUsd(
+  entry: ModelEntry,
+  usage: { inputTokens: number; outputTokens: number },
+): number {
+  return (
+    (usage.inputTokens * entry.inputUsdPerMTok + usage.outputTokens * entry.outputUsdPerMTok) /
+    1_000_000
+  );
+}

@@ -7,3 +7,14 @@ export {
   type TitanDimensions,
   type TitanEmbeddingsOptions,
 } from './embeddings/titan-embeddings.js';
+
+export {
+  MODEL_ROLES,
+  ModelCatalogSchema,
+  costUsd,
+  loadModelCatalog,
+  modelFor,
+  type ModelCatalog,
+  type ModelEntry,
+  type ModelRole,
+} from './models/catalog.js';
