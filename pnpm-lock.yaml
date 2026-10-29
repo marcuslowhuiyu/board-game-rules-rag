@@ -295,6 +295,9 @@ importers:
       '@bgr/persistence':
         specifier: workspace:*
         version: link:../persistence
+      '@bgr/shared':
+        specifier: workspace:*
+        version: link:../shared
       '@smithy/types':
         specifier: ^4.19.0
         version: 4.19.0
