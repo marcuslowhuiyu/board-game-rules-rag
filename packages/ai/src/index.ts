@@ -29,3 +29,16 @@ export {
   type StructuredResult,
 } from './bedrock/converse-structured.js';
 export type { ModelCallRecord, ModelCallSink } from './models/telemetry.js';
+
+export {
+  ROUTER_PROMPT_VERSION,
+  createQuestionClassifier,
+  type QuestionClassifier,
+  type QuestionTier,
+} from './roles/question-classifier.js';
+export {
+  RERANKER_PROMPT_VERSION,
+  createPassageRanker,
+  type PassageRanker,
+  type RankablePassage,
+} from './roles/passage-ranker.js';
