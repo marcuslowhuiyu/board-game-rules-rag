@@ -18,3 +18,14 @@ export {
   type ModelEntry,
   type ModelRole,
 } from './models/catalog.js';
+
+export {
+  ConverseStructuredModel,
+  ModelCallError,
+  ModelOutputError,
+  type ConverseStructuredOptions,
+  type StructuredModel,
+  type StructuredRequest,
+  type StructuredResult,
+} from './bedrock/converse-structured.js';
+export type { ModelCallRecord, ModelCallSink } from './models/telemetry.js';
