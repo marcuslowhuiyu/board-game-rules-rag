@@ -56,6 +56,16 @@ export interface EvalReport {
   cutShort: boolean;
   /** Cases whose rerank call failed and fell back to retrieval-score order. */
   rerankFallbacks: number;
+  /** True when a reranker was wired in (--rerank). */
+  rerankRequested: boolean;
+  /** Cases the model actually reranked (no fallback, not skipped). */
+  rerankedCases: number;
+  /** Candidates the model placed, summed over reranked cases. */
+  placedTotal: number;
+  /** Candidates sent to the model, summed over reranked cases. */
+  candidatesTotal: number;
+  /** Rerank fallbacks grouped by error name. */
+  rerankFallbackReasons: Record<string, number>;
   /** Present when the router ran; reported, not gated. */
   routing?: RoutingResult;
   /** Added by the CLI. */
@@ -116,5 +126,10 @@ export function aggregate(
     cases: results,
     cutShort: false,
     rerankFallbacks: 0,
+    rerankRequested: false,
+    rerankedCases: 0,
+    placedTotal: 0,
+    candidatesTotal: 0,
+    rerankFallbackReasons: {},
   };
 }

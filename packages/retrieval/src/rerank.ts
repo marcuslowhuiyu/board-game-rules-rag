@@ -6,6 +6,10 @@ export interface RerankOutcome {
   ranked: RetrievedChunk[];
   /** True when the ranker failed and the candidates are in retrieval-score order. */
   fallback: boolean;
+  /** Distinct known candidates the model ranked; 0 with `fallback: false` means the model placed nothing. */
+  placed: number;
+  /** Set when the ranker failed: the error name and message. */
+  error?: string;
 }
 
 const byScoreDescending = (candidates: readonly RetrievedChunk[]): RetrievedChunk[] =>
@@ -22,7 +26,15 @@ export async function rerankEvidence(
   ranker: PassageRanker,
   options: { logger?: Logger; correlationId?: string } = {},
 ): Promise<RerankOutcome> {
-  if (candidates.length === 0) return { ranked: [], fallback: false };
+  if (candidates.length === 0) return { ranked: [], fallback: false, placed: 0 };
+
+  const failed = (error: string): RerankOutcome => {
+    options.logger?.warn('reranker failed; using retrieval score order', {
+      correlationId: options.correlationId,
+      error,
+    });
+    return { ranked: byScoreDescending(candidates), fallback: true, placed: 0, error };
+  };
 
   let orderedIds: string[];
   try {
@@ -31,13 +43,11 @@ export async function rerankEvidence(
       candidates.map((c) => ({ id: c.chunkId, text: c.text, headingPath: c.headingPath })),
       options.correlationId,
     );
+    if (!Array.isArray(result.orderedIds))
+      return failed('InvalidRankerOutput: orderedIds is not an array');
     orderedIds = result.orderedIds;
   } catch (error) {
-    options.logger?.warn('reranker failed; using retrieval score order', {
-      correlationId: options.correlationId,
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return { ranked: byScoreDescending(candidates), fallback: true };
+    return failed(error instanceof Error ? `${error.name}: ${error.message}` : String(error));
   }
 
   const byId = new Map(candidates.map((c) => [c.chunkId, c]));
@@ -50,11 +60,12 @@ export async function rerankEvidence(
       ranked.push(chunk);
     }
   }
+  const placed = ranked.length;
   for (const chunk of byScoreDescending(candidates)) {
     if (!seen.has(chunk.chunkId)) {
       seen.add(chunk.chunkId);
       ranked.push(chunk);
     }
   }
-  return { ranked, fallback: false };
+  return { ranked, fallback: false, placed };
 }

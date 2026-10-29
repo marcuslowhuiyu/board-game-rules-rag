@@ -9,6 +9,9 @@ const num = (x: number) => x.toFixed(2);
  */
 export function toMarkdown(report: EvalReport, label?: string): string {
   const { bars } = report.config;
+  const notValid =
+    report.cutShort ||
+    (report.rerankRequested && report.cases.some((c) => c.rerank !== 'reranked'));
   const lines = [
     `## Retrieval eval — ${label ? `${label} — ` : ''}${report.generatedAt}`,
     '',
@@ -36,7 +39,7 @@ export function toMarkdown(report: EvalReport, label?: string): string {
     ...(['simple', 'complex'] as const).map((name) => {
       const t = report.tiers[name];
       const rule = name === 'simple' ? `top ${bars.simple.k}` : `all in top ${bars.complex.k}`;
-      return `| ${name} (${rule}) | ${t.cases} | ${pct(t.passRate)} | ${pct(t.bar)} | ${t.passed ? '✅' : '❌'} |`;
+      return `| ${name} (${rule}) | ${t.cases} | ${pct(t.passRate)} | ${pct(t.bar)} | ${notValid ? 'not a valid gate' : t.passed ? '✅' : '❌'} |`;
     }),
   ];
 
@@ -54,6 +57,21 @@ export function toMarkdown(report: EvalReport, label?: string): string {
       `Model cost: $${c.usd.toFixed(4)} over ${c.calls} calls (${c.inputTokens} input, ${c.outputTokens} output tokens). Rerank fallbacks: ${report.rerankFallbacks}.`,
     );
   }
+  if (report.rerankRequested) {
+    const reasons = Object.entries(report.rerankFallbackReasons)
+      .map(([reason, n]) => `${reason} ${n}`)
+      .join(', ');
+    lines.push(
+      '',
+      `Reranked ${report.rerankedCases} of ${report.cases.length} cases; model placed ${report.placedTotal} of ${report.candidatesTotal} passages; fallbacks by reason: ${reasons || 'none'}`,
+    );
+  }
+  if (notValid) {
+    lines.push(
+      '',
+      '⚠️ Tier bar results above are not a valid gate: the run was cut short or some cases fell back or were skipped.',
+    );
+  }
   if (report.cutShort) {
     lines.push(
       '',
@@ -62,9 +80,13 @@ export function toMarkdown(report: EvalReport, label?: string): string {
   }
   if (report.routing) {
     const r = report.routing;
+    const reasons = Object.entries(r.fallbackReasons)
+      .map(([reason, n]) => `${reason} ${n}`)
+      .join(', ');
+    const routeReasons = reasons ? `: ${reasons}` : '';
     lines.push(
       '',
-      `Routing accuracy: ${pct(r.accuracy)} (${r.correct}/${r.cases}; ${r.fallbacks} router fallbacks). Not gated.`,
+      `Routing accuracy: ${pct(r.accuracy)} (${r.correct}/${r.cases}; ${r.fallbacks} router fallbacks${routeReasons}). Not gated.`,
       '',
       '| Expected / predicted | simple | complex |',
       '|---|---|---|',

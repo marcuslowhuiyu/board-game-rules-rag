@@ -60,13 +60,13 @@ const record = (role: 'router' | 'reranker', costUsd: number): ModelCallRecord =
   ok: true,
 });
 
-function fakeRanker(meter: CostMeter, order: string[], fail = false) {
+function fakeRanker(meter: CostMeter, order: string[], fail: boolean | Error = false) {
   const ranker: PassageRanker & { calls: number } = {
     calls: 0,
     async rank() {
       ranker.calls++;
       meter.record(record('reranker', 0.1));
-      if (fail) throw new Error('boom');
+      if (fail) throw fail instanceof Error ? fail : new Error('boom');
       return { orderedIds: order, record: record('reranker', 0.1) };
     },
   };
@@ -173,5 +173,77 @@ describe('runEval with models', () => {
     expect(report.routing?.correct).toBe(1);
     expect(report.routing?.confusion.complex.simple).toBe(1);
     expect(report.cases[1]!.tier).toBe('complex');
+  });
+
+  it('records per-case rerank state and summary totals', async () => {
+    const meter = new CostMeter(10);
+    const ranker = fakeRanker(meter, ['c']);
+    const report = await runEval({
+      cases: [mkCase('one')],
+      games,
+      retriever,
+      config,
+      meter,
+      ranker,
+    });
+    expect(report.cases[0]).toMatchObject({
+      rerank: 'reranked',
+      rerankPlaced: 1,
+      rerankCandidates: 3,
+      routed: false,
+    });
+    expect(report).toMatchObject({
+      rerankRequested: true,
+      rerankedCases: 1,
+      placedTotal: 1,
+      candidatesTotal: 3,
+      rerankFallbackReasons: {},
+    });
+  });
+
+  it('records fallback reasons by error name and skipped cases after the cap', async () => {
+    const meter = new CostMeter(0.15);
+    const err = Object.assign(new Error('slow'), { name: 'ThrottlingException' });
+    const ranker = fakeRanker(meter, [], err);
+    const report = await runEval({
+      cases: [mkCase('one'), mkCase('two'), mkCase('three')],
+      games,
+      retriever,
+      config,
+      meter,
+      ranker,
+    });
+    expect(report.cases.map((c) => c.rerank)).toEqual(['fallback', 'fallback', 'skipped']);
+    expect(report.cases[0]!.rerankError).toBe('ThrottlingException: slow');
+    expect(report.rerankFallbackReasons).toEqual({ ThrottlingException: 2 });
+    expect(report.rerankedCases).toBe(0);
+    expect(report.cases[2]).toMatchObject({ rerankPlaced: 0, rerankCandidates: 0 });
+  });
+
+  it('marks cases skipped when no reranker was requested', async () => {
+    const report = await runEval({ cases: [mkCase('one')], games, retriever, config });
+    expect(report.cases[0]!.rerank).toBe('skipped');
+    expect(report.rerankRequested).toBe(false);
+  });
+
+  it('records routed per case and router fallback reasons', async () => {
+    const meter = new CostMeter(10);
+    const classifier: QuestionClassifier = {
+      async classify() {
+        meter.record(record('router', 0.01));
+        throw Object.assign(new Error('no'), { name: 'AccessDeniedException' });
+      },
+    };
+    const report = await runEval({
+      cases: [mkCase('one')],
+      games,
+      retriever,
+      config,
+      meter,
+      classifier,
+    });
+    expect(report.cases[0]!.routed).toBe(true);
+    expect(report.routing?.fallbacks).toBe(1);
+    expect(report.routing?.fallbackReasons).toEqual({ AccessDeniedException: 1 });
   });
 });

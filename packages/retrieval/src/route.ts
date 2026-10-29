@@ -15,6 +15,8 @@ export interface RouteOutcome {
   tier: QuestionTier;
   /** True when the classifier failed and the tier defaulted to 'complex'. */
   fallback: boolean;
+  /** Set when the classifier failed: the error name and message. */
+  error?: string;
 }
 
 /** Router failure -> 'complex': keeping more evidence is the safe direction. Never throws. */
@@ -27,10 +29,11 @@ export async function routeQuestion(
     const { tier } = await classifier.classify(question, options.correlationId);
     return { tier, fallback: false };
   } catch (error) {
+    const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
     options.logger?.warn('question router failed; treating question as complex', {
       correlationId: options.correlationId,
-      error: error instanceof Error ? error.message : String(error),
+      error: message,
     });
-    return { tier: 'complex', fallback: true };
+    return { tier: 'complex', fallback: true, error: message };
   }
 }

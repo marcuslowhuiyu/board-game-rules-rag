@@ -1,4 +1,4 @@
-import type { ModelCallRecord } from '@bgr/ai';
+import { costUsd, type ModelCallRecord, type ModelEntry } from '@bgr/ai';
 
 /**
  * Sums the cost of every model call, failed ones included (a failed call is
@@ -34,4 +34,25 @@ export class CostMeter {
   get exhausted(): boolean {
     return this.spent >= this.maxUsd;
   }
+}
+
+/** Rough up-front cost of a planned run: calls x per-call tokens, priced from the model's catalog entry. */
+export function estimateCostUsd(
+  plannedCalls: readonly {
+    entry: ModelEntry;
+    calls: number;
+    inputTokensPerCall: number;
+    outputTokensPerCall: number;
+  }[],
+): number {
+  return plannedCalls.reduce(
+    (sum, p) =>
+      sum +
+      p.calls *
+        costUsd(p.entry, {
+          inputTokens: p.inputTokensPerCall,
+          outputTokens: p.outputTokensPerCall,
+        }),
+    0,
+  );
 }

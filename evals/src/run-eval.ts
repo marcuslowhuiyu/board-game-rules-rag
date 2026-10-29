@@ -9,7 +9,7 @@ import {
 } from '@bgr/retrieval';
 import type { RetrievalCase } from './dataset/case-schema.js';
 import { aggregate, type EvalConfig, type EvalReport } from './scoring/aggregate.js';
-import { scoreRouting } from './scoring/routing.js';
+import { reasonOf, scoreRouting } from './scoring/routing.js';
 import { scoreCase, type CaseResult } from './scoring/score-case.js';
 
 /** Eval game ids per dataset game key, as written by the ingest script. */
@@ -72,29 +72,59 @@ export async function runEval(input: {
   const routed: RouteOutcome[] = [];
   let cutShort = false;
   let rerankFallbacks = 0;
+  let rerankedCases = 0;
+  let placedTotal = 0;
+  let candidatesTotal = 0;
+  const rerankFallbackReasons: Record<string, number> = {};
   for (const [i, c] of cases.entries()) {
     let ranked = await retriever.retrieve(queries[i]!);
     // The meter is checked before each call; rerank swallows model errors, but
     // every call, failed or not, reaches the meter through the model's sink.
+    let rerankState: NonNullable<CaseResult['rerank']> = 'skipped';
+    let rerankPlaced = 0;
+    let rerankCandidates = 0;
+    let rerankError: string | undefined;
     if (ranker) {
       if (meter?.exhausted) {
         cutShort = true;
       } else {
         const outcome = await rerankEvidence(c.question, ranked, ranker);
         ranked = outcome.ranked;
-        if (outcome.fallback) rerankFallbacks += 1;
+        rerankCandidates = ranked.length;
+        if (outcome.fallback) {
+          rerankState = 'fallback';
+          rerankFallbacks += 1;
+          rerankError = outcome.error;
+          const reason = reasonOf(outcome.error);
+          rerankFallbackReasons[reason] = (rerankFallbackReasons[reason] ?? 0) + 1;
+        } else {
+          rerankState = 'reranked';
+          rerankPlaced = outcome.placed;
+          rerankedCases += 1;
+          placedTotal += outcome.placed;
+          candidatesTotal += rerankCandidates;
+        }
       }
     }
     // Routing is reported only; the case's labelled tier is what scores it.
+    let wasRouted = false;
     if (classifier) {
       if (meter?.exhausted) {
         cutShort = true;
       } else {
         routed.push(await routeQuestion(c.question, classifier));
         routedExpected.push(c.tier);
+        wasRouted = true;
       }
     }
-    results.push(scoreCase(c, ranked));
+    results.push({
+      ...scoreCase(c, ranked),
+      rerank: rerankState,
+      rerankPlaced,
+      rerankCandidates,
+      ...(rerankError === undefined ? {} : { rerankError }),
+      routed: wasRouted,
+    });
   }
 
   const corpusSize = Object.fromEntries(Object.entries(games).map(([k, g]) => [k, g.chunks]));
@@ -103,6 +133,11 @@ export async function runEval(input: {
     ...report,
     cutShort,
     rerankFallbacks,
+    rerankRequested: ranker !== undefined,
+    rerankedCases,
+    placedTotal,
+    candidatesTotal,
+    rerankFallbackReasons,
     ...(classifier ? { routing: scoreRouting(routedExpected, routed) } : {}),
   };
 }

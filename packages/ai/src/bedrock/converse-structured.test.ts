@@ -177,4 +177,64 @@ describe('ConverseStructuredModel', () => {
 
     expect(regions).toEqual(['ap-southeast-1', 'us-east-1']);
   });
+
+  it('json mode skips brace text before the real object', async () => {
+    bedrock.on(ConverseCommand).resolves(reply('{P3} is most relevant: {"tier":"complex"} done'));
+    const { model } = setup();
+    const result = await model.call(request({ entry: jsonEntry() }));
+    expect(result.value).toEqual({ tier: 'complex' });
+    expect(result.record.attempts).toBe(1);
+  });
+
+  it('json mode handles a brace inside a string value', async () => {
+    const strSchema = z.object({ note: z.string() });
+    bedrock.on(ConverseCommand).resolves(reply('x {"note":"a } b { c"} y'));
+    const { model } = setup();
+    const result = await model.call({
+      ...request({ entry: jsonEntry() }),
+      schema: strSchema,
+    } as never);
+    expect((result as { value: unknown }).value).toEqual({ note: 'a } b { c' });
+  });
+
+  it('json mode with no valid object retries then throws ModelOutputError', async () => {
+    bedrock.on(ConverseCommand).resolves(reply('{P3} and {nothing} here'));
+    const { model } = setup();
+    const error = await model.call(request({ entry: jsonEntry() })).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ModelOutputError);
+    expect(bedrock.commandCalls(ConverseCommand)).toHaveLength(2);
+  });
+
+  it('a throwing telemetry sink does not change a success', async () => {
+    bedrock.on(ConverseCommand).resolves(reply('{"tier":"simple"}'));
+    const model = new ConverseStructuredModel({
+      onCall: () => {
+        throw new Error('sink down');
+      },
+    });
+    const result = await model.call(request());
+    expect(result.value).toEqual({ tier: 'simple' });
+  });
+
+  it('a throwing telemetry sink does not mask the Bedrock error', async () => {
+    bedrock.on(ConverseCommand).rejects(new Error('nope'));
+    const model = new ConverseStructuredModel({
+      onCall: () => {
+        throw new Error('sink down');
+      },
+    });
+    const error = await model.call(request()).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ModelCallError);
+  });
+
+  it('a throwing telemetry sink does not mask ModelOutputError', async () => {
+    bedrock.on(ConverseCommand).resolves(reply('nothing'));
+    const model = new ConverseStructuredModel({
+      onCall: () => {
+        throw new Error('sink down');
+      },
+    });
+    const error = await model.call(request()).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ModelOutputError);
+  });
 });

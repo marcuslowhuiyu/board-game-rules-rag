@@ -68,7 +68,46 @@ describe('rerankEvidence', () => {
   it('skips the ranker for empty candidates', async () => {
     const { ranker, rank } = rankerReturning([]);
     const out = await rerankEvidence('q', [], ranker);
-    expect(out).toEqual({ ranked: [], fallback: false });
+    expect(out).toEqual({ ranked: [], fallback: false, placed: 0 });
     expect(rank).not.toHaveBeenCalled();
+  });
+
+  it('counts placed candidates: partial order', async () => {
+    const { ranker } = rankerReturning(['c', 'x-unknown', 'c']);
+    const out = await rerankEvidence('q', candidates, ranker);
+    expect(out.placed).toBe(1);
+    expect(out.fallback).toBe(false);
+  });
+
+  it('an empty order places nothing but is not a fallback', async () => {
+    const { ranker } = rankerReturning([]);
+    const out = await rerankEvidence('q', candidates, ranker);
+    expect(out.placed).toBe(0);
+    expect(out.fallback).toBe(false);
+    expect(ids(out.ranked)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('a full order places every candidate', async () => {
+    const { ranker } = rankerReturning(['c', 'a', 'b']);
+    expect((await rerankEvidence('q', candidates, ranker)).placed).toBe(3);
+  });
+
+  it('records the error name and message when the ranker throws', async () => {
+    const err = Object.assign(new Error('slow down'), { name: 'ThrottlingException' });
+    const ranker = { rank: vi.fn().mockRejectedValue(err) } as unknown as PassageRanker;
+    const out = await rerankEvidence('q', candidates, ranker);
+    expect(out.fallback).toBe(true);
+    expect(out.placed).toBe(0);
+    expect(out.error).toBe('ThrottlingException: slow down');
+  });
+
+  it('treats a non-array orderedIds as a fallback with an error', async () => {
+    const ranker = {
+      rank: vi.fn().mockResolvedValue({ orderedIds: 'oops', record: {} }),
+    } as unknown as PassageRanker;
+    const out = await rerankEvidence('q', candidates, ranker);
+    expect(out.fallback).toBe(true);
+    expect(out.error).toBeDefined();
+    expect(ids(out.ranked)).toEqual(['a', 'b', 'c']);
   });
 });

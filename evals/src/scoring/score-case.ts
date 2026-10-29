@@ -21,6 +21,15 @@ export interface CaseResult {
   reciprocalRank: number;
   /** Share of the top-5 chunks that match no item of the case. */
   irrelevantTop5: number;
+  /** Set by the runner. 'skipped' = not requested, or the cost cap was reached. */
+  rerank?: 'reranked' | 'fallback' | 'skipped';
+  /** Distinct candidates the reranker placed (0 unless 'reranked'). */
+  rerankPlaced?: number;
+  rerankCandidates?: number;
+  /** Error name and message when the rerank call failed. */
+  rerankError?: string;
+  /** True when the router classified this case. */
+  routed?: boolean;
 }
 
 export function scoreCase(c: RetrievalCase, ranked: readonly RetrievedChunk[]): CaseResult {

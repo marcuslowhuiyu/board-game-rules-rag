@@ -31,6 +31,11 @@ const report: EvalReport = {
   },
   cutShort: false,
   rerankFallbacks: 0,
+  rerankRequested: false,
+  rerankedCases: 0,
+  placedTotal: 0,
+  candidatesTotal: 0,
+  rerankFallbackReasons: {},
   cases: [
     {
       id: 'seti-milestone-order',
@@ -78,6 +83,7 @@ describe('toMarkdown', () => {
         accuracy: 2 / 3,
         confusion: { simple: { simple: 1, complex: 0 }, complex: { simple: 1, complex: 1 } },
         fallbacks: 0,
+        fallbackReasons: {},
       },
     });
     expect(md).toContain('Models: reranker nova-micro (apac.amazon.nova-micro-v1:0, reranker-v1)');
@@ -86,5 +92,54 @@ describe('toMarkdown', () => {
     expect(md).toContain('Cut short');
     expect(md).toContain('Routing accuracy: 67% (2/3');
     expect(md).toContain('| complex | 1 | 1 |');
+  });
+
+  it('prints reranker coverage and fallbacks by reason', () => {
+    const md = toMarkdown({
+      ...report,
+      rerankRequested: true,
+      rerankFallbacks: 3,
+      rerankedCases: 7,
+      placedTotal: 90,
+      candidatesTotal: 105,
+      rerankFallbackReasons: { ThrottlingException: 2, ModelOutputError: 1 },
+      cases: Array.from({ length: 10 }, (_, i) => ({
+        ...report.cases[0]!,
+        id: `c${i}`,
+        rerank: (i < 7 ? 'reranked' : 'fallback') as 'reranked' | 'fallback',
+      })),
+    });
+    expect(md).toContain(
+      'Reranked 7 of 10 cases; model placed 90 of 105 passages; fallbacks by reason: ThrottlingException 2, ModelOutputError 1',
+    );
+  });
+
+  it('says not a valid gate when a rerank run fell back, skipped or was cut short', () => {
+    const rerankRun = {
+      ...report,
+      rerankRequested: true,
+      cases: [{ ...report.cases[0]!, rerank: 'fallback' as const }],
+    };
+    const md = toMarkdown(rerankRun);
+    expect(md).toMatch(/simple.*95%.*90%.*not a valid gate/);
+    expect(md).not.toContain('✅');
+    expect(md).not.toContain('❌');
+    const cut = toMarkdown({ ...report, cutShort: true });
+    expect(cut).toMatch(/complex.*40%.*70%.*not a valid gate/);
+    const skipped = toMarkdown({
+      ...rerankRun,
+      cases: [{ ...report.cases[0]!, rerank: 'skipped' as const }],
+    });
+    expect(skipped).toContain('not a valid gate');
+  });
+
+  it('keeps the gate verdict when every case was reranked', () => {
+    const md = toMarkdown({
+      ...report,
+      rerankRequested: true,
+      cases: [{ ...report.cases[0]!, rerank: 'reranked' as const }],
+    });
+    expect(md).toContain('✅');
+    expect(md).not.toContain('not a valid gate');
   });
 });

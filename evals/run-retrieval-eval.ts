@@ -15,6 +15,7 @@
 import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
+import { loadModelCatalog, modelFor } from '@bgr/ai';
 import { loadDataset } from './src/dataset/case-schema.js';
 import {
   createDevDocuments,
@@ -25,10 +26,17 @@ import {
 } from './src/live/aws.js';
 import { buildLocalIndex } from './src/live/local-index.js';
 import { checkModelFlags } from './src/cli-args.js';
+import { estimateCostUsd } from './src/cost-meter.js';
 import { createEvalModels } from './src/live/models.js';
 import { toMarkdown } from './src/report/markdown.js';
 import { resolveLiveGames, runEval } from './src/run-eval.js';
 import { loadEvalConfig } from './src/scoring/aggregate.js';
+
+// Rough per-call sizes for the pre-run estimate (eval estimates, not model config).
+const ROUTER_INPUT_TOKENS = 300;
+const ROUTER_OUTPUT_TOKENS = 20;
+const RERANK_INPUT_TOKENS = 15 * 500 + 300;
+const RERANK_OUTPUT_TOKENS = 120;
 
 const here = (p: string) => fileURLToPath(new URL(p, import.meta.url));
 // `--rerank` takes an optional key: a bare flag means the catalog default.
@@ -101,8 +109,33 @@ const wired =
         route: values.route,
       });
 if (wired) {
-  const planned = cases.length * ((rerankRequested ? 1 : 0) + (values.route ? 1 : 0));
-  process.stdout.write(`planned model calls: ${planned} (cap $${maxCost})\n`);
+  const catalog = loadModelCatalog();
+  const plans = [
+    ...(rerankRequested
+      ? [
+          {
+            entry: modelFor(catalog, 'reranker', rerankKey),
+            calls: cases.length,
+            inputTokensPerCall: RERANK_INPUT_TOKENS,
+            outputTokensPerCall: RERANK_OUTPUT_TOKENS,
+          },
+        ]
+      : []),
+    ...(values.route
+      ? [
+          {
+            entry: modelFor(catalog, 'router'),
+            calls: cases.length,
+            inputTokensPerCall: ROUTER_INPUT_TOKENS,
+            outputTokensPerCall: ROUTER_OUTPUT_TOKENS,
+          },
+        ]
+      : []),
+  ];
+  const planned = plans.reduce((sum, p) => sum + p.calls, 0);
+  process.stdout.write(
+    `planned model calls: ${planned}; estimated cost ≈ $${estimateCostUsd(plans).toFixed(4)} (cap $${maxCost})\n`,
+  );
 }
 
 const result = await runEval({

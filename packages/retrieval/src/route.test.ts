@@ -30,7 +30,7 @@ describe('routeQuestion', () => {
       logger: { warn } as unknown as Logger,
       correlationId: 'cid',
     });
-    expect(out).toEqual({ tier: 'complex', fallback: true });
+    expect(out).toEqual({ tier: 'complex', fallback: true, error: 'Error: boom' });
     expect(warn).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(warn.mock.calls[0])).toContain('cid');
   });

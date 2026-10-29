@@ -103,7 +103,11 @@ export class ConverseStructuredModel implements StructuredModel {
         ok,
         ...(error === undefined ? {} : { error }),
       };
-      this.onCall?.(rec);
+      try {
+        this.onCall?.(rec);
+      } catch {
+        // A faulty telemetry sink must never change the call's outcome.
+      }
       return rec;
     };
 
@@ -178,34 +182,42 @@ function textOf(output: ConverseCommandOutput): string {
 type Parsed<T> = { ok: true; value: T } | { ok: false; issue: string };
 
 function parseOutput<T>(req: StructuredRequest<T>, text: string): Parsed<T> {
-  const candidate = req.entry.structuredOutput === 'json' ? firstJsonObject(text) : text.trim();
-  if (candidate === undefined) return { ok: false, issue: 'no JSON object in the response' };
-  let json: unknown;
-  try {
-    json = JSON.parse(candidate);
-  } catch {
-    return { ok: false, issue: 'response is not valid JSON' };
+  const candidates =
+    req.entry.structuredOutput === 'json' ? jsonObjectCandidates(text) : [text.trim()];
+  if (candidates.length === 0) return { ok: false, issue: 'no JSON object in the response' };
+  let issue = 'response is not valid JSON';
+  for (const candidate of candidates) {
+    let json: unknown;
+    try {
+      json = JSON.parse(candidate);
+    } catch {
+      continue;
+    }
+    const result = req.schema.safeParse(json);
+    if (result.success) return { ok: true, value: result.data };
+    issue = result.error.issues.map((i) => i.message).join('; ');
   }
-  const result = req.schema.safeParse(json);
-  return result.success
-    ? { ok: true, value: result.data }
-    : { ok: false, issue: result.error.issues.map((i) => i.message).join('; ') };
+  return { ok: false, issue };
 }
 
-/** The first balanced `{...}` in the text, string-literal aware. */
-function firstJsonObject(text: string): string | undefined {
-  const start = text.indexOf('{');
-  if (start < 0) return undefined;
-  let depth = 0;
-  let inString = false;
-  for (let i = start; i < text.length; i++) {
-    const ch = text[i];
-    if (inString) {
-      if (ch === '\\') i++;
-      else if (ch === '"') inString = false;
-    } else if (ch === '"') inString = true;
-    else if (ch === '{') depth++;
-    else if (ch === '}' && --depth === 0) return text.slice(start, i + 1);
+/** The balanced `{...}` slice from every `{` in the text, in order, string-literal aware. */
+function jsonObjectCandidates(text: string): string[] {
+  const out: string[] = [];
+  for (let start = text.indexOf('{'); start >= 0; start = text.indexOf('{', start + 1)) {
+    let depth = 0;
+    let inString = false;
+    for (let i = start; i < text.length; i++) {
+      const ch = text[i];
+      if (inString) {
+        if (ch === '\\') i++;
+        else if (ch === '"') inString = false;
+      } else if (ch === '"') inString = true;
+      else if (ch === '{') depth++;
+      else if (ch === '}' && --depth === 0) {
+        out.push(text.slice(start, i + 1));
+        break;
+      }
+    }
   }
-  return undefined;
+  return out;
 }
