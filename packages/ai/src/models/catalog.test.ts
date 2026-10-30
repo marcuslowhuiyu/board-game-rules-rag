@@ -68,7 +68,14 @@ describe('model catalog', () => {
 
   it('costUsd prices Nova Micro usage', () => {
     const nova = modelFor(loadModelCatalog(), 'router');
-    expect(costUsd(nova, { inputTokens: 10_000, outputTokens: 200 })).toBeCloseTo(0.000378, 9);
+    expect(
+      costUsd(nova, {
+        inputTokens: 10_000,
+        outputTokens: 200,
+        cacheReadInputTokens: 0,
+        cacheWriteInputTokens: 0,
+      }),
+    ).toBeCloseTo(0.000378, 9);
   });
 
   describe('costUsd with prompt-cache tokens', () => {
@@ -88,13 +95,6 @@ describe('model catalog', () => {
       const priced = { ...luna, cacheReadUsdPerMTok: 0.01, cacheWriteUsdPerMTok: 0.125 };
       expect(costUsd(priced, { ...usage, cacheReadInputTokens: 1000 })).toBeCloseTo(
         (2 * 0.1 + 143 * 0.5 + 1000 * 0.01 + 5537 * 0.125) / 1e6,
-        12,
-      );
-    });
-
-    it('counts absent cache fields as 0', () => {
-      expect(costUsd(luna, { inputTokens: 10, outputTokens: 4 })).toBeCloseTo(
-        (10 * 0.1 + 4 * 0.5) / 1e6,
         12,
       );
     });

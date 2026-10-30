@@ -53,8 +53,10 @@ export function toMarkdown(report: EvalReport, label?: string): string {
   }
   if (report.modelCost) {
     const c = report.modelCost;
+    const cacheRead = c.cacheReadInputTokens ?? 0; // absent in reports saved before cache accounting
+    const cacheWrite = c.cacheWriteInputTokens ?? 0;
     lines.push(
-      `Model cost: $${c.usd.toFixed(4)} over ${c.calls} calls (${c.inputTokens + c.cacheReadInputTokens + c.cacheWriteInputTokens} input, ${c.outputTokens} output tokens; input includes ${c.cacheReadInputTokens} cache read and ${c.cacheWriteInputTokens} cache write). Rerank fallbacks: ${report.rerankFallbacks}.`,
+      `Model cost: $${c.usd.toFixed(4)} over ${c.calls} calls (${c.inputTokens + cacheRead + cacheWrite} input, ${c.outputTokens} output tokens; input includes ${cacheRead} cache read and ${cacheWrite} cache write). Rerank fallbacks: ${report.rerankFallbacks}.`,
     );
   }
   if (report.rerankRequested) {

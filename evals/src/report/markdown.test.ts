@@ -105,6 +105,26 @@ describe('toMarkdown', () => {
     expect(md).toContain('| complex | 1 | 1 |');
   });
 
+  it('renders 0 for cache fields missing from an older saved report', () => {
+    const {
+      cacheReadInputTokens: _r,
+      cacheWriteInputTokens: _w,
+      ...old
+    } = {
+      usd: 0.01,
+      calls: 4,
+      inputTokens: 100,
+      outputTokens: 20,
+      cacheReadInputTokens: 0,
+      cacheWriteInputTokens: 0,
+    };
+    const md = toMarkdown({ ...report, modelCost: old as never });
+    expect(md).not.toContain('NaN');
+    expect(md).toContain(
+      '$0.0100 over 4 calls (100 input, 20 output tokens; input includes 0 cache read and 0 cache write)',
+    );
+  });
+
   it('prints reranker coverage and fallbacks by reason', () => {
     const md = toMarkdown({
       ...report,

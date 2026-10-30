@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { mockClient } from 'aws-sdk-client-mock';
 import { BedrockRuntimeClient, ConverseCommand } from '@aws-sdk/client-bedrock-runtime';
 import { z } from 'zod';
-import type { ModelEntry } from '../models/catalog.js';
+import { costUsd, type ModelEntry } from '../models/catalog.js';
 import type { ModelCallRecord } from '../models/telemetry.js';
 import {
   ConverseStructuredModel,
@@ -188,6 +188,70 @@ describe('ConverseStructuredModel', () => {
     expect(records).toHaveLength(1);
     expect(records[0]).toMatchObject({ ok: false, attempts: 2, inputTokens: 20 });
     expect((error as ModelOutputError).record).toBe(records[0]);
+  });
+
+  it('sums cache tokens across attempts and carries them on ModelOutputError.record', async () => {
+    const withCache = (cacheReadInputTokens: number, cacheWriteInputTokens: number) =>
+      ({
+        output: { message: { role: 'assistant', content: [{ text: 'not json' }] } },
+        usage: {
+          inputTokens: 10,
+          outputTokens: 5,
+          totalTokens: 15,
+          cacheReadInputTokens,
+          cacheWriteInputTokens,
+        },
+      }) as never;
+    bedrock.on(ConverseCommand).resolvesOnce(withCache(0, 100)).resolvesOnce(withCache(50, 0));
+    const { model, records } = setup();
+
+    const error = (await model.call(request()).catch((e: unknown) => e)) as ModelOutputError;
+
+    expect(error).toBeInstanceOf(ModelOutputError);
+    expect(error.record).toMatchObject({
+      inputTokens: 20,
+      outputTokens: 10,
+      cacheReadInputTokens: 50,
+      cacheWriteInputTokens: 100,
+      costUsd: costUsd(entry(), {
+        inputTokens: 20,
+        outputTokens: 10,
+        cacheReadInputTokens: 50,
+        cacheWriteInputTokens: 100,
+      }),
+    });
+    expect(error.record.costUsd).toBeCloseTo((20 * 1 + 10 * 2 + 50 * 1 + 100 * 1) / 1e6, 12);
+    expect(records[0]).toBe(error.record);
+  });
+
+  it('a ModelCallError after one billed invalid attempt keeps that attempt cache tokens', async () => {
+    const failure = Object.assign(new Error('Too many requests'), { name: 'ThrottlingException' });
+    bedrock
+      .on(ConverseCommand)
+      .resolvesOnce({
+        output: { message: { role: 'assistant', content: [{ text: 'not json' }] } },
+        usage: {
+          inputTokens: 10,
+          outputTokens: 5,
+          totalTokens: 15,
+          cacheReadInputTokens: 7,
+          cacheWriteInputTokens: 100,
+        },
+      } as never)
+      .rejects(failure);
+    const { model } = setup();
+
+    const error = (await model.call(request()).catch((e: unknown) => e)) as ModelCallError;
+
+    expect(error).toBeInstanceOf(ModelCallError);
+    expect(error.record).toMatchObject({
+      attempts: 2,
+      ok: false,
+      inputTokens: 10,
+      cacheReadInputTokens: 7,
+      cacheWriteInputTokens: 100,
+    });
+    expect(error.record.costUsd).toBeCloseTo((10 * 1 + 5 * 2 + 7 * 1 + 100 * 1) / 1e6, 12);
   });
 
   it('wraps Bedrock failures in ModelCallError and still reports telemetry', async () => {

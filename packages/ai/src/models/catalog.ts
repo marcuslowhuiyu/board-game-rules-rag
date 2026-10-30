@@ -103,8 +103,8 @@ export function costUsd(
   usage: {
     inputTokens: number;
     outputTokens: number;
-    cacheReadInputTokens?: number;
-    cacheWriteInputTokens?: number;
+    cacheReadInputTokens: number;
+    cacheWriteInputTokens: number;
   },
 ): number {
   const cacheRead = entry.cacheReadUsdPerMTok ?? entry.inputUsdPerMTok;
@@ -112,8 +112,8 @@ export function costUsd(
   return (
     (usage.inputTokens * entry.inputUsdPerMTok +
       usage.outputTokens * entry.outputUsdPerMTok +
-      (usage.cacheReadInputTokens ?? 0) * cacheRead +
-      (usage.cacheWriteInputTokens ?? 0) * cacheWrite) /
+      usage.cacheReadInputTokens * cacheRead +
+      usage.cacheWriteInputTokens * cacheWrite) /
     1_000_000
   );
 }

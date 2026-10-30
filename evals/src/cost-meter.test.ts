@@ -62,19 +62,6 @@ describe('estimateCostUsd', () => {
     ]);
     expect(usd).toBeCloseTo(0.0077, 8);
   });
-  it('prices planned cache tokens, defaulting to the input price', () => {
-    const usd = estimateCostUsd([
-      {
-        entry,
-        calls: 2,
-        inputTokensPerCall: 100,
-        outputTokensPerCall: 10,
-        cacheWriteInputTokensPerCall: 1000,
-      },
-    ]);
-    // 2 * ((100 + 1000) * 0.5 + 10 * 2) / 1e6
-    expect(usd).toBeCloseTo(0.00114, 9);
-  });
   it('is zero with no plans', () => {
     expect(estimateCostUsd([])).toBe(0);
   });

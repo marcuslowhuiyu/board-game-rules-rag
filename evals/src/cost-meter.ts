@@ -54,7 +54,6 @@ export function estimateCostUsd(
     calls: number;
     inputTokensPerCall: number;
     outputTokensPerCall: number;
-    cacheWriteInputTokensPerCall?: number;
   }[],
 ): number {
   return plannedCalls.reduce(
@@ -64,7 +63,8 @@ export function estimateCostUsd(
         costUsd(p.entry, {
           inputTokens: p.inputTokensPerCall,
           outputTokens: p.outputTokensPerCall,
-          cacheWriteInputTokens: p.cacheWriteInputTokensPerCall ?? 0,
+          cacheReadInputTokens: 0,
+          cacheWriteInputTokens: 0,
         }),
     0,
   );
