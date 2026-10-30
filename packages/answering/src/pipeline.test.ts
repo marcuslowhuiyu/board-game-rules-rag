@@ -15,6 +15,7 @@ import {
   ModelUnavailableError,
   createAnswerPipeline,
   recordModelCall,
+  setUnroutedCallListener,
   type SourceRecord,
 } from './pipeline.js';
 import { singaporeDayKey, type SpendLedger } from './spend-ledger.js';
@@ -73,6 +74,8 @@ function setup(
     spent?: number;
     retrieved?: RetrievedChunk[];
     answererError?: Error;
+    missingSources?: string[];
+    addError?: Error;
   } = {},
 ) {
   const order: string[] = [];
@@ -105,11 +108,18 @@ function setup(
   });
   const ledger: SpendLedger = {
     spentUsd: vi.fn(async () => opts.spent ?? 0),
-    add: vi.fn(async () => undefined),
+    add: vi.fn(async () => {
+      if (opts.addError) throw opts.addError;
+    }),
   };
+  const logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() };
   const sources = vi.fn(async (cs: readonly RetrievedChunk[]) => {
     order.push('sources');
-    return new Map(cs.map((c) => [c.chunkId, source(c)]));
+    return new Map(
+      cs
+        .filter((c) => !opts.missingSources?.includes(c.chunkId))
+        .map((c) => [c.chunkId, source(c)]),
+    );
   });
   const pipeline = createAnswerPipeline({
     classifier: { classify } as unknown as QuestionClassifier,
@@ -121,6 +131,7 @@ function setup(
     dailyCapUsd: 1,
     limits: { simple: 3, complex: 10 },
     now: () => NOW,
+    logger: logger as never,
   });
   const seen: ModelCallRecord[] = [];
   const run = () =>
@@ -131,7 +142,7 @@ function setup(
       },
       (r) => seen.push(r),
     );
-  return { run, order, classify, retrieve, rank, answer, ledger, seen };
+  return { run, order, classify, retrieve, rank, answer, ledger, seen, logger, sources };
 }
 
 describe('answer pipeline', () => {
@@ -186,6 +197,32 @@ describe('answer pipeline', () => {
     expect(vi.mocked(t.ledger.add).mock.calls[0]?.[1]).toBeCloseTo(0.013);
   });
 
+  it('logs a ModelOutputError at error level as a model failure', async () => {
+    const t = setup({ answererError: new ModelOutputError('bad json', rec('answerer', 0)) });
+    await t.run();
+    expect(t.logger.error).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ modelFailure: true, correlationId: 'cid' }),
+    );
+  });
+
+  it('still returns the answer and logs the amount when ledger.add fails', async () => {
+    const t = setup({ addError: new Error('ddb down') });
+    const out = await t.run();
+    expect(out.answer.certainty).toBe('DEFINITIVE');
+    expect(t.logger.error).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ day: DAY, usd: expect.closeTo(0.013, 6) }),
+    );
+  });
+
+  it('fills the keep limit from later candidates when some have no source', async () => {
+    // reranked order is c14, c13, c12, c11 ...; c14 and c13 have no source
+    const t = setup({ missingSources: ['c14', 'c13'] });
+    const out = await t.run();
+    expect(out.passages.map((c) => c.chunkId)).toEqual(['c12', 'c11', 'c10']);
+  });
+
   it('is INCONCLUSIVE without calling the answerer when no passages are found', async () => {
     const t = setup({ retrieved: [] });
     const out = await t.run();
@@ -208,5 +245,59 @@ describe('singaporeDayKey', () => {
   it('uses the Singapore calendar day', () => {
     expect(singaporeDayKey(new Date('2026-10-30T16:30:00Z'))).toBe('2026-10-31');
     expect(singaporeDayKey(new Date('2026-10-30T15:59:00Z'))).toBe('2026-10-30');
+  });
+});
+
+describe('recordModelCall routing', () => {
+  it('keeps concurrent runs separate', async () => {
+    const tick = () => new Promise((r) => setTimeout(r, 0));
+    const costs: Record<string, number> = { a: 0.1, b: 0.2 };
+    const ledger: SpendLedger = { spentUsd: async () => 0, add: vi.fn(async () => undefined) };
+    const pipeline = createAnswerPipeline({
+      classifier: {
+        classify: async (q: string) => {
+          await tick();
+          recordModelCall(rec('router', costs[q] as number));
+          return { tier: 'simple', record: rec('router', 0) };
+        },
+      } as unknown as QuestionClassifier,
+      retriever: { retrieve: async () => [] } as RulesRetriever,
+      ranker: { rank: async () => ({ orderedIds: [] }) } as unknown as PassageRanker,
+      answerer: {} as RulesAnswerer,
+      sources: async () => new Map(),
+      ledger,
+      dailyCapUsd: 1,
+      limits: { simple: 3, complex: 10 },
+      now: () => NOW,
+      logger: { error: vi.fn(), warn: vi.fn() } as never,
+    });
+    const seenA: number[] = [];
+    const seenB: number[] = [];
+    const go = (q: string, seen: number[]) =>
+      pipeline.answer({ query: { text: q } as never, correlationId: q }, (r) =>
+        seen.push(r.costUsd),
+      );
+    const [a, b] = await Promise.all([go('a', seenA), go('b', seenB)]);
+    expect(a.calls.map((c) => c.costUsd)).toEqual([0.1]);
+    expect(b.calls.map((c) => c.costUsd)).toEqual([0.2]);
+    expect(seenA).toEqual([0.1]);
+    expect(seenB).toEqual([0.2]);
+    const added = vi
+      .mocked(ledger.add)
+      .mock.calls.map((c) => c[1])
+      .sort();
+    expect(added).toEqual([0.1, 0.2]);
+  });
+
+  it('does not throw outside a run and reports the unrouted call', () => {
+    const listener = vi.fn();
+    setUnroutedCallListener(listener);
+    try {
+      const r = rec('answerer', 0.5);
+      expect(() => recordModelCall(r)).not.toThrow();
+      expect(listener).toHaveBeenCalledWith(r);
+    } finally {
+      setUnroutedCallListener(undefined);
+    }
   });
 });

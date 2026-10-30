@@ -52,10 +52,23 @@ export type SourceRecord = CitedSource & {
  * swallow. Build the router, reranker and answerer `ConverseStructuredModel`s
  * with `onCall: recordModelCall`. The collector is found via AsyncLocalStorage,
  * so concurrent requests in one Lambda never mix their costs; a call made
- * outside a pipeline run is ignored.
+ * outside a pipeline run goes to `setUnroutedCallListener`'s listener, if any.
  */
 const collectors = new AsyncLocalStorage<(record: ModelCallRecord) => void>();
-export const recordModelCall: ModelCallSink = (record) => collectors.getStore()?.(record);
+let unroutedListener: ((record: ModelCallRecord) => void) | undefined;
+
+/** Called with any record recorded outside a pipeline run (a mis-wired sink); wire it to a logger. */
+export function setUnroutedCallListener(
+  listener: ((record: ModelCallRecord) => void) | undefined,
+): void {
+  unroutedListener = listener;
+}
+
+export const recordModelCall: ModelCallSink = (record) => {
+  const collect = collectors.getStore();
+  if (collect) collect(record);
+  else unroutedListener?.(record);
+};
 
 export interface AnswerPipelineDeps {
   classifier: QuestionClassifier;
@@ -68,7 +81,8 @@ export interface AnswerPipelineDeps {
   dailyCapUsd: number;
   limits: EvidenceLimits;
   now: () => Date;
-  logger?: Logger;
+  /** Required: a failed ledger write is only visible in the log. */
+  logger: Logger;
 }
 
 export interface AnswerOutcome {
@@ -91,14 +105,17 @@ export function createAnswerPipeline(deps: AnswerPipelineDeps): {
     day: string,
   ): Promise<Omit<AnswerOutcome, 'calls'>> {
     const { query, correlationId } = input;
-    const options = { ...(logger ? { logger } : {}), correlationId };
+    const options = { logger, correlationId };
 
     const route = await routeQuestion(query.text, deps.classifier, options);
     const candidates = await deps.retriever.retrieve(query);
     const { ranked } = await rerankEvidence(query.text, candidates, deps.ranker, options);
-    const kept = ranked.slice(0, evidenceLimit(route.tier, deps.limits));
-    const found = kept.length === 0 ? new Map<string, SourceRecord>() : await deps.sources(kept);
-    const passages = kept.filter((c) => found.has(c.chunkId));
+    // Look up every reranked candidate, so chunks without a source do not shrink the kept set.
+    const found =
+      ranked.length === 0 ? new Map<string, SourceRecord>() : await deps.sources(ranked);
+    const passages = ranked
+      .filter((c) => found.has(c.chunkId))
+      .slice(0, evidenceLimit(route.tier, deps.limits));
 
     if (passages.length === 0) {
       return {
@@ -130,7 +147,8 @@ export function createAnswerPipeline(deps: AnswerPipelineDeps): {
       return { answer: validateAnswer(output, labels, found), passages, tier: route.tier };
     } catch (error) {
       if (error instanceof ModelOutputError) {
-        logger?.warn('answerer returned unusable output', {
+        logger.error('answerer returned unusable output', {
+          modelFailure: true,
           correlationId,
           day,
           error: `${error.name}: ${error.message}`,
@@ -167,7 +185,7 @@ export function createAnswerPipeline(deps: AnswerPipelineDeps): {
           try {
             await deps.ledger.add(day, total);
           } catch (error) {
-            logger?.error('failed to record AI spend', {
+            logger.error('failed to record AI spend', {
               correlationId: input.correlationId,
               day,
               usd: total,
