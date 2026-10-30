@@ -35,6 +35,7 @@ interface Corpus {
 // The subset's corpus is tiny by design, so nothing is excluded as a small corpus here.
 const config: EvalConfig = {
   topK: 15,
+  rerankTopN: 10,
   smallCorpusThreshold: 0,
   bars: { simple: { k: 3, minRate: 0.9 }, complex: { k: 10, minRate: 0.7 } },
 };

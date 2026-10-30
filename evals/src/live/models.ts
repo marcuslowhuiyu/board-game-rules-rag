@@ -30,6 +30,8 @@ export function createEvalModels(options: {
   rerank: boolean;
   rerankKey?: string | undefined;
   route: boolean;
+  /** Passages the reranker is asked to order (config `rerankTopN`); required with rerank. */
+  rerankTopN?: number;
   catalog?: ModelCatalog;
 }): EvalModels {
   const catalog = options.catalog ?? loadModelCatalog();
@@ -38,7 +40,8 @@ export function createEvalModels(options: {
   const out: EvalModels = { meter, models: {}, promptVersions: {} };
   if (options.rerank) {
     const entry = modelFor(catalog, 'reranker', options.rerankKey);
-    out.ranker = createPassageRanker(model, entry);
+    if (options.rerankTopN === undefined) throw new Error('rerankTopN is required with rerank');
+    out.ranker = createPassageRanker(model, entry, { maxRanked: options.rerankTopN });
     out.models['reranker'] = { key: entry.key, modelId: entry.modelId };
     out.promptVersions['reranker'] = RERANKER_PROMPT_VERSION;
   }

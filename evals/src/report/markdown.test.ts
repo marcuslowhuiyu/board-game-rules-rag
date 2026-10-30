@@ -7,6 +7,7 @@ const report: EvalReport = {
   config: {
     topK: 15,
     smallCorpusThreshold: 30,
+    rerankTopN: 10,
     bars: { simple: { k: 3, minRate: 0.9 }, complex: { k: 10, minRate: 0.7 } },
   },
   games: [
@@ -34,6 +35,7 @@ const report: EvalReport = {
   rerankRequested: false,
   rerankedCases: 0,
   placedTotal: 0,
+  expectedPlacements: 0,
   candidatesTotal: 0,
   rerankFallbackReasons: {},
   cases: [
@@ -75,7 +77,7 @@ describe('toMarkdown', () => {
       cutShort: true,
       rerankFallbacks: 2,
       models: { reranker: { key: 'nova-micro', modelId: 'apac.amazon.nova-micro-v1:0' } },
-      promptVersions: { reranker: 'reranker-v1' },
+      promptVersions: { reranker: 'reranker-v2' },
       modelCost: { usd: 0.0123, calls: 30, inputTokens: 1000, outputTokens: 200 },
       routing: {
         cases: 3,
@@ -86,7 +88,7 @@ describe('toMarkdown', () => {
         fallbackReasons: {},
       },
     });
-    expect(md).toContain('Models: reranker nova-micro (apac.amazon.nova-micro-v1:0, reranker-v1)');
+    expect(md).toContain('Models: reranker nova-micro (apac.amazon.nova-micro-v1:0, reranker-v2)');
     expect(md).toContain('$0.0123 over 30 calls');
     expect(md).toContain('Rerank fallbacks: 2');
     expect(md).toContain('Cut short');
@@ -101,6 +103,7 @@ describe('toMarkdown', () => {
       rerankFallbacks: 3,
       rerankedCases: 7,
       placedTotal: 90,
+      expectedPlacements: 70,
       candidatesTotal: 105,
       rerankFallbackReasons: { ThrottlingException: 2, ModelOutputError: 1 },
       cases: Array.from({ length: 10 }, (_, i) => ({
@@ -110,7 +113,7 @@ describe('toMarkdown', () => {
       })),
     });
     expect(md).toContain(
-      'Reranked 7 of 10 cases; model placed 90 of 105 passages; fallbacks by reason: ThrottlingException 2, ModelOutputError 1',
+      'Reranked 7 of 10 cases; model placed 90 of 70 requested (105 candidates); fallbacks by reason: ThrottlingException 2, ModelOutputError 1',
     );
   });
 

@@ -12,6 +12,8 @@ const BarSchema = z.object({
 export const EvalConfigSchema = z.object({
   /** Candidates the retriever returns per question. */
   topK: z.number().int().min(10).max(100),
+  /** Passages the reranker is asked to order (the most relevant N, most relevant first). */
+  rerankTopN: z.number().int().positive(),
   /** Games with fewer chunks than this are reported but left out of the tier bars. */
   smallCorpusThreshold: z.number().int().nonnegative(),
   bars: z.object({ simple: BarSchema, complex: BarSchema }),
@@ -62,6 +64,8 @@ export interface EvalReport {
   rerankedCases: number;
   /** Candidates the model placed, summed over reranked cases. */
   placedTotal: number;
+  /** Placements the model was asked for, summed over reranked cases: min(rerankTopN, candidates). */
+  expectedPlacements: number;
   /** Candidates sent to the model, summed over reranked cases. */
   candidatesTotal: number;
   /** Rerank fallbacks grouped by error name. */
@@ -129,6 +133,7 @@ export function aggregate(
     rerankRequested: false,
     rerankedCases: 0,
     placedTotal: 0,
+    expectedPlacements: 0,
     candidatesTotal: 0,
     rerankFallbackReasons: {},
   };

@@ -49,6 +49,7 @@ describe('model catalog', () => {
   });
 
   it('GPT-6 Luna sends reasoning effort in the nested reasoning field', () => {
+    // Bedrock rejects top-level `reasoning_effort` and temperature for GPT-6 Luna.
     expect(loadModelCatalog().models['gpt-6-luna']?.additionalModelRequestFields).toEqual({
       text: { format: { strict: true } },
       reasoning: { effort: 'low' },

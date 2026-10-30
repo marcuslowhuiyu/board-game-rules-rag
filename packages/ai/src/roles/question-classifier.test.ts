@@ -50,7 +50,7 @@ describe('question classifier', () => {
     const req = requests[0]!;
     expect(req.role).toBe('router');
     expect(req.entry).toBe(entry);
-    expect(req.promptVersion).toBe('router-v1');
+    expect(req.promptVersion).toBe('router-v2');
     expect(req.correlationId).toBe('corr-1');
     expect(req.user).toContain('Q?');
     expect(req.jsonSchema['additionalProperties']).toBe(false);
@@ -59,5 +59,18 @@ describe('question classifier', () => {
   it('rejects a tier outside the schema', async () => {
     const { model } = fake({ tier: 'medium' });
     await expect(createQuestionClassifier(model, entry).classify('Q?')).rejects.toThrow();
+  });
+
+  it('prompt has the tie-break rule, examples, and no eval-dataset games', async () => {
+    const { model, requests } = fake({ tier: 'simple' });
+    await createQuestionClassifier(model, entry).classify('Q?');
+    const system = requests[0]!.system;
+    expect(system).toContain(
+      'If one rule in one place answers the question, choose simple, even if the question is long or mentions several game terms.',
+    );
+    expect(system.match(/Example/g)).toHaveLength(4);
+    for (const banned of ['SETI', 'Ticket to Ride', 'Wingspan']) {
+      expect(system.toLowerCase()).not.toContain(banned.toLowerCase());
+    }
   });
 });

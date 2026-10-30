@@ -3,7 +3,7 @@ import { createEvalModels } from './models.js';
 
 describe('createEvalModels', () => {
   it('wires the catalog default reranker and router without calling anything', () => {
-    const m = createEvalModels({ maxUsd: 1, rerank: true, route: true });
+    const m = createEvalModels({ maxUsd: 1, rerank: true, route: true, rerankTopN: 10 });
     expect(m.ranker).toBeDefined();
     expect(m.classifier).toBeDefined();
     expect(m.models['reranker']!.key).toBeTruthy();
@@ -13,7 +13,13 @@ describe('createEvalModels', () => {
 
   it('rejects an unapproved reranker key', () => {
     expect(() =>
-      createEvalModels({ maxUsd: 1, rerank: true, rerankKey: 'nope', route: false }),
+      createEvalModels({
+        maxUsd: 1,
+        rerank: true,
+        rerankKey: 'nope',
+        route: false,
+        rerankTopN: 10,
+      }),
     ).toThrow(/not approved/);
   });
 

@@ -74,6 +74,7 @@ export async function runEval(input: {
   let rerankFallbacks = 0;
   let rerankedCases = 0;
   let placedTotal = 0;
+  let expectedPlacements = 0;
   let candidatesTotal = 0;
   const rerankFallbackReasons: Record<string, number> = {};
   for (const [i, c] of cases.entries()) {
@@ -102,6 +103,7 @@ export async function runEval(input: {
           rerankPlaced = outcome.placed;
           rerankedCases += 1;
           placedTotal += outcome.placed;
+          expectedPlacements += Math.min(config.rerankTopN, rerankCandidates);
           candidatesTotal += rerankCandidates;
         }
       }
@@ -136,6 +138,7 @@ export async function runEval(input: {
     rerankRequested: ranker !== undefined,
     rerankedCases,
     placedTotal,
+    expectedPlacements,
     candidatesTotal,
     rerankFallbackReasons,
     ...(classifier ? { routing: scoreRouting(routedExpected, routed) } : {}),

@@ -8,6 +8,7 @@ import type { EvalConfig } from './scoring/aggregate.js';
 
 const config: EvalConfig = {
   topK: 15,
+  rerankTopN: 2,
   smallCorpusThreshold: 0,
   bars: { simple: { k: 3, minRate: 0.9 }, complex: { k: 10, minRate: 0.7 } },
 };
@@ -196,6 +197,7 @@ describe('runEval with models', () => {
       rerankRequested: true,
       rerankedCases: 1,
       placedTotal: 1,
+      expectedPlacements: 2, // min(rerankTopN 2, 3 candidates)
       candidatesTotal: 3,
       rerankFallbackReasons: {},
     });

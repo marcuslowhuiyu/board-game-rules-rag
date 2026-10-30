@@ -36,7 +36,7 @@ import { loadEvalConfig } from './src/scoring/aggregate.js';
 const ROUTER_INPUT_TOKENS = 300;
 const ROUTER_OUTPUT_TOKENS = 20;
 const RERANK_INPUT_TOKENS = 15 * 500 + 300;
-const RERANK_OUTPUT_TOKENS = 120;
+const RERANK_OUTPUT_TOKENS = 60;
 
 const here = (p: string) => fileURLToPath(new URL(p, import.meta.url));
 // `--rerank` takes an optional key: a bare flag means the catalog default.
@@ -107,6 +107,7 @@ const wired =
         rerank: rerankRequested,
         rerankKey,
         route: values.route,
+        rerankTopN: config.rerankTopN,
       });
 if (wired) {
   const catalog = loadModelCatalog();

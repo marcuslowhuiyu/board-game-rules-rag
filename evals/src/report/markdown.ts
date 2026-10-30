@@ -63,7 +63,7 @@ export function toMarkdown(report: EvalReport, label?: string): string {
       .join(', ');
     lines.push(
       '',
-      `Reranked ${report.rerankedCases} of ${report.cases.length} cases; model placed ${report.placedTotal} of ${report.candidatesTotal} passages; fallbacks by reason: ${reasons || 'none'}`,
+      `Reranked ${report.rerankedCases} of ${report.cases.length} cases; model placed ${report.placedTotal} of ${report.expectedPlacements} requested (${report.candidatesTotal} candidates); fallbacks by reason: ${reasons || 'none'}`,
     );
   }
   if (notValid) {
