@@ -22,7 +22,7 @@
       "maxTokens": 1024,
       "additionalModelRequestFields": {
         "text": { "format": { "strict": true } },
-        "reasoning_effort": "low"
+        "reasoning": { "effort": "low" }
       }
     }
   },

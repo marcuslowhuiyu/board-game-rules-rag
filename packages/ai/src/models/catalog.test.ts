@@ -48,6 +48,13 @@ describe('model catalog', () => {
     ).toThrow();
   });
 
+  it('GPT-6 Luna sends reasoning effort in the nested reasoning field', () => {
+    expect(loadModelCatalog().models['gpt-6-luna']?.additionalModelRequestFields).toEqual({
+      text: { format: { strict: true } },
+      reasoning: { effort: 'low' },
+    });
+  });
+
   it('modelFor rejects an unapproved key', () => {
     expect(() => modelFor(loadModelCatalog(), 'router', 'gpt-6-luna')).toThrow(
       /not approved for router/,
