@@ -20,6 +20,27 @@ describe('InMemorySpendLedger', () => {
     expect(await ledger.spentUsd('2026-10-31')).toBe(0);
   });
 
+  it('rejects a malformed day on spentUsd and add', async () => {
+    const ledger = new InMemorySpendLedger();
+    await expect(ledger.spentUsd('30-10-2026')).rejects.toThrow(/day/);
+    await expect(ledger.add('30-10-2026', 0.1)).rejects.toThrow(/day/);
+  });
+
+  it.each(['2026-02-31', '2026-13-01', '2026-00-10', '2026-04-31'])(
+    'rejects the non-existent calendar day %s',
+    async (day) => {
+      const ledger = new InMemorySpendLedger();
+      await expect(ledger.add(day, 0.1)).rejects.toThrow(/day/);
+      await expect(ledger.spentUsd(day)).rejects.toThrow(/day/);
+    },
+  );
+
+  it('accepts a real calendar day at a month end', async () => {
+    const ledger = new InMemorySpendLedger();
+    await ledger.add('2026-10-31', 0.1);
+    expect(await ledger.spentUsd('2026-10-31')).toBeCloseTo(0.1);
+  });
+
   it('rejects a negative or non-finite amount and records nothing', async () => {
     const ledger = new InMemorySpendLedger();
     await expect(ledger.add('2026-10-30', -1)).rejects.toThrow(/usd/);

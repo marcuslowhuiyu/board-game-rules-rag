@@ -72,4 +72,34 @@ describe('DynamoSpendLedger.spentUsd', () => {
     docMock.on(GetCommand).resolves({});
     expect(await ledger.spentUsd('2026-10-31')).toBe(0);
   });
+
+  it('rejects an item whose usd is a string rather than returning 0', async () => {
+    docMock.on(GetCommand).resolves({ Item: { pk: 'ai-spend#2026-10-30', usd: '0.5' } });
+    await expect(ledger.spentUsd('2026-10-30')).rejects.toThrow(
+      'corrupt spend item for 2026-10-30',
+    );
+  });
+
+  it('rejects an item with no usd rather than returning 0', async () => {
+    docMock.on(GetCommand).resolves({ Item: { pk: 'ai-spend#2026-10-30' } });
+    await expect(ledger.spentUsd('2026-10-30')).rejects.toThrow(
+      'corrupt spend item for 2026-10-30',
+    );
+  });
+
+  it('rejects an item with a negative or NaN usd', async () => {
+    docMock.on(GetCommand).resolves({ Item: { pk: 'ai-spend#2026-10-30', usd: -1 } });
+    await expect(ledger.spentUsd('2026-10-30')).rejects.toThrow(
+      'corrupt spend item for 2026-10-30',
+    );
+    docMock.on(GetCommand).resolves({ Item: { pk: 'ai-spend#2026-10-30', usd: Number.NaN } });
+    await expect(ledger.spentUsd('2026-10-30')).rejects.toThrow(
+      'corrupt spend item for 2026-10-30',
+    );
+  });
+
+  it('rejects a malformed day without reading', async () => {
+    await expect(ledger.spentUsd('2026-13-01')).rejects.toThrow(/day/);
+    expect(docMock.commandCalls(GetCommand)).toHaveLength(0);
+  });
 });

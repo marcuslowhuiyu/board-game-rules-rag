@@ -9,8 +9,12 @@ export interface SpendLedger {
 
 const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
+/** Accepts only a real calendar day: 2026-02-31 and 2026-13-01 are rejected. */
 export function assertSpendDay(day: string): void {
-  if (!DAY_PATTERN.test(day)) throw new Error(`invalid spend day (want YYYY-MM-DD): ${day}`);
+  const invalid = (): Error => new Error(`invalid spend day (want YYYY-MM-DD): ${day}`);
+  if (!DAY_PATTERN.test(day)) throw invalid();
+  const [y, m, d] = day.split('-').map(Number) as [number, number, number];
+  if (!new Date(Date.UTC(y, m - 1, d)).toISOString().startsWith(day)) throw invalid();
 }
 
 export function assertSpendUsd(usd: number): void {

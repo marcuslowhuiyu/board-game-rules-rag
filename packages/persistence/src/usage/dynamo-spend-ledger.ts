@@ -36,7 +36,14 @@ export class DynamoSpendLedger implements SpendLedger {
         ConsistentRead: true,
       }),
     );
-    return typeof res.Item?.usd === 'number' ? res.Item.usd : 0;
+    // A missing item is a day with no spend. A present item with a bad `usd`
+    // must not read as 0, or a corrupt record would silently bypass the cap.
+    if (!res.Item) return 0;
+    const usd = res.Item.usd;
+    if (typeof usd !== 'number' || !Number.isFinite(usd) || usd < 0) {
+      throw new Error(`corrupt spend item for ${day}`);
+    }
+    return usd;
   }
 
   async add(day: string, usd: number): Promise<void> {
