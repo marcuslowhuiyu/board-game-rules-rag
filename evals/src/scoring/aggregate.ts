@@ -75,7 +75,15 @@ export interface EvalReport {
   /** Added by the CLI. */
   models?: Record<string, { key: string; modelId: string }>;
   promptVersions?: Record<string, string>;
-  modelCost?: { usd: number; calls: number; inputTokens: number; outputTokens: number };
+  modelCost?: {
+    usd: number;
+    calls: number;
+    /** Uncached input tokens; cache read/write tokens are counted separately. */
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadInputTokens: number;
+    cacheWriteInputTokens: number;
+  };
 }
 
 const mean = (xs: number[]) => (xs.length === 0 ? 0 : xs.reduce((a, b) => a + b, 0) / xs.length);

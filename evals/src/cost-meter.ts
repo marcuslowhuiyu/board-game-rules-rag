@@ -9,6 +9,8 @@ export class CostMeter {
   private callCount = 0;
   private inTokens = 0;
   private outTokens = 0;
+  private cacheRead = 0;
+  private cacheWrite = 0;
 
   constructor(private readonly maxUsd: number) {}
 
@@ -17,6 +19,8 @@ export class CostMeter {
     this.callCount += 1;
     this.inTokens += r.inputTokens;
     this.outTokens += r.outputTokens;
+    this.cacheRead += r.cacheReadInputTokens;
+    this.cacheWrite += r.cacheWriteInputTokens;
   }
 
   get spentUsd(): number {
@@ -25,6 +29,13 @@ export class CostMeter {
   get calls(): number {
     return this.callCount;
   }
+  get cacheReadInputTokens(): number {
+    return this.cacheRead;
+  }
+  get cacheWriteInputTokens(): number {
+    return this.cacheWrite;
+  }
+  /** Uncached input tokens only; add the cache fields for the total. */
   get inputTokens(): number {
     return this.inTokens;
   }
@@ -43,6 +54,7 @@ export function estimateCostUsd(
     calls: number;
     inputTokensPerCall: number;
     outputTokensPerCall: number;
+    cacheWriteInputTokensPerCall?: number;
   }[],
 ): number {
   return plannedCalls.reduce(
@@ -52,6 +64,7 @@ export function estimateCostUsd(
         costUsd(p.entry, {
           inputTokens: p.inputTokensPerCall,
           outputTokens: p.outputTokensPerCall,
+          cacheWriteInputTokens: p.cacheWriteInputTokensPerCall ?? 0,
         }),
     0,
   );

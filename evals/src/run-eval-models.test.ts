@@ -54,6 +54,8 @@ const record = (role: 'router' | 'reranker', costUsd: number): ModelCallRecord =
   modelId: 'm',
   promptVersion: 'v',
   inputTokens: 1,
+  cacheReadInputTokens: 0,
+  cacheWriteInputTokens: 0,
   outputTokens: 1,
   latencyMs: 1,
   costUsd,

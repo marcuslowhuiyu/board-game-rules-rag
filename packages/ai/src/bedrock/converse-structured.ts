@@ -85,11 +85,13 @@ export class ConverseStructuredModel implements StructuredModel {
     const started = performance.now();
     let inputTokens = 0;
     let outputTokens = 0;
+    let cacheReadInputTokens = 0;
+    let cacheWriteInputTokens = 0;
     let attempts = 0;
     let lastIssue = '';
 
     const record = (ok: boolean, error?: string): ModelCallRecord => {
-      const usage = { inputTokens, outputTokens };
+      const usage = { inputTokens, outputTokens, cacheReadInputTokens, cacheWriteInputTokens };
       const rec: ModelCallRecord = {
         role: req.role,
         modelKey: req.entry.key,
@@ -126,6 +128,8 @@ export class ConverseStructuredModel implements StructuredModel {
       }
       inputTokens += output.usage?.inputTokens ?? 0;
       outputTokens += output.usage?.outputTokens ?? 0;
+      cacheReadInputTokens += output.usage?.cacheReadInputTokens ?? 0;
+      cacheWriteInputTokens += output.usage?.cacheWriteInputTokens ?? 0;
 
       const parsed = parseOutput(req, textOf(output));
       if (parsed.ok) return { value: parsed.value, record: record(true) };

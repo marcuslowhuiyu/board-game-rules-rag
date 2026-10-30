@@ -9,6 +9,8 @@ const record = (costUsd: number): ModelCallRecord => ({
   promptVersion: 'v',
   inputTokens: 10,
   outputTokens: 5,
+  cacheReadInputTokens: 0,
+  cacheWriteInputTokens: 0,
   latencyMs: 1,
   costUsd,
   attempts: 1,
@@ -34,6 +36,16 @@ describe('CostMeter', () => {
     expect(meter.outputTokens).toBe(10);
   });
 
+  it('accumulates cache tokens and their cost', () => {
+    const meter = new CostMeter(1);
+    meter.record({ ...record(0.2), cacheReadInputTokens: 30, cacheWriteInputTokens: 700 });
+    meter.record({ ...record(0.3), cacheReadInputTokens: 5, cacheWriteInputTokens: 0 });
+    expect(meter.spentUsd).toBeCloseTo(0.5);
+    expect(meter.inputTokens).toBe(20);
+    expect(meter.cacheReadInputTokens).toBe(35);
+    expect(meter.cacheWriteInputTokens).toBe(700);
+  });
+
   it('a zero maximum is exhausted from the start', () => {
     expect(new CostMeter(0).exhausted).toBe(true);
   });
@@ -49,6 +61,19 @@ describe('estimateCostUsd', () => {
       { entry, calls: 5, inputTokensPerCall: 200, outputTokensPerCall: 20 },
     ]);
     expect(usd).toBeCloseTo(0.0077, 8);
+  });
+  it('prices planned cache tokens, defaulting to the input price', () => {
+    const usd = estimateCostUsd([
+      {
+        entry,
+        calls: 2,
+        inputTokensPerCall: 100,
+        outputTokensPerCall: 10,
+        cacheWriteInputTokensPerCall: 1000,
+      },
+    ]);
+    // 2 * ((100 + 1000) * 0.5 + 10 * 2) / 1e6
+    expect(usd).toBeCloseTo(0.00114, 9);
   });
   it('is zero with no plans', () => {
     expect(estimateCostUsd([])).toBe(0);

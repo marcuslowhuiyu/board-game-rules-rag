@@ -12,6 +12,9 @@ export interface ModelEntry {
   region: string;
   inputUsdPerMTok: number;
   outputUsdPerMTok: number;
+  /** Prompt-cache read/write prices; each falls back to `inputUsdPerMTok` when unset. */
+  cacheReadUsdPerMTok?: number;
+  cacheWriteUsdPerMTok?: number;
   structuredOutput: 'native' | 'json';
   maxTokens: number;
   temperature?: number; // omitted for models that reject the field (e.g. GPT-6 Luna)
@@ -31,6 +34,8 @@ const ModelEntrySchema = z.object({
   region: z.string().min(1),
   inputUsdPerMTok: z.number().nonnegative(),
   outputUsdPerMTok: z.number().nonnegative(),
+  cacheReadUsdPerMTok: z.number().nonnegative().optional(),
+  cacheWriteUsdPerMTok: z.number().nonnegative().optional(),
   structuredOutput: z.enum(['native', 'json']),
   maxTokens: z.number().int().positive(),
   temperature: z.number().min(0).optional(),
@@ -89,12 +94,26 @@ export function modelFor(catalog: ModelCatalog, role: ModelRole, key?: string): 
   return entry;
 }
 
+/**
+ * Cost of one call. Cache tokens are charged at the entry's cache prices, or at the input price
+ * when those are unset (conservative: a cost cap never under-counts).
+ */
 export function costUsd(
   entry: ModelEntry,
-  usage: { inputTokens: number; outputTokens: number },
+  usage: {
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadInputTokens?: number;
+    cacheWriteInputTokens?: number;
+  },
 ): number {
+  const cacheRead = entry.cacheReadUsdPerMTok ?? entry.inputUsdPerMTok;
+  const cacheWrite = entry.cacheWriteUsdPerMTok ?? entry.inputUsdPerMTok;
   return (
-    (usage.inputTokens * entry.inputUsdPerMTok + usage.outputTokens * entry.outputUsdPerMTok) /
+    (usage.inputTokens * entry.inputUsdPerMTok +
+      usage.outputTokens * entry.outputUsdPerMTok +
+      (usage.cacheReadInputTokens ?? 0) * cacheRead +
+      (usage.cacheWriteInputTokens ?? 0) * cacheWrite) /
     1_000_000
   );
 }

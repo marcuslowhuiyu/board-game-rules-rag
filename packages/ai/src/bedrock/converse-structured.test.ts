@@ -99,6 +99,37 @@ describe('ConverseStructuredModel', () => {
     expect(result.record).toBe(records[0]);
   });
 
+  it('records prompt-cache tokens and prices them', async () => {
+    bedrock.on(ConverseCommand).resolves({
+      output: { message: { role: 'assistant', content: [{ text: '{"tier":"simple"}' }] } },
+      usage: {
+        inputTokens: 2,
+        outputTokens: 143,
+        totalTokens: 5682,
+        cacheReadInputTokens: 0,
+        cacheWriteInputTokens: 5537,
+      },
+    } as never);
+    const { model, records } = setup();
+
+    await model.call(request());
+
+    expect(records[0]).toMatchObject({
+      inputTokens: 2,
+      outputTokens: 143,
+      cacheReadInputTokens: 0,
+      cacheWriteInputTokens: 5537,
+      costUsd: ((2 + 5537) * 1 + 143 * 2) / 1_000_000,
+    });
+  });
+
+  it('records zero cache tokens when the response has none', async () => {
+    bedrock.on(ConverseCommand).resolves(reply('{"tier":"simple"}'));
+    const { model, records } = setup();
+    await model.call(request());
+    expect(records[0]).toMatchObject({ cacheReadInputTokens: 0, cacheWriteInputTokens: 0 });
+  });
+
   it('omits temperature from inferenceConfig when the entry does not define it', async () => {
     bedrock.on(ConverseCommand).resolves(reply('{"tier":"simple"}'));
     const { model } = setup();

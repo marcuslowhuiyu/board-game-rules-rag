@@ -78,7 +78,14 @@ describe('toMarkdown', () => {
       rerankFallbacks: 2,
       models: { reranker: { key: 'nova-micro', modelId: 'apac.amazon.nova-micro-v1:0' } },
       promptVersions: { reranker: 'reranker-v2' },
-      modelCost: { usd: 0.0123, calls: 30, inputTokens: 1000, outputTokens: 200 },
+      modelCost: {
+        usd: 0.0123,
+        calls: 30,
+        inputTokens: 1000,
+        outputTokens: 200,
+        cacheReadInputTokens: 300,
+        cacheWriteInputTokens: 5000,
+      },
       routing: {
         cases: 3,
         correct: 2,
@@ -89,7 +96,9 @@ describe('toMarkdown', () => {
       },
     });
     expect(md).toContain('Models: reranker nova-micro (apac.amazon.nova-micro-v1:0, reranker-v2)');
-    expect(md).toContain('$0.0123 over 30 calls');
+    expect(md).toContain(
+      '$0.0123 over 30 calls (6300 input, 200 output tokens; input includes 300 cache read and 5000 cache write)',
+    );
     expect(md).toContain('Rerank fallbacks: 2');
     expect(md).toContain('Cut short');
     expect(md).toContain('Routing accuracy: 67% (2/3');

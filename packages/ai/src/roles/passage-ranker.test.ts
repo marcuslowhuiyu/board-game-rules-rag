@@ -22,6 +22,8 @@ const record: ModelCallRecord = {
   modelId: entry.modelId,
   promptVersion: RERANKER_PROMPT_VERSION,
   inputTokens: 1,
+  cacheReadInputTokens: 0,
+  cacheWriteInputTokens: 0,
   outputTokens: 1,
   latencyMs: 1,
   costUsd: 0,

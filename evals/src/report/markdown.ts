@@ -54,7 +54,7 @@ export function toMarkdown(report: EvalReport, label?: string): string {
   if (report.modelCost) {
     const c = report.modelCost;
     lines.push(
-      `Model cost: $${c.usd.toFixed(4)} over ${c.calls} calls (${c.inputTokens} input, ${c.outputTokens} output tokens). Rerank fallbacks: ${report.rerankFallbacks}.`,
+      `Model cost: $${c.usd.toFixed(4)} over ${c.calls} calls (${c.inputTokens + c.cacheReadInputTokens + c.cacheWriteInputTokens} input, ${c.outputTokens} output tokens; input includes ${c.cacheReadInputTokens} cache read and ${c.cacheWriteInputTokens} cache write). Rerank fallbacks: ${report.rerankFallbacks}.`,
     );
   }
   if (report.rerankRequested) {

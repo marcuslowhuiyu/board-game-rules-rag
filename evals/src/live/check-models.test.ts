@@ -38,6 +38,8 @@ const record = (req: StructuredRequest<unknown>, ok: boolean, error?: string): M
   modelId: req.entry.modelId,
   promptVersion: req.promptVersion,
   inputTokens: 10,
+  cacheReadInputTokens: 0,
+  cacheWriteInputTokens: 0,
   outputTokens: 2,
   latencyMs: ok ? 120 : 30,
   costUsd: ok ? 0.001 : 0.0002,

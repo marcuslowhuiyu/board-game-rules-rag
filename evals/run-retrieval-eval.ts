@@ -158,6 +158,8 @@ const report = {
           calls: wired.meter.calls,
           inputTokens: wired.meter.inputTokens,
           outputTokens: wired.meter.outputTokens,
+          cacheReadInputTokens: wired.meter.cacheReadInputTokens,
+          cacheWriteInputTokens: wired.meter.cacheWriteInputTokens,
         },
       }
     : {}),
