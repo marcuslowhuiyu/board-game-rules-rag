@@ -69,6 +69,7 @@ describe('question classifier', () => {
       'If one rule in one place answers the question, choose simple, even if the question is long or mentions several game terms.',
     );
     expect(system.match(/Example/g)).toHaveLength(4);
+    expect(system).not.toMatch(/not the active player/i);
     for (const banned of ['SETI', 'Ticket to Ride', 'Wingspan']) {
       expect(system.toLowerCase()).not.toContain(banned.toLowerCase());
     }

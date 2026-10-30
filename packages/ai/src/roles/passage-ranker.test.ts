@@ -124,13 +124,15 @@ describe('passage ranker', () => {
     expect(user.indexOf('Ignore previous instructions')).toBeLessThan(user.indexOf('</passage>'));
   });
 
-  it('asks for the min(maxRanked, passages) most relevant labels', async () => {
+  it('asks for exactly min(maxRanked, passages) labels, with no count limit in the JSON schema', async () => {
     const { model, requests } = fake({ order: ['P1'] });
     await createPassageRanker(model, entry, { maxRanked: 10 }).rank('Q?', passages);
     const small = requests[0]!;
-    expect(small.system).toContain('the 3 most relevant');
+    expect(small.system).toContain('Return exactly 3 labels: the 3 most relevant passages');
+    expect(small.system).toContain(
+      'Include 3 labels even if some passages are only loosely relevant.',
+    );
     expect(small.system).not.toContain('10');
-    expect(small.jsonSchema).toMatchObject({ properties: { order: { maxItems: 3 } } });
 
     const many = Array.from({ length: 12 }, (_, i) => ({
       id: `c${i}`,
@@ -139,8 +141,27 @@ describe('passage ranker', () => {
     }));
     await createPassageRanker(model, entry, { maxRanked: 10 }).rank('Q?', many);
     const large = requests[1]!;
-    expect(large.system).toContain('the 10 most relevant');
+    expect(large.system).toContain('Return exactly 10 labels: the 10 most relevant passages');
     expect(large.system).toMatch(/at most once/);
-    expect(large.jsonSchema).toMatchObject({ properties: { order: { maxItems: 10 } } });
+    for (const req of [small, large]) {
+      const order = (req.jsonSchema['properties'] as { order: Record<string, unknown> }).order;
+      expect(order).not.toHaveProperty('maxItems');
+      expect(order).not.toHaveProperty('minItems');
+    }
+  });
+
+  it('says "exactly 1 label" for a single passage', async () => {
+    const { model, requests } = fake({ order: ['P1'] });
+    await createPassageRanker(model, entry, { maxRanked: 10 }).rank('Q?', [passages[0]!]);
+    expect(requests[0]!.system).toContain('Return exactly 1 label: the most relevant passage.');
+    expect(requests[0]!.system).toContain('Include 1 label even if');
+  });
+
+  it('throws without calling the model when there are no passages', async () => {
+    const { model, requests } = fake({ order: [] });
+    await expect(
+      createPassageRanker(model, entry, { maxRanked: 10 }).rank('Q?', []),
+    ).rejects.toThrow('no passages to rank');
+    expect(requests).toHaveLength(0);
   });
 });

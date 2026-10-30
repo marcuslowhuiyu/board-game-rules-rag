@@ -102,7 +102,7 @@ describe('toMarkdown', () => {
       rerankRequested: true,
       rerankFallbacks: 3,
       rerankedCases: 7,
-      placedTotal: 90,
+      placedTotal: 60,
       expectedPlacements: 70,
       candidatesTotal: 105,
       rerankFallbackReasons: { ThrottlingException: 2, ModelOutputError: 1 },
@@ -113,7 +113,7 @@ describe('toMarkdown', () => {
       })),
     });
     expect(md).toContain(
-      'Reranked 7 of 10 cases; model placed 90 of 70 requested (105 candidates); fallbacks by reason: ThrottlingException 2, ModelOutputError 1',
+      'Reranked 7 of 10 cases; model placed 60 of 70 requested (105 candidates); fallbacks by reason: ThrottlingException 2, ModelOutputError 1',
     );
   });
 
