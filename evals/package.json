@@ -7,6 +7,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "eval:retrieval": "tsx run-retrieval-eval.ts",
+    "models:check": "tsx scripts/check-models.ts",
     "eval:ingest": "tsx scripts/ingest-eval-games.ts",
     "provenance:backfill": "tsx scripts/backfill-provenance.ts"
   },

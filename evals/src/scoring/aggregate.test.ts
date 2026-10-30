@@ -4,6 +4,7 @@ import type { CaseResult } from './score-case.js';
 
 const config: EvalConfig = {
   topK: 15,
+  rerankTopN: 10,
   smallCorpusThreshold: 30,
   bars: { simple: { k: 3, minRate: 0.9 }, complex: { k: 10, minRate: 0.7 } },
 };
@@ -100,5 +101,15 @@ describe('EvalConfigSchema', () => {
     const { EvalConfigSchema } = await import('./aggregate.js');
     const bad = { ...config, bars: { ...config.bars, complex: { k: 15, minRate: 0.7 } } };
     expect(EvalConfigSchema.safeParse(bad).success).toBe(false);
+  });
+
+  it('requires rerankTopN as a positive integer', async () => {
+    const { EvalConfigSchema } = await import('./aggregate.js');
+    const { rerankTopN: _omitted, ...without } = config;
+    expect(EvalConfigSchema.safeParse(without).success).toBe(false);
+    for (const bad of [0, -1, 2.5, '10']) {
+      expect(EvalConfigSchema.safeParse({ ...config, rerankTopN: bad }).success).toBe(false);
+    }
+    expect(EvalConfigSchema.safeParse({ ...config, rerankTopN: 1 }).success).toBe(true);
   });
 });

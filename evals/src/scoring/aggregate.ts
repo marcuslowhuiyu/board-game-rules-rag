@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { z } from 'zod';
+import type { RoutingResult } from './routing.js';
 import { K_VALUES, type CaseResult } from './score-case.js';
 
 // k must be one of the cutoffs scoreCase computes; any other value would fail every case.
@@ -11,6 +12,8 @@ const BarSchema = z.object({
 export const EvalConfigSchema = z.object({
   /** Candidates the retriever returns per question. */
   topK: z.number().int().min(10).max(100),
+  /** Passages the reranker is asked to order (the most relevant N, most relevant first). */
+  rerankTopN: z.number().int().positive(),
   /** Games with fewer chunks than this are reported but left out of the tier bars. */
   smallCorpusThreshold: z.number().int().nonnegative(),
   bars: z.object({ simple: BarSchema, complex: BarSchema }),
@@ -51,6 +54,36 @@ export interface EvalReport {
   games: GameRow[];
   tiers: { simple: TierRow; complex: TierRow };
   cases: CaseResult[];
+  /** True when the cost cap stopped model calls before every case had them. */
+  cutShort: boolean;
+  /** Cases whose rerank call failed and fell back to retrieval-score order. */
+  rerankFallbacks: number;
+  /** True when a reranker was wired in (--rerank). */
+  rerankRequested: boolean;
+  /** Cases the model actually reranked (no fallback, not skipped). */
+  rerankedCases: number;
+  /** Candidates the model placed, summed over reranked cases. */
+  placedTotal: number;
+  /** Placements the model was asked for, summed over reranked cases: min(rerankTopN, candidates). */
+  expectedPlacements: number;
+  /** Candidates sent to the model, summed over reranked cases. */
+  candidatesTotal: number;
+  /** Rerank fallbacks grouped by error name. */
+  rerankFallbackReasons: Record<string, number>;
+  /** Present when the router ran; reported, not gated. */
+  routing?: RoutingResult;
+  /** Added by the CLI. */
+  models?: Record<string, { key: string; modelId: string }>;
+  promptVersions?: Record<string, string>;
+  modelCost?: {
+    usd: number;
+    calls: number;
+    /** Uncached input tokens; cache read/write tokens are counted separately. */
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadInputTokens: number;
+    cacheWriteInputTokens: number;
+  };
 }
 
 const mean = (xs: number[]) => (xs.length === 0 ? 0 : xs.reduce((a, b) => a + b, 0) / xs.length);
@@ -103,5 +136,13 @@ export function aggregate(
     games,
     tiers: { simple: tier('simple'), complex: tier('complex') },
     cases: results,
+    cutShort: false,
+    rerankFallbacks: 0,
+    rerankRequested: false,
+    rerankedCases: 0,
+    placedTotal: 0,
+    expectedPlacements: 0,
+    candidatesTotal: 0,
+    rerankFallbackReasons: {},
   };
 }

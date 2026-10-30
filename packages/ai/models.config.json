@@ -1,0 +1,37 @@
+{
+  "models": {
+    "nova-micro": {
+      "key": "nova-micro",
+      "displayName": "Amazon Nova Micro",
+      "modelId": "apac.amazon.nova-micro-v1:0",
+      "region": "ap-southeast-1",
+      "inputUsdPerMTok": 0.035,
+      "outputUsdPerMTok": 0.14,
+      "structuredOutput": "json",
+      "maxTokens": 512,
+      "temperature": 0
+    },
+    "gpt-6-luna": {
+      "key": "gpt-6-luna",
+      "displayName": "GPT-6 Luna",
+      "modelId": "global.openai.gpt-6-luna",
+      "region": "ap-southeast-1",
+      "inputUsdPerMTok": 0.1,
+      "outputUsdPerMTok": 0.5,
+      "structuredOutput": "native",
+      "maxTokens": 1024,
+      "additionalModelRequestFields": {
+        "text": { "format": { "strict": true } },
+        "reasoning": { "effort": "low" }
+      }
+    }
+  },
+  "approved": {
+    "router": ["nova-micro"],
+    "reranker": ["nova-micro", "gpt-6-luna"]
+  },
+  "defaults": {
+    "router": "nova-micro",
+    "reranker": "gpt-6-luna"
+  }
+}

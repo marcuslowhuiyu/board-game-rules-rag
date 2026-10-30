@@ -1,8 +1,15 @@
 import { asContentId, asEditionId, asGameId } from '@bgr/domain';
 import type { DocumentsRepository } from '@bgr/persistence';
-import type { RulesRetriever } from '@bgr/retrieval';
+import type { PassageRanker, QuestionClassifier, QuestionTier } from '@bgr/ai';
+import {
+  rerankEvidence,
+  routeQuestion,
+  type RouteOutcome,
+  type RulesRetriever,
+} from '@bgr/retrieval';
 import type { RetrievalCase } from './dataset/case-schema.js';
 import { aggregate, type EvalConfig, type EvalReport } from './scoring/aggregate.js';
+import { reasonOf, scoreRouting } from './scoring/routing.js';
 import { scoreCase, type CaseResult } from './scoring/score-case.js';
 
 /** Eval game ids per dataset game key, as written by the ingest script. */
@@ -35,8 +42,12 @@ export async function runEval(input: {
   games: EvalGames;
   retriever: RulesRetriever;
   config: EvalConfig;
+  /** Optional model steps. Each case's calls stop once the meter is exhausted. */
+  meter?: { readonly exhausted: boolean };
+  ranker?: PassageRanker;
+  classifier?: QuestionClassifier;
 }): Promise<EvalReport> {
-  const { cases, games, retriever, config } = input;
+  const { cases, games, retriever, config, meter, ranker, classifier } = input;
 
   const queries = cases.map((c) => {
     const game = games[c.game];
@@ -57,13 +68,81 @@ export async function runEval(input: {
   });
 
   const results: CaseResult[] = [];
+  const routedExpected: QuestionTier[] = [];
+  const routed: RouteOutcome[] = [];
+  let cutShort = false;
+  let rerankFallbacks = 0;
+  let rerankedCases = 0;
+  let placedTotal = 0;
+  let expectedPlacements = 0;
+  let candidatesTotal = 0;
+  const rerankFallbackReasons: Record<string, number> = {};
   for (const [i, c] of cases.entries()) {
-    const ranked = await retriever.retrieve(queries[i]!);
-    results.push(scoreCase(c, ranked));
+    let ranked = await retriever.retrieve(queries[i]!);
+    // The meter is checked before each call; rerank swallows model errors, but
+    // every call, failed or not, reaches the meter through the model's sink.
+    let rerankState: NonNullable<CaseResult['rerank']> = 'skipped';
+    let rerankPlaced = 0;
+    let rerankCandidates = 0;
+    let rerankError: string | undefined;
+    if (ranker) {
+      if (meter?.exhausted) {
+        cutShort = true;
+      } else {
+        const outcome = await rerankEvidence(c.question, ranked, ranker);
+        ranked = outcome.ranked;
+        rerankCandidates = ranked.length;
+        if (outcome.fallback) {
+          rerankState = 'fallback';
+          rerankFallbacks += 1;
+          rerankError = outcome.error;
+          const reason = reasonOf(outcome.error);
+          rerankFallbackReasons[reason] = (rerankFallbackReasons[reason] ?? 0) + 1;
+        } else {
+          rerankState = 'reranked';
+          rerankPlaced = outcome.placed;
+          rerankedCases += 1;
+          placedTotal += outcome.placed;
+          expectedPlacements += Math.min(config.rerankTopN, rerankCandidates);
+          candidatesTotal += rerankCandidates;
+        }
+      }
+    }
+    // Routing is reported only; the case's labelled tier is what scores it.
+    let wasRouted = false;
+    if (classifier) {
+      if (meter?.exhausted) {
+        cutShort = true;
+      } else {
+        routed.push(await routeQuestion(c.question, classifier));
+        routedExpected.push(c.tier);
+        wasRouted = true;
+      }
+    }
+    results.push({
+      ...scoreCase(c, ranked),
+      rerank: rerankState,
+      rerankPlaced,
+      rerankCandidates,
+      ...(rerankError === undefined ? {} : { rerankError }),
+      routed: wasRouted,
+    });
   }
 
   const corpusSize = Object.fromEntries(Object.entries(games).map(([k, g]) => [k, g.chunks]));
-  return aggregate(results, corpusSize, config);
+  const report = aggregate(results, corpusSize, config);
+  return {
+    ...report,
+    cutShort,
+    rerankFallbacks,
+    rerankRequested: ranker !== undefined,
+    rerankedCases,
+    placedTotal,
+    expectedPlacements,
+    candidatesTotal,
+    rerankFallbackReasons,
+    ...(classifier ? { routing: scoreRouting(routedExpected, routed) } : {}),
+  };
 }
 
 /**
