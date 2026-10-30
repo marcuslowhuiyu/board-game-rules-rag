@@ -1,4 +1,5 @@
 import type { ModelAnswer } from '@bgr/ai';
+import { panelTierOf } from '@bgr/domain';
 import type {
   Authority,
   Certainty,
@@ -9,9 +10,12 @@ import type {
 } from '@bgr/domain';
 import { confidenceFor } from './confidence.js';
 
+/**
+ * A passage that was sent to the model. Its panel tier is always derived from
+ * `authority` (`panelTierOf`), never supplied, so the two cannot disagree.
+ */
 export interface CitedSource {
   chunkId: string;
-  tier: PanelTier;
   authority: Authority;
   provenance: readonly ProvenanceEvidence[];
 }
@@ -29,13 +33,7 @@ const AUTHORITY_ORDER: readonly Authority[] = [
 const NOT_SETTLED_ANSWER = 'The rules passages found do not settle this question.';
 const REJECTED_EXPLANATION =
   'The answer could not be checked against the cited rules passages, so it is not given.';
-
-const NOT_SETTLED_CONFIDENCE = confidenceFor({
-  certainty: 'INCONCLUSIVE',
-  tier: 'UNKNOWN',
-  cited: [],
-  sourcesDisagree: false,
-});
+const NO_WORDING_EXPLANATION = 'The rules passages found do not answer this question.';
 
 /** A safe INCONCLUSIVE ruling with no evidence; used for invalid model output. */
 export function inconclusiveAnswer(explanation: string): RulesAnswer {
@@ -46,7 +44,13 @@ export function inconclusiveAnswer(explanation: string): RulesAnswer {
     explanation,
     evidence: [],
     needsResearch: true,
-    confidence: NOT_SETTLED_CONFIDENCE,
+    // Built per call: callers may mutate the result.
+    confidence: confidenceFor({
+      certainty: 'INCONCLUSIVE',
+      tier: 'UNKNOWN',
+      cited: [],
+      sourcesDisagree: false,
+    }),
     appliedTier: null,
     tiers: [],
     sourcesDisagree: false,
@@ -108,7 +112,7 @@ function survivingPanels(
     if (kept.has(t.tier) || t.certainty === 'INCONCLUSIVE') continue;
     const cited = resolve(t.evidence, labels, sources);
     if (cited === null || cited.length === 0) continue;
-    if (cited.some((s) => s.tier !== t.tier)) continue;
+    if (cited.some((s) => panelTierOf(s.authority) !== t.tier)) continue;
     kept.set(t.tier, { tier: t.tier, answer: t.answer, certainty: t.certainty, cited });
   }
   return [...kept.values()];
@@ -137,35 +141,39 @@ export function validateAnswer(
     answer: p.answer,
     certainty: p.certainty,
     evidence: refs(p.cited),
-    // A panel's confidence reflects its own sources; disagreement is between panels.
+    // A panel's confidence also reflects whether it agrees with the other panels.
     confidence: confidenceFor({
       certainty: p.certainty,
       tier: p.tier,
       cited: p.cited,
-      sourcesDisagree: false,
+      sourcesDisagree,
     }),
   }));
 
   const shared = { tiers, sourcesDisagree, requiresPlayerChoice };
-  const notSettled = (answer: string, explanation: string): RulesAnswer => ({
+  // An INCONCLUSIVE ruling's answer is always the fixed message, so a hedge never reads as a ruling.
+  const notSettled = (explanation: string): RulesAnswer => ({
     ...inconclusiveAnswer(explanation),
-    answer,
     ...shared,
   });
 
   if (output.certainty === 'INCONCLUSIVE') {
-    // The model's own "not settled" wording is safe to show; its labels and tier are not kept.
-    return notSettled(output.answer, output.explanation);
+    // The model's own wording goes into the explanation; its labels and tier are not kept.
+    const wording = [output.answer, output.explanation]
+      .map((w) => w.trim())
+      .filter((w) => w.length > 0)
+      .join('\n\n');
+    return notSettled(wording.length > 0 ? wording : NO_WORDING_EXPLANATION);
   }
 
   const cited = resolve(output.evidence, labels, sources);
   if (cited === null || cited.length === 0) {
-    // An unverifiable ruling: never show its wording.
-    return notSettled(NOT_SETTLED_ANSWER, REJECTED_EXPLANATION);
+    // An unverifiable ruling: never show its wording, not even in the explanation.
+    return notSettled(REJECTED_EXPLANATION);
   }
 
   const top = strongest(cited);
-  const appliedTier = top.tier;
+  const appliedTier = panelTierOf(top.authority);
   const certainty: Certainty =
     requiresPlayerChoice && output.certainty === 'DEFINITIVE' ? 'QUALIFIED' : output.certainty;
 

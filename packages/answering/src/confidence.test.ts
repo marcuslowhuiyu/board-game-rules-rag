@@ -11,7 +11,6 @@ const attested = (authority: Authority): ProvenanceEvidence => ({
 
 const source = (over: Partial<CitedSource> = {}): CitedSource => ({
   chunkId: 'chk_1',
-  tier: 'OFFICIAL',
   authority: 'OFFICIAL_RULES',
   provenance: [attested('OFFICIAL_RULES')],
   ...over,
@@ -19,7 +18,6 @@ const source = (over: Partial<CitedSource> = {}): CitedSource => ({
 
 const community = source({
   chunkId: 'chk_c',
-  tier: 'COMMUNITY_CONSENSUS',
   authority: 'COMMUNITY_CONSENSUS',
   provenance: [attested('COMMUNITY_CONSENSUS')],
 });
@@ -131,9 +129,7 @@ describe('confidenceFor', () => {
       input: {
         certainty: 'DEFINITIVE',
         tier: 'UNKNOWN',
-        cited: [
-          source({ tier: 'UNKNOWN', authority: 'UNKNOWN', provenance: [attested('UNKNOWN')] }),
-        ],
+        cited: [source({ authority: 'UNKNOWN', provenance: [attested('UNKNOWN')] })],
         sourcesDisagree: false,
       },
       want: {
@@ -164,7 +160,7 @@ describe('confidenceFor', () => {
       input: {
         certainty: 'DEFINITIVE',
         tier: 'COMMUNITY_DISCUSSION',
-        cited: [source({ tier: 'COMMUNITY_DISCUSSION', authority: 'COMMUNITY_DISCUSSION' })],
+        cited: [source({ authority: 'COMMUNITY_DISCUSSION' })],
         sourcesDisagree: true,
       },
       want: {

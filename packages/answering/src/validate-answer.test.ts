@@ -2,7 +2,6 @@ import type { ModelAnswer } from '@bgr/ai';
 import {
   RulesAnswerSchema,
   type Authority,
-  type PanelTier,
   type ProvenanceEvidence,
   type RulesAnswer,
 } from '@bgr/domain';
@@ -17,18 +16,17 @@ const attested = (authority: Authority): ProvenanceEvidence => ({
 
 const src = (
   chunkId: string,
-  tier: PanelTier,
   authority: Authority,
   provenance: readonly ProvenanceEvidence[] = [attested(authority)],
-): CitedSource => ({ chunkId, tier, authority, provenance });
+): CitedSource => ({ chunkId, authority, provenance });
 
 // P1 rulebook, P2 errata, P3 designer, P4 community consensus, P5 rulebook without provenance.
 const SOURCES: readonly CitedSource[] = [
-  src('chk_rules', 'OFFICIAL', 'OFFICIAL_RULES'),
-  src('chk_errata', 'OFFICIAL', 'OFFICIAL_ERRATA'),
-  src('chk_designer', 'DESIGNER_OR_PUBLISHER', 'DESIGNER_OR_PUBLISHER'),
-  src('chk_forum', 'COMMUNITY_CONSENSUS', 'COMMUNITY_CONSENSUS'),
-  src('chk_bare', 'OFFICIAL', 'OFFICIAL_RULES', []),
+  src('chk_rules', 'OFFICIAL_RULES'),
+  src('chk_errata', 'OFFICIAL_ERRATA'),
+  src('chk_designer', 'DESIGNER_OR_PUBLISHER'),
+  src('chk_forum', 'COMMUNITY_CONSENSUS'),
+  src('chk_bare', 'OFFICIAL_RULES', []),
 ];
 const labels = new Map(SOURCES.map((s, i) => [`P${i + 1}`, s.chunkId]));
 const sources = new Map(SOURCES.map((s) => [s.chunkId, s]));
@@ -51,9 +49,12 @@ const run = (output: ModelAnswer): RulesAnswer => {
   return got;
 };
 
+const NOT_SETTLED = inconclusiveAnswer('x').answer;
+
 const expectInconclusive = (got: RulesAnswer): void => {
   expect(got).toMatchObject({
     certainty: 'INCONCLUSIVE',
+    answer: NOT_SETTLED,
     authority: 'UNKNOWN',
     evidence: [],
     appliedTier: null,
@@ -107,14 +108,14 @@ describe('validateAnswer: applied ruling', () => {
   });
 
   it('treats a label mapped to an empty chunk id as unknown', () => {
-    const withEmpty = new Map([...sources, ['', src('', 'OFFICIAL', 'OFFICIAL_RULES')]]);
+    const withEmpty = new Map([...sources, ['', src('', 'OFFICIAL_RULES')]]);
     const got = validateAnswer(model(), new Map([['P1', '']]), withEmpty);
     expect(RulesAnswerSchema.parse(got)).toEqual(got);
     expectInconclusive(got);
   });
 
   it('cites the chunk id as sent even if the source record disagrees', () => {
-    const odd = new Map([['chk_rules', src('', 'OFFICIAL', 'OFFICIAL_RULES')]]);
+    const odd = new Map([['chk_rules', src('', 'OFFICIAL_RULES')]]);
     const got = validateAnswer(model(), new Map([['P1', 'chk_rules']]), odd);
     expect(RulesAnswerSchema.parse(got)).toEqual(got);
     expect(got.evidence).toEqual([{ chunkId: 'chk_rules' }]);
@@ -130,17 +131,60 @@ describe('validateAnswer: applied ruling', () => {
     },
   );
 
-  it('strips evidence and tier from a model INCONCLUSIVE, keeping its own wording', () => {
+  it('strips evidence and tier from a model INCONCLUSIVE, moving its wording to the explanation', () => {
     const got = run(
       model({
         certainty: 'INCONCLUSIVE',
         appliedTier: 'OFFICIAL',
-        answer: 'The passages do not say.',
+        answer: 'Probably yes, you may move twice.',
+        explanation: 'The passages only hint at it.',
         evidence: ['P1', 'P2'],
       }),
     );
     expectInconclusive(got);
-    expect(got.answer).toBe('The passages do not say.');
+    expect(got.answer).toBe(NOT_SETTLED);
+    expect(got.explanation).toContain('Probably yes, you may move twice.');
+    expect(got.explanation).toContain('The passages only hint at it.');
+  });
+
+  it('gives a non-empty explanation for a model INCONCLUSIVE with no wording', () => {
+    const got = run(
+      model({ certainty: 'INCONCLUSIVE', answer: ' ', explanation: '', evidence: [] }),
+    );
+    expect(got.answer).toBe(NOT_SETTLED);
+    expect(got.explanation.trim().length).toBeGreaterThan(0);
+  });
+
+  it('never shows a rejected ruling as the answer or explanation', () => {
+    const got = run(model({ answer: 'Yes, you may.', evidence: ['P9'] }));
+    expect(got.answer).toBe(NOT_SETTLED);
+    expect(got.explanation).not.toContain('Yes, you may.');
+  });
+
+  it('derives tier from authority, ignoring a forged tier (attack: community passed as OFFICIAL)', () => {
+    const forged = {
+      chunkId: 'chk_forged',
+      tier: 'OFFICIAL',
+      authority: 'COMMUNITY_CONSENSUS',
+      provenance: [attested('COMMUNITY_CONSENSUS')],
+    } as CitedSource;
+    const got = validateAnswer(
+      model({
+        appliedTier: 'OFFICIAL',
+        evidence: ['P1'],
+        tiers: [{ tier: 'OFFICIAL', answer: 'Yes.', certainty: 'DEFINITIVE', evidence: ['P1'] }],
+      }),
+      new Map([['P1', 'chk_forged']]),
+      new Map([['chk_forged', forged]]),
+    );
+    expect(RulesAnswerSchema.parse(got)).toEqual(got);
+    expect(got.appliedTier).toBe('COMMUNITY_CONSENSUS');
+    expect(got.authority).toBe('COMMUNITY_CONSENSUS');
+    expect(got.confidence).toEqual({
+      level: 'MEDIUM',
+      reasons: ['DIRECTLY_STATED', 'OPERATOR_ATTESTED', 'COMMUNITY_SOURCE'],
+    });
+    expect(got.tiers).toEqual([]);
   });
 
   it('de-duplicates repeated labels in the applied evidence', () => {
@@ -322,6 +366,25 @@ describe('validateAnswer: tier panels', () => {
     });
   });
 
+  it('drops each panel a level when sources disagree', () => {
+    const got = run(
+      model({
+        tiers: [
+          officialPanel,
+          { tier: 'COMMUNITY_CONSENSUS', answer: 'No.', certainty: 'QUALIFIED', evidence: ['P4'] },
+        ],
+        sourcesDisagree: true,
+      }),
+    );
+    expect(got.tiers.map((t) => t.confidence)).toEqual([
+      { level: 'MEDIUM', reasons: ['DIRECTLY_STATED', 'OPERATOR_ATTESTED', 'SOURCES_DISAGREE'] },
+      {
+        level: 'LOW',
+        reasons: ['BEST_READING', 'OPERATOR_ATTESTED', 'COMMUNITY_SOURCE', 'SOURCES_DISAGREE'],
+      },
+    ]);
+  });
+
   it('does not require a player choice when official disagrees only with community', () => {
     const got = run(
       model({
@@ -403,5 +466,14 @@ describe('inconclusiveAnswer', () => {
       requiresPlayerChoice: false,
     });
     expect(got.answer.length).toBeGreaterThan(0);
+  });
+
+  it('returns a fresh confidence object each time', () => {
+    const first = inconclusiveAnswer('a');
+    first.confidence.reasons.push('SOURCES_DISAGREE');
+    first.confidence.level = 'HIGH';
+    expect(inconclusiveAnswer('b').confidence).toEqual({ level: 'LOW', reasons: ['NOT_SETTLED'] });
+    const rejected = run(model({ evidence: ['P9'] }));
+    expect(rejected.confidence).toEqual({ level: 'LOW', reasons: ['NOT_SETTLED'] });
   });
 });
