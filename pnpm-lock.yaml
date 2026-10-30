@@ -201,6 +201,9 @@ importers:
       '@aws-sdk/client-bedrock-runtime':
         specifier: ^3.1157.0
         version: 3.1157.0
+      '@bgr/domain':
+        specifier: workspace:*
+        version: link:../domain
       zod:
         specifier: ^4.6.7
         version: 4.6.7

@@ -2,7 +2,7 @@ import { z } from 'zod';
 // A static JSON import is inlined by esbuild, so it survives the Lambda bundle.
 import bundledConfig from '../../models.config.json' with { type: 'json' };
 
-export const MODEL_ROLES = ['router', 'reranker'] as const; // 'answerer' is added in plan 3
+export const MODEL_ROLES = ['router', 'reranker', 'answerer'] as const;
 export type ModelRole = (typeof MODEL_ROLES)[number];
 
 export interface ModelEntry {
@@ -42,7 +42,8 @@ const ModelEntrySchema = z.object({
   additionalModelRequestFields: z.record(z.string(), z.unknown()).optional(),
 });
 
-const roleRecord = <T extends z.ZodType>(value: T) => z.object({ router: value, reranker: value });
+const roleRecord = <T extends z.ZodType>(value: T) =>
+  z.object({ router: value, reranker: value, answerer: value });
 
 export const ModelCatalogSchema = z
   .object({

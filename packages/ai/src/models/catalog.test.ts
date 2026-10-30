@@ -21,29 +21,41 @@ const bad = (approved: unknown, defaults: unknown) => ({
 
 describe('model catalog', () => {
   it('bundled config parses and defaults are approved', () => {
-    expect(loadModelCatalog().defaults).toEqual({ router: 'nova-micro', reranker: 'gpt-6-luna' });
+    expect(loadModelCatalog().defaults).toEqual({
+      router: 'nova-micro',
+      reranker: 'gpt-6-luna',
+      answerer: 'gpt-6-luna',
+    });
   });
 
   it('accepts a model entry without temperature', () => {
     const { temperature: _omit, ...noTemp } = entry;
     const catalog = loadModelCatalog({
       models: { m: noTemp },
-      approved: { router: ['m'], reranker: ['m'] },
-      defaults: { router: 'm', reranker: 'm' },
+      approved: { router: ['m'], reranker: ['m'], answerer: ['m'] },
+      defaults: { router: 'm', reranker: 'm', answerer: 'm' },
     });
     expect(catalog.models['m']).not.toHaveProperty('temperature');
   });
 
   it('rejects a default that is not approved for its role', () => {
     expect(() =>
-      loadModelCatalog(bad({ router: ['m'], reranker: ['m'] }, { router: 'm', reranker: 'other' })),
+      loadModelCatalog(
+        bad(
+          { router: ['m'], reranker: ['m'], answerer: ['m'] },
+          { router: 'm', reranker: 'm', answerer: 'other' },
+        ),
+      ),
     ).toThrow();
   });
 
   it('rejects an approved key with no model entry', () => {
     expect(() =>
       loadModelCatalog(
-        bad({ router: ['m', 'ghost'], reranker: ['m'] }, { router: 'm', reranker: 'm' }),
+        bad(
+          { router: ['m', 'ghost'], reranker: ['m'], answerer: ['m'] },
+          { router: 'm', reranker: 'm', answerer: 'm' },
+        ),
       ),
     ).toThrow();
   });
@@ -64,6 +76,7 @@ describe('model catalog', () => {
 
   it('modelFor returns the default when no key is given', () => {
     expect(modelFor(loadModelCatalog(), 'reranker').key).toBe('gpt-6-luna');
+    expect(modelFor(loadModelCatalog(), 'answerer').key).toBe('gpt-6-luna');
   });
 
   it('costUsd prices Nova Micro usage', () => {
@@ -103,8 +116,8 @@ describe('model catalog', () => {
       const load = (extra: object) =>
         loadModelCatalog({
           models: { m: { ...entry, ...extra } },
-          approved: { router: ['m'], reranker: ['m'] },
-          defaults: { router: 'm', reranker: 'm' },
+          approved: { router: ['m'], reranker: ['m'], answerer: ['m'] },
+          defaults: { router: 'm', reranker: 'm', answerer: 'm' },
         });
       expect(
         load({ cacheReadUsdPerMTok: 0.01, cacheWriteUsdPerMTok: 0.2 }).models['m'],

@@ -28,8 +28,8 @@ const catalog: ModelCatalog = {
     rerankOnly: entry('rerankOnly'),
     idle: entry('idle'),
   },
-  approved: { router: ['good', 'bad'], reranker: ['rerankOnly'] },
-  defaults: { router: 'good', reranker: 'rerankOnly' },
+  approved: { router: ['good', 'bad'], reranker: ['rerankOnly'], answerer: ['rerankOnly'] },
+  defaults: { router: 'good', reranker: 'rerankOnly', answerer: 'rerankOnly' },
 };
 
 const record = (req: StructuredRequest<unknown>, ok: boolean, error?: string): ModelCallRecord => ({

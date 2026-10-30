@@ -42,3 +42,10 @@ export {
   type PassageRanker,
   type RankablePassage,
 } from './roles/passage-ranker.js';
+export {
+  ANSWERER_PROMPT_VERSION,
+  createRulesAnswerer,
+  type AnswerPassage,
+  type ModelAnswer,
+  type RulesAnswerer,
+} from './roles/rules-answerer.js';

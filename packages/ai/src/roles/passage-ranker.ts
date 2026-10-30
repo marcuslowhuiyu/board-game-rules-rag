@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { StructuredModel } from '../bedrock/converse-structured.js';
 import type { ModelEntry } from '../models/catalog.js';
 import type { ModelCallRecord } from '../models/telemetry.js';
+import { escapeDelimiters } from './escape.js';
 
 export const RERANKER_PROMPT_VERSION = 'reranker-v2';
 
@@ -40,10 +41,6 @@ ${
     ? 'Return exactly 1 label: the most relevant passage.'
     : `Return exactly ${count} labels: the ${count} most relevant passages, most relevant first, each label at most once.`
 } Include ${count === 1 ? '1 label' : `${count} labels`} even if some passages are only loosely relevant. Respond as JSON of the form {"order": ["P7", "P2", ...]}. Do not list the other passages.`;
-
-// Passage text and heading paths come from an untrusted document: neutralise any
-// opening or closing passage tag so they cannot forge or end a delimiter.
-const escapeDelimiters = (text: string): string => text.replace(/<(\/?)passage/gi, '<\\$1passage');
 
 const labelFor = (index: number): string => `P${index + 1}`;
 
