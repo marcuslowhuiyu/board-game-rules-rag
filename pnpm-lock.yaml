@@ -53,6 +53,9 @@ importers:
       '@bgr/ai':
         specifier: workspace:*
         version: link:../../packages/ai
+      '@bgr/answering':
+        specifier: workspace:*
+        version: link:../../packages/answering
       '@bgr/domain':
         specifier: workspace:*
         version: link:../../packages/domain

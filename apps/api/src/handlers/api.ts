@@ -3,6 +3,7 @@ import { getContext } from '../lib/context.js';
 import { makeHandler, route } from '../lib/router.js';
 import { ok } from '../lib/responses.js';
 import { gameRoutes } from './games.js';
+import { messageRoutes } from './messages.js';
 import { sessionRoutes } from './sessions.js';
 import { uploadRoutes } from './uploads.js';
 import { ingestionRoutes } from './ingestion.js';
@@ -17,6 +18,7 @@ const routes = [
   healthRoute,
   ...gameRoutes(getContext),
   ...sessionRoutes(getContext),
+  ...messageRoutes(getContext),
   ...uploadRoutes(getContext),
   ...ingestionRoutes(getContext),
   ...sourceRoutes(getContext),
