@@ -68,7 +68,7 @@ pnpm -C evals eval:retrieval --rerank --route --max-cost 1 --markdown   # paid: 
 
 ### Reranking and routing
 
-`--rerank [key]` reranks each case's candidates (`topK`, 15) with the reranker model (`key` must be an approved reranker in `packages/ai/models.config.json`; bare `--rerank` uses the catalog default). The **whole reordered list** is scored, so the top-3 and top-10 bars measure the reranker. Scoring uses the case's labelled tier, never the router's. `--route` also classifies every question and reports routing accuracy and a confusion table against the labelled tiers; it is reported, not gated.
+`--rerank [key]` reranks each case's candidates (`topK`, 15) with the reranker model (`key` must be an approved reranker in `packages/ai/models.config.json`; bare `--rerank` uses the catalog default, currently GPT-6 Luna). The **whole reordered list** is scored, so the top-3 and top-10 bars measure the reranker. Scoring uses the case's labelled tier, never the router's. `--route` also classifies every question and reports routing accuracy and a confusion table against the labelled tiers; it is reported, not gated.
 
 Both flags call Bedrock and cost money, so **`--max-cost <usd>` is required** with either. The run prints the planned number of model calls first, counts the cost of every call (failed calls included) and stops issuing model calls once the cap is reached. Remaining cases are scored without rerank and the report is marked `cutShort`. Rerank failures fall back to retrieval-score order and are counted in `rerankFallbacks`. The report also records the models, prompt versions and total model cost. **Paid runs need the operator's OK.**
 

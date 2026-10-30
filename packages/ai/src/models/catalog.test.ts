@@ -21,7 +21,7 @@ const bad = (approved: unknown, defaults: unknown) => ({
 
 describe('model catalog', () => {
   it('bundled config parses and defaults are approved', () => {
-    expect(loadModelCatalog().defaults).toEqual({ router: 'nova-micro', reranker: 'nova-micro' });
+    expect(loadModelCatalog().defaults).toEqual({ router: 'nova-micro', reranker: 'gpt-6-luna' });
   });
 
   it('accepts a model entry without temperature', () => {
@@ -63,7 +63,7 @@ describe('model catalog', () => {
   });
 
   it('modelFor returns the default when no key is given', () => {
-    expect(modelFor(loadModelCatalog(), 'reranker').key).toBe('nova-micro');
+    expect(modelFor(loadModelCatalog(), 'reranker').key).toBe('gpt-6-luna');
   });
 
   it('costUsd prices Nova Micro usage', () => {
