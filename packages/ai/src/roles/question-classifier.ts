@@ -33,7 +33,7 @@ If one rule in one place answers the question, choose simple, even if the questi
 
 Example 1 (simple): "In Catan, how many victory points does the Longest Road card give?" The Longest Road rule answers it. {"tier": "simple"}
 Example 2 (simple): "In Carcassonne, when I place a river tile, am I allowed to make a U-turn with the river?" The river placement rule answers it. {"tier": "simple"}
-Example 3 (complex): "In Pandemic, if an outbreak happens in a city during the Infect Cities step and that triggers a chain reaction, how does that affect the infection rate marker and the cards I discard?" It needs the outbreak, infection and discard rules. {"tier": "complex"}
+Example 3 (complex): "In Carcassonne, if a road I complete has one of my meeples and one of another player's meeples on it, who scores it, and do we both get our meeples back?" It needs the tied majority scoring rule and the rule that completed features return their meeples. {"tier": "complex"}
 Example 4 (complex): "In Pandemic, how many cards does each player start with in a three-player game, and how do I work out who goes first and whether we have won once the last disease is cured?" It needs the setup, turn order and winning rules. {"tier": "complex"}
 
 Respond only with JSON of the form {"tier": "simple"} or {"tier": "complex"}.`;
