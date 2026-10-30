@@ -99,6 +99,18 @@ describe('ConverseStructuredModel', () => {
     expect(result.record).toBe(records[0]);
   });
 
+  it('omits temperature from inferenceConfig when the entry does not define it', async () => {
+    bedrock.on(ConverseCommand).resolves(reply('{"tier":"simple"}'));
+    const { model } = setup();
+    const { temperature: _omit, ...noTemp } = entry();
+
+    await model.call(request({ entry: noTemp }));
+
+    const input = bedrock.commandCalls(ConverseCommand)[0]!.args[0].input;
+    expect(input.inferenceConfig).toEqual({ maxTokens: 256 });
+    expect(input.inferenceConfig).not.toHaveProperty('temperature');
+  });
+
   it('json mode extracts the JSON object from surrounding text', async () => {
     bedrock.on(ConverseCommand).resolves(reply('Sure! {"tier":"simple"} hope that helps'));
     const { model } = setup();

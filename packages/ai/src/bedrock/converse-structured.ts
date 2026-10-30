@@ -156,7 +156,10 @@ function buildInput<T>(req: StructuredRequest<T>): ConverseCommandInput {
     modelId: entry.modelId,
     system: [{ text: system }],
     messages: [{ role: 'user', content: [{ text: req.user }] }],
-    inferenceConfig: { maxTokens: entry.maxTokens, temperature: entry.temperature },
+    inferenceConfig: {
+      maxTokens: entry.maxTokens,
+      ...(entry.temperature === undefined ? {} : { temperature: entry.temperature }),
+    },
     ...(native
       ? {
           outputConfig: {

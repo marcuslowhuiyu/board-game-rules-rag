@@ -20,7 +20,6 @@
       "outputUsdPerMTok": 0.5,
       "structuredOutput": "native",
       "maxTokens": 1024,
-      "temperature": 0,
       "additionalModelRequestFields": {
         "text": { "format": { "strict": true } },
         "reasoning_effort": "low"

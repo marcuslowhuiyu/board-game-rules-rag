@@ -24,6 +24,16 @@ describe('model catalog', () => {
     expect(loadModelCatalog().defaults).toEqual({ router: 'nova-micro', reranker: 'nova-micro' });
   });
 
+  it('accepts a model entry without temperature', () => {
+    const { temperature: _omit, ...noTemp } = entry;
+    const catalog = loadModelCatalog({
+      models: { m: noTemp },
+      approved: { router: ['m'], reranker: ['m'] },
+      defaults: { router: 'm', reranker: 'm' },
+    });
+    expect(catalog.models['m']).not.toHaveProperty('temperature');
+  });
+
   it('rejects a default that is not approved for its role', () => {
     expect(() =>
       loadModelCatalog(bad({ router: ['m'], reranker: ['m'] }, { router: 'm', reranker: 'other' })),

@@ -14,7 +14,7 @@ export interface ModelEntry {
   outputUsdPerMTok: number;
   structuredOutput: 'native' | 'json';
   maxTokens: number;
-  temperature: number;
+  temperature?: number; // omitted for models that reject the field (e.g. GPT-6 Luna)
   additionalModelRequestFields?: Record<string, unknown>;
 }
 
@@ -33,7 +33,7 @@ const ModelEntrySchema = z.object({
   outputUsdPerMTok: z.number().nonnegative(),
   structuredOutput: z.enum(['native', 'json']),
   maxTokens: z.number().int().positive(),
-  temperature: z.number().min(0),
+  temperature: z.number().min(0).optional(),
   additionalModelRequestFields: z.record(z.string(), z.unknown()).optional(),
 });
 
