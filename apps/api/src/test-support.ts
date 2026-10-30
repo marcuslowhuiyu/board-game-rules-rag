@@ -12,10 +12,9 @@ import {
   type IdGenerator,
 } from '@bgr/persistence';
 import { InMemoryObjectStore } from '@bgr/ingestion';
-import type { AnswerOutcome } from '@bgr/answering';
 import type { ModelCallRecord } from '@bgr/ai';
+import type { AnswerRun } from './lib/answer-pipeline.js';
 import type {
-  AnswerMeta,
   AnswerPipeline,
   AppConfig,
   AppContext,
@@ -96,22 +95,13 @@ export function makeFakeExecutor(): FakeExecutor {
   };
 }
 
-export const TEST_ANSWER_META: AnswerMeta = {
-  models: {
-    router: { key: 'router-model', modelId: 'router.model-id' },
-    reranker: { key: 'reranker-model', modelId: 'reranker.model-id' },
-    answerer: { key: 'answerer-model', modelId: 'answerer.model-id' },
-  },
-  promptVersions: { router: 'router-vT', reranker: 'reranker-vT', answerer: 'answerer-vT' },
-};
-
 export interface FakePipeline extends AnswerPipeline {
   calls: Array<{ query: { text: string }; correlationId: string }>;
 }
 
-/** A pipeline returning `outcome`, or throwing it when it is an Error; `records` go to `onCall`. */
+/** A pipeline returning `outcome` (with the documents it looked up), or throwing it when it is an Error; `records` go to `onCall`. */
 export function makeFakePipeline(
-  outcome: AnswerOutcome | Error,
+  outcome: AnswerRun | Error,
   records: ModelCallRecord[] = [],
 ): FakePipeline {
   const calls: FakePipeline['calls'] = [];
@@ -191,7 +181,6 @@ export function makeTestContext(
           throw new Error('no answer pipeline in this test context');
         },
       } satisfies AnswerPipeline),
-    answerMeta: TEST_ANSWER_META,
   };
 }
 

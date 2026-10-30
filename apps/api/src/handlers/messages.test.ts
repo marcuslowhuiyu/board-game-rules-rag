@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import type { ModelCallRecord } from '@bgr/ai';
-import { DailyLimitReachedError, ModelUnavailableError, type AnswerOutcome } from '@bgr/answering';
+import { DailyLimitReachedError, ModelUnavailableError } from '@bgr/answering';
 import {
   asContentId,
   asEditionId,
@@ -12,9 +12,9 @@ import {
   type SourceDocument,
 } from '@bgr/domain';
 import type { RetrievedChunk } from '@bgr/retrieval';
+import type { AnswerRun } from '../lib/answer-pipeline.js';
 import { makeHandler } from '../lib/router.js';
 import {
-  TEST_ANSWER_META,
   bodyAs,
   makeEvent,
   makeFakePipeline,
@@ -85,19 +85,11 @@ const answer: RulesAnswer = {
   requiresPlayerChoice: false,
 };
 
-const outcome: AnswerOutcome = {
-  answer,
-  // ch3 is retrieved but never cited, so it must not appear in citations.
-  passages: [chunk('ch1', 'doc_1', 3), chunk('ch2', 'doc_2', 7), chunk('ch3', 'doc_1', 9)],
-  tier: 'simple',
-  calls: [],
-};
-
-const record: ModelCallRecord = {
-  role: 'router',
-  modelKey: 'k',
-  modelId: 'id',
-  promptVersion: 'v',
+const call = (role: ModelCallRecord['role']): ModelCallRecord => ({
+  role,
+  modelKey: `${role}-model`,
+  modelId: `${role}.model-id`,
+  promptVersion: `${role}-vT`,
   inputTokens: 1,
   cacheReadInputTokens: 0,
   cacheWriteInputTokens: 0,
@@ -106,6 +98,20 @@ const record: ModelCallRecord = {
   costUsd: 0.001,
   attempts: 1,
   ok: true,
+});
+
+const record = call('router');
+
+const outcome: AnswerRun = {
+  documents: new Map([
+    ['doc_1', doc('doc_1', 'Core Rulebook')],
+    ['doc_2', doc('doc_2', 'FAQ')],
+  ]),
+  answer,
+  // ch3 is retrieved but never cited, so it must not appear in citations.
+  passages: [chunk('ch1', 'doc_1', 3), chunk('ch2', 'doc_2', 7), chunk('ch3', 'doc_1', 9)],
+  tier: 'simple',
+  calls: [call('router'), call('reranker'), call('answerer')],
 };
 
 async function build(pipeline: FakePipeline, opts: { seedSession?: boolean } = {}) {
@@ -128,8 +134,6 @@ async function build(pipeline: FakePipeline, opts: { seedSession?: boolean } = {
       ttl: 4_070_995_200,
     });
   }
-  await ctx.documents.createDocument(doc('doc_1', 'Core Rulebook'));
-  await ctx.documents.createDocument(doc('doc_2', 'FAQ'));
   return { ctx, handler: makeHandler(messageRoutes(() => ctx)) };
 }
 
@@ -142,6 +146,13 @@ const ask = (handler: Awaited<ReturnType<typeof build>>['handler'], body: unknow
     }),
   );
 
+let writes: MockInstance<typeof process.stdout.write>;
+const logged = () => writes.mock.calls.map((c) => String(c[0]));
+beforeEach(() => {
+  writes = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+});
+afterEach(() => writes.mockRestore());
+
 describe('POST /sessions/{sessionId}/messages', () => {
   it('returns the answer with citations resolved from the retrieved passages and documents', async () => {
     const pipeline = makeFakePipeline(outcome);
@@ -152,8 +163,16 @@ describe('POST /sessions/{sessionId}/messages', () => {
     const body = bodyAs<MessageResponse>(res);
     expect(body.messageId).toBe('m_2');
     expect(body.answer).toEqual(answer);
-    expect(body.models).toEqual(TEST_ANSWER_META.models);
-    expect(body.promptVersions).toEqual(TEST_ANSWER_META.promptVersions);
+    expect(body.models).toEqual({
+      router: { key: 'router-model', modelId: 'router.model-id' },
+      reranker: { key: 'reranker-model', modelId: 'reranker.model-id' },
+      answerer: { key: 'answerer-model', modelId: 'answerer.model-id' },
+    });
+    expect(body.promptVersions).toEqual({
+      router: 'router-vT',
+      reranker: 'reranker-vT',
+      answerer: 'answerer-vT',
+    });
     expect(body.citations).toEqual([
       {
         chunkId: 'ch1',
@@ -196,6 +215,11 @@ describe('POST /sessions/{sessionId}/messages', () => {
     const { ctx, handler } = await build(makeFakePipeline(outcome));
     await ask(handler, { question: 'May I attack twice?' });
 
+    const bodyModels = {
+      router: { key: 'router-model', modelId: 'router.model-id' },
+      reranker: { key: 'reranker-model', modelId: 'reranker.model-id' },
+      answerer: { key: 'answerer-model', modelId: 'answerer.model-id' },
+    };
     const stored = await ctx.messages.listMessages(asSessionId(SESSION));
     expect(stored.map((m) => [m.index, m.role, m.messageId])).toEqual([
       [0, 'USER', 'm_1'],
@@ -205,8 +229,8 @@ describe('POST /sessions/{sessionId}/messages', () => {
     expect(stored[1]).toMatchObject({
       content: 'Yes, you may.',
       answer,
-      models: TEST_ANSWER_META.models,
-      promptVersions: TEST_ANSWER_META.promptVersions,
+      models: bodyModels,
+      promptVersions: { router: 'router-vT', reranker: 'reranker-vT', answerer: 'answerer-vT' },
     });
 
     await ask(handler, { question: 'And once more?' });
@@ -215,17 +239,38 @@ describe('POST /sessions/{sessionId}/messages', () => {
   });
 
   it('logs every model call of the run', async () => {
-    const info = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
-    try {
-      const { handler } = await build(makeFakePipeline(outcome, [record]));
-      await ask(handler, { question: 'May I attack twice?' });
-      const lines = info.mock.calls.map((c) => String(c[0]));
-      expect(
-        lines.some((l) => l.includes('"msg":"model call"') && l.includes('"costUsd":0.001')),
-      ).toBe(true);
-    } finally {
-      info.mockRestore();
-    }
+    const { handler } = await build(makeFakePipeline(outcome, [record]));
+    await ask(handler, { question: 'May I attack twice?' });
+    expect(
+      logged().some((l) => l.includes('"msg":"model call"') && l.includes('"costUsd":0.001')),
+    ).toBe(true);
+  });
+
+  it('lists only the models that served the answer, none for a run without evidence', async () => {
+    const noEvidence: AnswerRun = {
+      ...outcome,
+      answer: { ...answer, evidence: [], tiers: [] },
+      passages: [],
+      calls: [call('router'), { ...call('reranker'), ok: false }],
+    };
+    const { ctx, handler } = await build(makeFakePipeline(noEvidence));
+    const res = await ask(handler, { question: 'May I attack twice?' });
+    const body = bodyAs<MessageResponse>(res);
+    expect(Object.keys(body.models)).toEqual(['router']);
+    expect(Object.keys(body.promptVersions)).toEqual(['router']);
+    expect(body.citations).toEqual([]);
+    const stored = await ctx.messages.listMessages(asSessionId(SESSION));
+    expect(Object.keys(stored[1]?.models ?? {})).toEqual(['router']);
+  });
+
+  it('returns 500, not 400, when the stored answer fails server-side validation', async () => {
+    const bad: AnswerRun = { ...outcome, answer: { ...answer, certainty: 'NOPE' as never } };
+    const { ctx, handler } = await build(makeFakePipeline(bad));
+    const res = await ask(handler, { question: 'May I attack twice?' });
+    expect(res.statusCode).toBe(500);
+    expect((await ctx.messages.listMessages(asSessionId(SESSION))).map((m) => m.role)).toEqual([
+      'USER',
+    ]);
   });
 
   it('404s an unknown session without running the pipeline', async () => {

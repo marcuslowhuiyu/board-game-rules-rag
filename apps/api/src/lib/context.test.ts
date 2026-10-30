@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { answerMetaFor, loadAnsweringConfigFromEnv } from './context.js';
+import { loadAnsweringConfigFromEnv } from './context.js';
 
 const ENV = {
   USAGE_TABLE: 'usage',
@@ -40,18 +40,5 @@ describe('loadAnsweringConfigFromEnv', () => {
     ['RERANK_TOP_N', '0'],
   ])('rejects %s=%j with a clear error', (key, value) => {
     expect(() => loadAnsweringConfigFromEnv({ ...ENV, [key]: value })).toThrow(key);
-  });
-});
-
-describe('answerMetaFor', () => {
-  it('names the catalog default model and prompt version of each role', () => {
-    const meta = answerMetaFor();
-    expect(Object.keys(meta.models)).toEqual(['router', 'reranker', 'answerer']);
-    expect(meta.models['answerer']?.modelId).toBeTruthy();
-    expect(meta.promptVersions).toEqual({
-      router: 'router-v2',
-      reranker: 'reranker-v2',
-      answerer: 'answerer-v1',
-    });
   });
 });

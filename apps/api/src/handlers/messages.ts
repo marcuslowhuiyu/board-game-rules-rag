@@ -1,15 +1,15 @@
+import type { ModelCallRecord } from '@bgr/ai';
 import { DailyLimitReachedError, ModelUnavailableError } from '@bgr/answering';
 import {
   MessageSchema,
   asMessageId,
   asSessionId,
-  asSourceDocumentId,
   type Authority,
   type ProvenanceEvidence,
   type RulesAnswer,
   type SourceType,
 } from '@bgr/domain';
-import { z } from 'zod';
+import { ZodError, z } from 'zod';
 import type { AppContext } from '../lib/context.js';
 import { badRequest, notFound, ok, serviceUnavailable, tooManyRequests } from '../lib/responses.js';
 import { parseJsonBody, route, type RequestContext } from '../lib/router.js';
@@ -45,6 +45,32 @@ function citedChunkIds(answer: RulesAnswer): string[] {
   return [...new Set(ids)];
 }
 
+/** A message built by the server: a schema failure here is a bug (500), never the client's fault. */
+function buildMessage(fields: unknown) {
+  try {
+    return MessageSchema.parse(fields);
+  } catch (error) {
+    if (error instanceof ZodError) {
+      throw new Error(`invalid message built by the server: ${error.message}`);
+    }
+    throw error;
+  }
+}
+
+/** The models and prompt versions that actually answered, from the successful calls. */
+function servedBy(
+  calls: readonly ModelCallRecord[],
+): Pick<MessageResponse, 'models' | 'promptVersions'> {
+  const models: MessageResponse['models'] = {};
+  const promptVersions: MessageResponse['promptVersions'] = {};
+  for (const c of calls) {
+    if (!c.ok) continue;
+    models[c.role] = { key: c.modelKey, modelId: c.modelId };
+    promptVersions[c.role] = c.promptVersion;
+  }
+  return { models, promptVersions };
+}
+
 export function messageRoutes(ctxFactory: () => AppContext) {
   const postMessage = async (rc: RequestContext, params: Record<string, string>) => {
     const app = ctxFactory();
@@ -62,7 +88,7 @@ export function messageRoutes(ctxFactory: () => AppContext) {
 
     const index = (await app.messages.listMessages(sessionId)).length;
     await app.messages.appendMessage(
-      MessageSchema.parse({
+      buildMessage({
         messageId: asMessageId(app.ids.messageId()),
         sessionId,
         index,
@@ -106,22 +132,12 @@ export function messageRoutes(ctxFactory: () => AppContext) {
       throw error;
     }
 
-    const { answer, passages } = outcome;
+    const { answer, passages, documents } = outcome;
     const byChunk = new Map(passages.map((p) => [p.chunkId, p]));
-    const documents = new Map<
-      string,
-      Awaited<ReturnType<AppContext['documents']['getDocument']>>
-    >();
     const citations: Citation[] = [];
     for (const chunkId of citedChunkIds(answer)) {
       const passage = byChunk.get(chunkId);
       if (!passage) continue;
-      if (!documents.has(passage.documentId)) {
-        documents.set(
-          passage.documentId,
-          await app.documents.getDocument(asSourceDocumentId(passage.documentId)),
-        );
-      }
       const doc = documents.get(passage.documentId);
       if (!doc) {
         rc.logger.warn('citation dropped: its document is missing', {
@@ -144,10 +160,10 @@ export function messageRoutes(ctxFactory: () => AppContext) {
       });
     }
 
-    const { models, promptVersions } = app.answerMeta;
+    const { models, promptVersions } = servedBy(outcome.calls);
     const messageId = asMessageId(app.ids.messageId());
     await app.messages.appendMessage(
-      MessageSchema.parse({
+      buildMessage({
         messageId,
         sessionId,
         index: index + 1,
