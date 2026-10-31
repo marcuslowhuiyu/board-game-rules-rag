@@ -5,3 +5,4 @@ export * from './confidence.js';
 export * from './spend-ledger.js';
 export * from './pipeline.js';
 export * from './roles.js';
+export * from './sources.js';

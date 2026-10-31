@@ -9,11 +9,11 @@ import { InMemorySpendLedger, type DocumentsRepository } from '@bgr/persistence'
 import {
   createAnswerPipeline,
   createAnswerRoles,
+  createSourceLookup,
   type AnswerRoles,
   type ConverseClientFactory,
-  type SourceRecord,
 } from '@bgr/answering';
-import { asSourceDocumentId, type SourceDocument } from '@bgr/domain';
+import { asSourceDocumentId } from '@bgr/domain';
 import type { RulesRetriever } from '@bgr/retrieval';
 import { createLogger, type Logger } from '@bgr/shared';
 import type { EvalConfig } from '../scoring/aggregate.js';
@@ -89,26 +89,10 @@ export function createEvalAnswerPipeline(opts: {
     retriever,
     ranker: roles.ranker,
     answerer: roles.answerer,
-    sources: async (chunks) => {
-      const docs = new Map<string, SourceDocument | null>();
-      for (const id of new Set(chunks.map((c) => c.documentId))) {
-        docs.set(id, await documents.getDocument(asSourceDocumentId(id)));
-      }
-      const out = new Map<string, SourceRecord>();
-      for (const c of chunks) {
-        const doc = docs.get(c.documentId);
-        if (!doc) continue;
-        out.set(c.chunkId, {
-          chunkId: c.chunkId,
-          authority: doc.authority,
-          provenance: doc.provenance,
-          title: doc.title,
-          sourceType: doc.sourceType,
-          ...(doc.version === undefined ? {} : { version: doc.version }),
-        });
-      }
-      return out;
-    },
+    sources: createSourceLookup({
+      getDocument: (id) => documents.getDocument(asSourceDocumentId(id)),
+      logger,
+    }),
     ledger: new InMemorySpendLedger(),
     dailyCapUsd: Number.POSITIVE_INFINITY,
     limits: config.answer.evidenceLimits,

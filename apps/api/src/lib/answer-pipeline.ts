@@ -8,9 +8,9 @@ import {
 import {
   createAnswerPipeline,
   createAnswerRoles,
+  createSourceLookup,
   setUnroutedCallListener,
   type AnswerOutcome,
-  type SourceRecord,
 } from '@bgr/answering';
 import { asSourceDocumentId, type SourceDocument } from '@bgr/domain';
 import type { DocumentsRepository, SpendLedger } from '@bgr/persistence';
@@ -92,30 +92,7 @@ export function buildAnswerPipeline(parts: AnswerPipelineParts): AnswerPipeline 
     retriever,
     ranker,
     answerer,
-    sources: async (chunks) => {
-      const docs = new Map<string, SourceDocument | null>();
-      for (const id of new Set(chunks.map((c) => c.documentId))) docs.set(id, await lookup(id));
-      const out = new Map<string, SourceRecord>();
-      for (const c of chunks) {
-        const doc = docs.get(c.documentId);
-        if (!doc) {
-          logger.warn('chunk dropped: its document is missing', {
-            chunkId: c.chunkId,
-            documentId: c.documentId,
-          });
-          continue;
-        }
-        out.set(c.chunkId, {
-          chunkId: c.chunkId,
-          authority: doc.authority,
-          provenance: doc.provenance,
-          title: doc.title,
-          sourceType: doc.sourceType,
-          ...(doc.version === undefined ? {} : { version: doc.version }),
-        });
-      }
-      return out;
-    },
+    sources: createSourceLookup({ getDocument: lookup, logger }),
     ledger: parts.ledger,
     dailyCapUsd: config.dailyAiCapUsd,
     limits: config.evidenceLimits,
