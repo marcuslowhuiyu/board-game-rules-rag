@@ -50,11 +50,17 @@ export type SourceRecord = CitedSource & {
  * Every model call of one `answer()` run reaches that run's collector through
  * this sink, including router and reranker calls whose errors those stages
  * swallow. Build the router, reranker and answerer `ConverseStructuredModel`s
- * with `onCall: recordModelCall`. The collector is found via AsyncLocalStorage,
- * so concurrent requests in one Lambda never mix their costs; a call made
- * outside a pipeline run goes to `setUnroutedCallListener`'s listener, if any.
+ * with `onCall: recordModelCall` and `deadline: currentRunDeadline`. The run is
+ * found via AsyncLocalStorage, so concurrent requests in one Lambda never mix
+ * their costs or deadlines; a call made outside a pipeline run goes to
+ * `setUnroutedCallListener`'s listener, if any, and has no deadline.
  */
-const collectors = new AsyncLocalStorage<(record: ModelCallRecord) => void>();
+interface RunScope {
+  collect: (record: ModelCallRecord) => void;
+  /** On the pipeline's `clock`; pass the same clock to the model as `now`. */
+  deadline: number;
+}
+const runs = new AsyncLocalStorage<RunScope>();
 let unroutedListener: ((record: ModelCallRecord) => void) | undefined;
 
 /** Called with any record recorded outside a pipeline run (a mis-wired sink); wire it to a logger. */
@@ -65,10 +71,13 @@ export function setUnroutedCallListener(
 }
 
 export const recordModelCall: ModelCallSink = (record) => {
-  const collect = collectors.getStore();
-  if (collect) collect(record);
+  const run = runs.getStore();
+  if (run) run.collect(record);
   else unroutedListener?.(record);
 };
+
+/** The current run's deadline (ms on the pipeline's clock), or undefined outside a run. */
+export const currentRunDeadline = (): number | undefined => runs.getStore()?.deadline;
 
 export interface AnswerPipelineDeps {
   classifier: QuestionClassifier;
@@ -81,6 +90,13 @@ export interface AnswerPipelineDeps {
   dailyCapUsd: number;
   limits: EvidenceLimits;
   now: () => Date;
+  /**
+   * Time allowed for all the model calls of one run, kept below the Lambda timeout so an
+   * exhausted run still ends in `ModelUnavailableError` and records its spend.
+   */
+  runBudgetMs: number;
+  /** Clock for the run deadline, in ms. Defaults to `Date.now`. */
+  clock?: () => number;
   /** Required: a failed ledger write is only visible in the log. */
   logger: Logger;
 }
@@ -177,7 +193,8 @@ export function createAnswerPipeline(deps: AnswerPipelineDeps): {
         onCall(record);
       };
       try {
-        const outcome = await collectors.run(collect, () => run(input, day));
+        const deadline = (deps.clock ?? Date.now)() + deps.runBudgetMs;
+        const outcome = await runs.run({ collect, deadline }, () => run(input, day));
         return { ...outcome, calls };
       } finally {
         const total = calls.reduce((sum, c) => sum + c.costUsd, 0);

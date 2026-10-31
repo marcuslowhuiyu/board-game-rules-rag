@@ -14,6 +14,7 @@ import {
   DailyLimitReachedError,
   ModelUnavailableError,
   createAnswerPipeline,
+  currentRunDeadline,
   recordModelCall,
   setUnroutedCallListener,
   type SourceRecord,
@@ -79,8 +80,10 @@ function setup(
   } = {},
 ) {
   const order: string[] = [];
+  const deadlines: (number | undefined)[] = [];
   const classify = vi.fn(async () => {
     order.push('route');
+    deadlines.push(currentRunDeadline());
     recordModelCall(rec('router', 0.001));
     return { tier: opts.tier ?? 'simple', record: rec('router', 0.001) };
   });
@@ -131,6 +134,8 @@ function setup(
     dailyCapUsd: 1,
     limits: { simple: 3, complex: 10 },
     now: () => NOW,
+    runBudgetMs: 26_000,
+    clock: () => 5_000,
     logger: logger as never,
   });
   const seen: ModelCallRecord[] = [];
@@ -142,7 +147,19 @@ function setup(
       },
       (r) => seen.push(r),
     );
-  return { run, order, classify, retrieve, rank, answer, ledger, seen, logger, sources };
+  return {
+    run,
+    order,
+    classify,
+    retrieve,
+    rank,
+    answer,
+    ledger,
+    seen,
+    logger,
+    sources,
+    deadlines,
+  };
 }
 
 describe('answer pipeline', () => {
@@ -166,6 +183,14 @@ describe('answer pipeline', () => {
     const [day, usd] = vi.mocked(t.ledger.add).mock.calls[0] ?? [];
     expect(day).toBe(DAY);
     expect(usd).toBeCloseTo(0.013);
+  });
+
+  it('sets the run deadline to clock + runBudgetMs for the model calls of the run only', async () => {
+    const t = setup();
+    expect(currentRunDeadline()).toBeUndefined();
+    await t.run();
+    expect(t.deadlines).toEqual([31_000]);
+    expect(currentRunDeadline()).toBeUndefined();
   });
 
   it('throws DailyLimitReachedError at the cap and calls no model', async () => {
@@ -269,6 +294,7 @@ describe('recordModelCall routing', () => {
       dailyCapUsd: 1,
       limits: { simple: 3, complex: 10 },
       now: () => NOW,
+      runBudgetMs: 26_000,
       logger: { error: vi.fn(), warn: vi.fn() } as never,
     });
     const seenA: number[] = [];

@@ -388,7 +388,7 @@ describe('DevStack', () => {
         .filter((s) => actions(s).includes('bedrock:InvokeModel'))
         .flatMap(resources);
 
-    it('gives the API Lambda a 29 s timeout, 1024 MB and all twelve answering env keys', () => {
+    it('gives the API Lambda a 29 s timeout, 1024 MB and all thirteen answering env keys', () => {
       const fns = template.findResources('AWS::Lambda::Function', {
         Properties: { Timeout: 29 },
       });
@@ -407,6 +407,7 @@ describe('DevStack', () => {
         'EVIDENCE_LIMIT_COMPLEX',
         'RERANK_CANDIDATES',
         'RERANK_TOP_N',
+        'ANSWER_RUN_BUDGET_MS',
         'EMBEDDING_REGION',
         'EMBEDDING_MODEL_ID',
         'EMBEDDING_DIMENSIONS',
@@ -422,6 +423,7 @@ describe('DevStack', () => {
         EVIDENCE_LIMIT_COMPLEX: '10',
         RERANK_CANDIDATES: '15',
         RERANK_TOP_N: '10',
+        ANSWER_RUN_BUDGET_MS: '26000',
         EMBEDDING_DIMENSIONS: '1024',
       });
     });
@@ -512,6 +514,8 @@ describe('DevStack', () => {
       expect(loadAnsweringConfigFromEnv(env)).toMatchObject({
         dailyAiCapUsd: 1,
         evidenceLimits: { simple: 3, complex: 10 },
+        modelRequestTimeoutMs: 20_000,
+        runBudgetMs: 26_000,
       });
       expect(vectorSettingsFromEnv(env).embedding.dimensions).toBe(1024);
     });

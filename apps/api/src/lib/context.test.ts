@@ -9,6 +9,7 @@ const ENV = {
   EVIDENCE_LIMIT_COMPLEX: '10',
   RERANK_CANDIDATES: '15',
   RERANK_TOP_N: '10',
+  ANSWER_RUN_BUDGET_MS: '26000',
 };
 
 describe('loadAnsweringConfigFromEnv', () => {
@@ -20,6 +21,7 @@ describe('loadAnsweringConfigFromEnv', () => {
       evidenceLimits: { simple: 3, complex: 10 },
       rerankCandidates: 15,
       rerankTopN: 10,
+      runBudgetMs: 26000,
     });
   });
 
@@ -38,6 +40,9 @@ describe('loadAnsweringConfigFromEnv', () => {
     ['EVIDENCE_LIMIT_COMPLEX', '-3'],
     ['RERANK_CANDIDATES', ' '],
     ['RERANK_TOP_N', '0'],
+    ['ANSWER_RUN_BUDGET_MS', '0'],
+    ['ANSWER_RUN_BUDGET_MS', '25.5'],
+    ['ANSWER_RUN_BUDGET_MS', '26s'],
   ])('rejects %s=%j with a clear error', (key, value) => {
     expect(() => loadAnsweringConfigFromEnv({ ...ENV, [key]: value })).toThrow(key);
   });

@@ -155,6 +155,7 @@ export function loadAnsweringConfigFromEnv(
     },
     rerankCandidates: requirePositiveNumber('RERANK_CANDIDATES', env),
     rerankTopN: requirePositiveNumber('RERANK_TOP_N', env),
+    runBudgetMs: requirePositiveNumber('ANSWER_RUN_BUDGET_MS', env),
   };
 }
 

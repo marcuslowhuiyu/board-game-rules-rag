@@ -12,6 +12,7 @@ import {
 } from '@bgr/ai';
 import {
   createAnswerPipeline,
+  currentRunDeadline,
   recordModelCall,
   setUnroutedCallListener,
   type AnswerOutcome,
@@ -30,6 +31,8 @@ export interface AnsweringConfig {
   evidenceLimits: EvidenceLimits;
   rerankCandidates: number;
   rerankTopN: number;
+  /** Time allowed for all model calls of one question; below the Lambda timeout. */
+  runBudgetMs: number;
 }
 
 /** The outcome plus every document the run looked up, so citations need no second read. */
@@ -72,6 +75,8 @@ export function buildAnswerPipeline(parts: AnswerPipelineParts): AnswerPipeline 
   const model = new ConverseStructuredModel({
     onCall: recordModelCall,
     requestTimeoutMs: config.modelRequestTimeoutMs,
+    // Both default to Date.now, the clock the pipeline sets the deadline on.
+    deadline: currentRunDeadline,
     ...(parts.clientFactory ? { clientFactory: parts.clientFactory } : {}),
   });
   const retriever = new VectorRulesRetriever({
@@ -124,6 +129,7 @@ export function buildAnswerPipeline(parts: AnswerPipelineParts): AnswerPipeline 
     dailyCapUsd: config.dailyAiCapUsd,
     limits: config.evidenceLimits,
     now: parts.now ?? (() => new Date()),
+    runBudgetMs: config.runBudgetMs,
     logger,
   });
 

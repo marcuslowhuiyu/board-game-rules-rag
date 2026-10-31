@@ -23,6 +23,7 @@ const CONFIG: AnsweringConfig = {
   evidenceLimits: { simple: 3, complex: 10 },
   rerankCandidates: 7,
   rerankTopN: 10,
+  runBudgetMs: 26_000,
 };
 
 const doc = (id: string): SourceDocument => ({
@@ -202,5 +203,27 @@ describe('buildAnswerPipeline (the Lambda wiring), with fake Bedrock, vectors an
     await expect(run()).rejects.toBeInstanceOf(ModelUnavailableError);
     // With the 120 s default the hanging client would never return in time.
     expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  it('ends an exhausted run budget in ModelUnavailableError and still records the spend', async () => {
+    // The router answers (billed); every later call hangs until the run budget aborts it.
+    const answering = fakeBedrock();
+    const client = {
+      send: (command: { input: { system?: Array<{ text?: string }> } }, options?: unknown) =>
+        (command.input.system?.[0]?.text ?? '').startsWith('You classify questions')
+          ? answering.send(command)
+          : hangingBedrock().send(command, options as never),
+    };
+    const { run, ledger } = await setup(
+      { modelRequestTimeoutMs: 20_000, runBudgetMs: 300 },
+      client,
+    );
+    const started = Date.now();
+    const err = await run().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ModelUnavailableError);
+    // Well inside the 20 s per-call timeout: the run budget ended it.
+    expect(Date.now() - started).toBeLessThan(3_000);
+    const routerCost = (200 * 0.035 + 10 * 0.14) / 1e6;
+    expect(await ledger.spentUsd(singaporeDayKey(NOW))).toBeCloseTo(routerCost, 12);
   });
 });

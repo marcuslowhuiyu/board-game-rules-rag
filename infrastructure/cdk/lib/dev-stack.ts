@@ -101,6 +101,11 @@ export interface AnsweringConfig {
   throttle: { rateLimit: number; burstLimit: number };
   /** Per-model-call request timeout. */
   modelRequestTimeoutMs: number;
+  /**
+   * Time allowed for all model calls of one question. Kept below the 29 s Lambda timeout, so an
+   * exhausted run still returns 503 MODEL_UNAVAILABLE and records its spend.
+   */
+  runBudgetMs: number;
   /** Evidence kept after reranking, by question tier. */
   evidenceLimits: { simple: number; complex: number };
   /** Candidates retrieved before reranking. */
@@ -113,6 +118,7 @@ const DEFAULT_ANSWERING: AnsweringConfig = {
   dailyAiCapUsd: 1,
   throttle: { rateLimit: 5, burstLimit: 10 },
   modelRequestTimeoutMs: 20_000,
+  runBudgetMs: 26_000,
   evidenceLimits: { simple: 3, complex: 10 },
   rerankCandidates: 15,
   rerankTopN: 10,
@@ -312,6 +318,7 @@ export class DevStack extends Stack {
     apiFn.addEnvironment('EVIDENCE_LIMIT_COMPLEX', String(answering.evidenceLimits.complex));
     apiFn.addEnvironment('RERANK_CANDIDATES', String(answering.rerankCandidates));
     apiFn.addEnvironment('RERANK_TOP_N', String(answering.rerankTopN));
+    apiFn.addEnvironment('ANSWER_RUN_BUDGET_MS', String(answering.runBudgetMs));
     apiFn.addEnvironment('EMBEDDING_REGION', embedding.region);
     apiFn.addEnvironment('EMBEDDING_MODEL_ID', embedding.modelId);
     apiFn.addEnvironment('EMBEDDING_DIMENSIONS', String(embedding.dimensions));
