@@ -318,7 +318,8 @@ export class DevStack extends Stack {
     apiFn.addEnvironment('VECTOR_REGION', this.region);
     apiFn.addEnvironment('VECTOR_INDEX_ARN', vectorIndex.attrIndexArn);
 
-    usageTable.grantReadWriteData(apiFn);
+    // The spend ledger only reads (GetItem) and increments (UpdateItem) a day's row.
+    usageTable.grant(apiFn, 'dynamodb:GetItem', 'dynamodb:UpdateItem');
     apiFn.addToRolePolicy(
       new PolicyStatement({
         actions: ['bedrock:InvokeModel'],
@@ -678,21 +679,36 @@ function baseApiEnvironment(args: ApiEnvArgs): Record<string, string> {
   };
 }
 
+/** Geography prefixes of Bedrock cross-region inference profile ids (`<prefix>.<foundationId>`). */
+const INFERENCE_PROFILE_PREFIXES: ReadonlySet<string> = new Set([
+  'global',
+  'us',
+  'us-gov',
+  'eu',
+  'apac',
+  'jp',
+  'au',
+  'ca',
+]);
+
 /**
  * Bedrock InvokeModel resources for every approved catalog model. An
  * inference profile `<prefix>.<foundationId>` routes to the foundation model in
  * its destination regions, so IAM needs both ARNs; a `global.` profile also
  * routes to the region-less ARN. Model ids are never wildcarded.
  */
-function catalogInvokeResources(catalog: ModelCatalog, account: string): string[] {
+export function catalogInvokeResources(catalog: ModelCatalog, account: string): string[] {
   const keys = new Set(MODEL_ROLES.flatMap((role) => catalog.approved[role]));
   const resources = new Set<string>();
   for (const key of keys) {
     const { modelId, region } = catalog.models[key]!;
     const dot = modelId.indexOf('.');
-    if (dot <= 0)
-      throw new Error(`catalog model "${key}" has no inference-profile prefix: ${modelId}`);
     const prefix = modelId.slice(0, dot);
+    if (!INFERENCE_PROFILE_PREFIXES.has(prefix)) {
+      // A plain foundation-model id (e.g. `amazon.nova-micro-v1:0`): no profile.
+      resources.add(`arn:aws:bedrock:${region}::foundation-model/${modelId}`);
+      continue;
+    }
     const foundationId = modelId.slice(dot + 1);
     resources.add(`arn:aws:bedrock:${region}:${account}:inference-profile/${modelId}`);
     resources.add(`arn:aws:bedrock:*::foundation-model/${foundationId}`);

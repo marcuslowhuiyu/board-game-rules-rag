@@ -1,7 +1,7 @@
 import { App } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { DevStack } from '../lib/dev-stack.js';
+import { DevStack, catalogInvokeResources } from '../lib/dev-stack.js';
 import { GithubOidcStack } from '../lib/github-oidc.js';
 import { NON_FILTERABLE_METADATA_KEYS } from '@bgr/retrieval';
 
@@ -457,6 +457,7 @@ describe('DevStack', () => {
             Match.objectLike({
               Action: ['s3vectors:QueryVectors', 's3vectors:GetVectors'],
               Effect: 'Allow',
+              Resource: { 'Fn::GetAtt': [Match.stringLikeRegexp('^RuleChunkIndex'), 'IndexArn'] },
             }),
           ]),
         },
@@ -474,6 +475,76 @@ describe('DevStack', () => {
       expect(r).toContain('arn:aws:bedrock:*::foundation-model/amazon.nova-micro-v1:0');
       // Only global profiles route to the unqualified-region foundation ARN.
       expect(r).not.toContain('arn:aws:bedrock:::foundation-model/amazon.nova-micro-v1:0');
+    });
+
+    it('scopes the usage table grant to GetItem and UpdateItem', () => {
+      const usage = statements().filter((s) => JSON.stringify(s.Resource).includes('"UsageTable'));
+      const granted = usage.flatMap(actions).filter((a) => a.startsWith('dynamodb:'));
+      expect(granted.sort()).toEqual(['dynamodb:GetItem', 'dynamodb:UpdateItem']);
+    });
+
+    it('sets env values the API parsers accept', async () => {
+      const fn = Object.values(
+        template.findResources('AWS::Lambda::Function', { Properties: { Timeout: 29 } }),
+      )[0]!;
+      const raw = (fn.Properties as { Environment: { Variables: Record<string, unknown> } })
+        .Environment.Variables;
+      const fakeFor = (key: string): string =>
+        key === 'VECTOR_INDEX_ARN'
+          ? 'arn:aws:s3vectors:ap-southeast-1:000000000000:bucket/b/index/i'
+          : `fake-${key.toLowerCase()}`;
+      const env = Object.fromEntries(
+        Object.entries(raw).map(([k, v]) => [k, typeof v === 'string' ? v : fakeFor(k)]),
+      );
+      // Loaded by a computed specifier: apps/api sits outside this package's
+      // tsconfig rootDir, so a static import would fail `tsc` (TS6059).
+      const apiSrc = new URL('../../../apps/api/src/', import.meta.url).href;
+      const { loadAnsweringConfigFromEnv } = (await import(
+        /* @vite-ignore */ `${apiSrc}lib/context.ts`
+      )) as { loadAnsweringConfigFromEnv: (env: Record<string, string>) => unknown };
+      const { vectorSettingsFromEnv } = (await import(
+        /* @vite-ignore */ `${apiSrc}ingestion/stage-context.ts`
+      )) as {
+        vectorSettingsFromEnv: (env: Record<string, string>) => {
+          embedding: { dimensions: number };
+        };
+      };
+      expect(loadAnsweringConfigFromEnv(env)).toMatchObject({
+        dailyAiCapUsd: 1,
+        evidenceLimits: { simple: 3, complex: 10 },
+      });
+      expect(vectorSettingsFromEnv(env).embedding.dimensions).toBe(1024);
+    });
+
+    describe('catalogInvokeResources', () => {
+      const entry = (key: string, modelId: string) => ({
+        key,
+        displayName: key,
+        modelId,
+        region: 'ap-southeast-1',
+        inputUsdPerMTok: 1,
+        outputUsdPerMTok: 1,
+        structuredOutput: 'json' as const,
+        maxTokens: 1,
+      });
+      const catalogOf = (modelId: string) => ({
+        models: { m: entry('m', modelId) },
+        approved: { router: ['m'], reranker: ['m'], answerer: ['m'] },
+        defaults: { router: 'm', reranker: 'm', answerer: 'm' },
+      });
+
+      it('grants only the foundation model for a plain model id', () => {
+        expect(catalogInvokeResources(catalogOf('amazon.nova-micro-v1:0'), 'ACCT')).toEqual([
+          'arn:aws:bedrock:ap-southeast-1::foundation-model/amazon.nova-micro-v1:0',
+        ]);
+      });
+
+      it('grants the profile and foundation models for a prefixed id', () => {
+        expect(catalogInvokeResources(catalogOf('us.anthropic.claude-x:0'), 'ACCT')).toEqual([
+          'arn:aws:bedrock:*::foundation-model/anthropic.claude-x:0',
+          'arn:aws:bedrock:ap-southeast-1:ACCT:inference-profile/us.anthropic.claude-x:0',
+        ]);
+      });
     });
 
     it('never grants invoke on a wildcard model id', () => {
