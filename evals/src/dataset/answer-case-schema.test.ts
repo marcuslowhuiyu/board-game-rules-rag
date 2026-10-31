@@ -1,6 +1,7 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { AnswerOnlyCaseSchema, loadAnswerDataset } from './answer-case-schema.js';
 import { DatasetError, RetrievalCaseSchema } from './case-schema.js';
@@ -96,5 +97,20 @@ describe('loadAnswerDataset', () => {
   it('reports a bad answer-only line with its file and line', async () => {
     const a = writeTmp('bad.jsonl', [{ ...answerOnly, answer: { certainty: 'DEFINITIVE' } }]);
     await expect(loadAnswerDataset([], [a])).rejects.toThrow(/bad\.jsonl:1/);
+  });
+
+  it('loads the committed dataset: 75-100 cases with not-in-rulebook cases for every game', async () => {
+    const jsonl = (sub: string) => {
+      const dir = fileURLToPath(new URL(`../../datasets/${sub}/`, import.meta.url));
+      return readdirSync(dir)
+        .filter((f) => f.endsWith('.jsonl'))
+        .map((f) => join(dir, f));
+    };
+    const cases = await loadAnswerDataset(jsonl('retrieval'), jsonl('answer-only'));
+    expect(cases.length).toBeGreaterThanOrEqual(75);
+    expect(cases.length).toBeLessThanOrEqual(100);
+    const games = (kind: string) =>
+      new Set(cases.filter((c) => c.kind === kind).map((c) => c.case.game));
+    expect(games('not-in-rulebook')).toEqual(games('answerable'));
   });
 });

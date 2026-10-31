@@ -68,6 +68,8 @@ The answer eval reuses the retrieval dataset and adds two things, both validated
 
 - **Not-in-rulebook questions** must be plausible questions asked at the table whose answer is truly absent from every enabled source. Examples: app or online play, a house rule, another edition's component, a strategy question.
 - Ids are unique across both sets, and a question text may appear only once per game.
+- Each not-in-rulebook case lists in `notes` the terms searched across every chunk of its game. The verifier fails if one of its `forbiddenClaims` appears in a chunk of that game, since the case is then probably answerable.
+- Errata cases set `authority: "OFFICIAL_ERRATA"` only when the Stonemaier FAQ alone states the ruling. Where Rulepop repeats the FAQ text, the applied authority depends on which passage the answer cites, so `authority` is left unset.
 
 ## Commands
 
@@ -78,7 +80,7 @@ pnpm -C evals test                     # unit tests + the AWS-free regression su
 
 source evals/scripts/dev-env.sh        # once per shell, needs AWS credentials
 pnpm -C evals eval:ingest              # create/reuse the eval games and ingest their sources; writes config/eval-games.dev.json
-pnpm -C evals exec tsx scripts/verify-dataset.ts   # check every evidence phrase against the ingested chunks
+pnpm -C evals exec tsx scripts/verify-dataset.ts   # check evidence phrases and not-in-rulebook forbidden claims against the chunks
 pnpm -C evals eval:retrieval --markdown            # full eval; JSON report in evals/reports/ (gitignored)
 pnpm -C evals eval:retrieval --games seti          # one game
 pnpm -C evals eval:retrieval --dimensions 512 --markdown   # local index at 512 dimensions
