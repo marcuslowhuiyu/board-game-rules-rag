@@ -62,7 +62,7 @@ The answer eval reuses the retrieval dataset and adds two things, both validated
 }
 ```
 
-- **`forbiddenClaims`** are short phrases (same 1-120 character, 15-word rule as evidence phrases) for the tempting wrong answer. The answer must not contain them.
+- **`forbiddenClaims`** are short phrases (same 1-120 character, 15-word rule as evidence phrases) for the tempting wrong answer. The answer must not contain them. A not-in-rulebook case may carry one only if no true statement from another edition, expansion or variant could contain it, since a correct INCONCLUSIVE explanation may mention that other source.
 
 **Answer-only cases** go in `datasets/answer-only/<game>.jsonl`. They have the same fields as a retrieval case, but no `requiredEvidence`, and `answer.certainty` must be `INCONCLUSIVE`.
 
