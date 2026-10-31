@@ -98,6 +98,33 @@ describe('model catalog', () => {
     },
   );
 
+  it('answerer approved list includes the comparison candidates', () => {
+    const catalog = loadModelCatalog();
+    expect(catalog.approved.answerer).toEqual([
+      'gpt-6-luna',
+      'claude-haiku-5-5',
+      'claude-sonnet-5-5',
+      'nova-2-lite',
+    ]);
+    for (const key of ['claude-haiku-5-5', 'claude-sonnet-5-5', 'nova-2-lite']) {
+      expect(modelFor(catalog, 'answerer', key)).toMatchObject({
+        region: 'ap-southeast-1',
+        maxTokens: 4096,
+        temperature: 0,
+      });
+      expect(catalog.approved.router).not.toContain(key);
+      expect(catalog.approved.reranker).not.toContain(key);
+    }
+  });
+
+  it('defaults unchanged', () => {
+    expect(loadModelCatalog().defaults).toEqual({
+      router: 'nova-micro',
+      reranker: 'gpt-6-luna',
+      answerer: 'gpt-6-luna',
+    });
+  });
+
   it('modelFor rejects an unapproved key', () => {
     expect(() => modelFor(loadModelCatalog(), 'router', 'gpt-6-luna')).toThrow(
       /not approved for router/,

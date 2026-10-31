@@ -479,6 +479,20 @@ describe('DevStack', () => {
       expect(r).not.toContain('arn:aws:bedrock:::foundation-model/amazon.nova-micro-v1:0');
     });
 
+    it('grants invoke on the answerer comparison candidates and never a wildcard foundation model', () => {
+      const r = invokeResources();
+      for (const id of [
+        'anthropic.claude-haiku-5-5',
+        'anthropic.claude-sonnet-5-5',
+        'amazon.nova-2-lite-v1:0',
+      ]) {
+        expect(r.some((x) => x.endsWith(`:inference-profile/global.${id}`))).toBe(true);
+        expect(r).toContain(`arn:aws:bedrock:::foundation-model/${id}`);
+      }
+      expect(r).not.toContain('arn:aws:bedrock:*::foundation-model/*');
+      expect(r.some((x) => x.endsWith('foundation-model/*'))).toBe(false);
+    });
+
     it('scopes the usage table grant to GetItem and UpdateItem', () => {
       const usage = statements().filter((s) => JSON.stringify(s.Resource).includes('"UsageTable'));
       const granted = usage.flatMap(actions).filter((a) => a.startsWith('dynamodb:'));
