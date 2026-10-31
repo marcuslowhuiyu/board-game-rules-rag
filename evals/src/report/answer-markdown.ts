@@ -28,6 +28,17 @@ function misses(c: AnswerCaseRow): string[] {
   ];
 }
 
+/** Which cases ran, so a subset run is never mistaken for the whole dataset. */
+function caseScope(r: AnswerRunReport | undefined): string {
+  const { games, caseIds } = r?.filters ?? { games: null, caseIds: null };
+  if (games === null && caseIds === null) return 'Cases: all answer cases';
+  const flags = [
+    ...(games === null ? [] : [`--games ${games.join(',')}`]),
+    ...(caseIds === null ? [] : [`--cases ${caseIds.join(',')}`]),
+  ];
+  return `Cases: **subset**, ${flags.join(' ')}`;
+}
+
 /** A cut-short run never counts as clearing the marks, whatever its verdict says. */
 const clears = (r: AnswerRunReport) => r.summary.verdict === 'pass' && !r.cutShort;
 
@@ -40,6 +51,8 @@ export function toAnswerMarkdown(reports: readonly AnswerRunReport[]): string {
 
   const lines = [
     '## Answer eval',
+    '',
+    caseScope(reports[0]),
     '',
     `| | ${reports.map(name).join(' | ')} |`,
     `|---|${reports.map(() => '---').join('|')}|`,

@@ -80,6 +80,10 @@ for (const answerer of plan.answererKeys) {
     meter,
     bars: config.answerBars,
     labelledTier: plan.labelledTier,
+    filters: {
+      ...(plan.games ? { games: plan.games } : {}),
+      ...(plan.caseIds ? { caseIds: plan.caseIds } : {}),
+    },
   });
   reports.push(report);
   const out = here(`./reports/answer-${report.generatedAt.replace(/[:.]/g, '-')}.json`);

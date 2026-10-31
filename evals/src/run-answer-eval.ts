@@ -25,6 +25,8 @@ export interface AnswerRunReport {
   generatedAt: string;
   /** True when every question got its labelled tier and the router was not called. */
   labelledTier: boolean;
+  /** The --games and --cases filters of the run; null when not filtered. */
+  filters: { games: string[] | null; caseIds: string[] | null };
   bars: AnswerBars;
   models: Record<ModelRole, { key: string; modelId: string }>;
   promptVersions: Record<ModelRole, string>;
@@ -82,6 +84,7 @@ export async function runAnswerEval(input: {
   meter: CostMeter;
   bars: AnswerBars;
   labelledTier: boolean;
+  filters?: { games?: string[]; caseIds?: string[] };
   now?: () => number;
 }): Promise<AnswerRunReport> {
   const { cases, games, pipeline, meter } = input;
@@ -150,6 +153,10 @@ export async function runAnswerEval(input: {
   return {
     generatedAt,
     labelledTier: input.labelledTier,
+    filters: {
+      games: input.filters?.games ?? null,
+      caseIds: input.filters?.caseIds ?? null,
+    },
     bars: input.bars,
     models: input.models,
     promptVersions: input.promptVersions,

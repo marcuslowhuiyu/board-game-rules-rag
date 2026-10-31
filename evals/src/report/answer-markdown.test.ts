@@ -11,12 +11,18 @@ const band = (cases: number, right: number) => ({
 
 function report(
   key: string,
-  over: { verdict?: AnswerSummary['verdict']; perQuestionUsd?: number; cutShort?: boolean } = {},
+  over: {
+    verdict?: AnswerSummary['verdict'];
+    perQuestionUsd?: number;
+    cutShort?: boolean;
+    filters?: AnswerRunReport['filters'];
+  } = {},
 ): AnswerRunReport {
   const verdict = over.verdict ?? 'pass';
   return {
     generatedAt: '2026-10-31T00:00:00.000Z',
     labelledTier: false,
+    filters: over.filters ?? { games: null, caseIds: null },
     bars: { maxGuesses: 0, minEvidenceRate: 0.85, minCertaintyRate: 0.75 },
     models: {
       router: { key: 'nova-micro', modelId: 'r' },
@@ -109,6 +115,18 @@ describe('toAnswerMarkdown', () => {
   it('a pass verdict on a cut-short run is still never named', () => {
     const md = toAnswerMarkdown([report('odd', { verdict: 'pass', cutShort: true })]);
     expect(md).toContain('none: operator decides');
+  });
+
+  it('the header shows the case filters', () => {
+    expect(toAnswerMarkdown([report('haiku')])).toContain('Cases: all answer cases');
+    const md = toAnswerMarkdown([
+      report('haiku', { filters: { games: ['seti', 'wingspan'], caseIds: null } }),
+    ]);
+    expect(md).toContain('Cases: **subset**, --games seti,wingspan');
+    const both = toAnswerMarkdown([
+      report('haiku', { filters: { games: ['seti'], caseIds: ['a', 'b'] } }),
+    ]);
+    expect(both).toContain('Cases: **subset**, --games seti --cases a,b');
   });
 
   it('shows the rows with their bars, — for empty buckets, and the failed cases', () => {

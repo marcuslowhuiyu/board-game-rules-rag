@@ -178,7 +178,12 @@ async function setup(
 
 const run = (
   s: Awaited<ReturnType<typeof setup>>,
-  over: { meter?: CostMeter; cases?: AnswerCase[]; labelledTier?: boolean } = {},
+  over: {
+    meter?: CostMeter;
+    cases?: AnswerCase[];
+    labelledTier?: boolean;
+    filters?: { games?: string[]; caseIds?: string[] };
+  } = {},
 ) =>
   runAnswerEval({
     cases: over.cases ?? s.cases,
@@ -189,6 +194,7 @@ const run = (
     meter: over.meter ?? new CostMeter(10),
     bars: config.answerBars,
     labelledTier: over.labelledTier ?? false,
+    ...(over.filters ? { filters: over.filters } : {}),
   });
 
 describe('answer eval PR subset (Starfall, fake Bedrock)', () => {
@@ -249,6 +255,20 @@ describe('answer eval PR subset (Starfall, fake Bedrock)', () => {
     expect(report.cost.usd).toBeGreaterThan(0);
     expect(report.cost.perQuestionUsd).toBeCloseTo(report.cost.usd / 6);
     expect(report.cases.reduce((sum, c) => sum + c.costUsd, 0)).toBeCloseTo(report.cost.usd);
+  });
+
+  it('records the --games and --cases filters it ran with', async () => {
+    const s = await setup();
+    const full = await run(s, { cases: s.cases.slice(0, 1) });
+    expect(full.filters).toEqual({ games: null, caseIds: null });
+    const subset = await run(s, {
+      cases: s.cases.slice(0, 1),
+      filters: { games: ['starfall'], caseIds: ['starfall-answer-launch-cost'] },
+    });
+    expect(subset.filters).toEqual({
+      games: ['starfall'],
+      caseIds: ['starfall-answer-launch-cost'],
+    });
   });
 
   it('meter cap cuts the run short and verdict is incomplete', async () => {
@@ -316,6 +336,14 @@ describe('resolveRunPlan', () => {
     expect(() => resolveRunPlan(['--reranker', 'nope', '--max-cost', '1'], catalog)).toThrow(
       'not approved for reranker',
     );
+  });
+
+  it('an empty --answerer fails before spending', () => {
+    for (const value of ['', ' ', ',', ' , ']) {
+      expect(() => resolveRunPlan(['--answerer', value, '--max-cost', '1'], catalog)).toThrow(
+        '--answerer needs at least one model key',
+      );
+    }
   });
 
   it('requires --max-cost', () => {

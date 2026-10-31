@@ -65,6 +65,7 @@ export function resolveRunPlan(args: readonly string[], catalog: ModelCatalog): 
     ...(values['max-cost'] !== undefined ? { maxCost: values['max-cost'] } : {}),
   }) as number;
   const answererKeys = list(values.answerer) ?? [catalog.defaults.answerer];
+  if (answererKeys.length === 0) throw new Error('--answerer needs at least one model key');
   for (const key of answererKeys) modelFor(catalog, 'answerer', key);
   if (values.reranker !== undefined) modelFor(catalog, 'reranker', values.reranker);
   const games = list(values.games);
