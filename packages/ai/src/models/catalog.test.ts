@@ -110,11 +110,18 @@ describe('model catalog', () => {
       expect(modelFor(catalog, 'answerer', key)).toMatchObject({
         region: 'ap-southeast-1',
         maxTokens: 4096,
-        temperature: 0,
       });
       expect(catalog.approved.router).not.toContain(key);
       expect(catalog.approved.reranker).not.toContain(key);
     }
+  });
+
+  it('sends no temperature to the Claude 5.5 models, which reject sampling parameters', () => {
+    const { models } = loadModelCatalog();
+    expect(models['claude-haiku-5-5']).not.toHaveProperty('temperature');
+    expect(models['claude-sonnet-5-5']).not.toHaveProperty('temperature');
+    expect(models['nova-2-lite']?.temperature).toBe(0);
+    expect(models['claude-sonnet-5-5']?.cacheReadUsdPerMTok).toBe(0.2);
   });
 
   it('defaults unchanged', () => {
