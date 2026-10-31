@@ -13,8 +13,10 @@ import {
   asSourceDocumentId,
   type Confidence,
   type RulesAnswer,
+  type Message,
   type SourceDocument,
 } from '@bgr/domain';
+import { MessageIndexTakenError, type MessagesRepository } from '@bgr/persistence';
 import type { RetrievedChunk } from '@bgr/retrieval';
 import type { AnswerRun } from '../lib/answer-pipeline.js';
 import { makeHandler } from '../lib/router.js';
@@ -357,5 +359,108 @@ describe('POST /sessions/{sessionId}/messages', () => {
     expect(res.statusCode).toBe(500);
     const stored = await ctx.messages.listMessages(asSessionId(SESSION));
     expect(stored.map((m) => m.role)).toEqual(['USER']);
+  });
+
+  describe('concurrent questions in one session', () => {
+    /** Like makeFakePipeline, but yields before answering so another request can interleave. */
+    const yieldingPipeline = (): FakePipeline => {
+      const calls: FakePipeline['calls'] = [];
+      return {
+        calls,
+        async answer(input) {
+          calls.push(input);
+          await new Promise((resolve) => setTimeout(resolve, 0));
+          return outcome;
+        },
+      };
+    };
+
+    it('stores all four messages at distinct indexes and overwrites none', async () => {
+      const { ctx, handler } = await build(yieldingPipeline());
+      const [first, second] = await Promise.all([
+        ask(handler, { question: 'First question?' }),
+        ask(handler, { question: 'Second question?' }),
+      ]);
+      expect([first.statusCode, second.statusCode]).toEqual([200, 200]);
+
+      const stored = await ctx.messages.listMessages(asSessionId(SESSION));
+      expect(stored.map((m) => m.index)).toEqual([0, 1, 2, 3]);
+      expect(new Set(stored.map((m) => m.messageId)).size).toBe(4);
+      expect(stored.filter((m) => m.role === 'USER').map((m) => m.content)).toEqual(
+        expect.arrayContaining(['First question?', 'Second question?']),
+      );
+      const assistantIds = stored.filter((m) => m.role === 'ASSISTANT').map((m) => m.messageId);
+      expect(assistantIds).toEqual(
+        expect.arrayContaining([
+          bodyAs<MessageResponse>(first).messageId,
+          bodyAs<MessageResponse>(second).messageId,
+        ]),
+      );
+    });
+
+    /** Wraps the in-memory repo; `taken(message)` makes an append collide as if another request won. */
+    const colliding = (
+      inner: MessagesRepository,
+      taken: (m: Message) => boolean,
+    ): MessagesRepository & { appends: Message[]; consistentReads: number } => {
+      const appends: Message[] = [];
+      const repo = {
+        appends,
+        consistentReads: 0,
+        async appendMessage(m: Message) {
+          appends.push(m);
+          if (taken(m)) throw new MessageIndexTakenError(m.sessionId, m.index);
+          await inner.appendMessage(m);
+        },
+        async listMessages(...args: Parameters<MessagesRepository['listMessages']>) {
+          if (args[1]?.consistentRead) repo.consistentReads += 1;
+          return inner.listMessages(...args);
+        },
+      };
+      return repo;
+    };
+
+    it('picks the next index from a consistent read', async () => {
+      const { ctx, handler } = await build(makeFakePipeline(outcome));
+      const repo = colliding(ctx.messages, () => false);
+      ctx.messages = repo;
+      await ask(handler, { question: 'May I attack twice?' });
+      expect(repo.consistentReads).toBe(2);
+    });
+
+    it('retries a colliding USER append and succeeds once the index is free', async () => {
+      const { ctx, handler } = await build(makeFakePipeline(outcome));
+      let collisions = 2;
+      const repo = colliding(ctx.messages, (m) => m.role === 'USER' && collisions-- > 0);
+      ctx.messages = repo;
+      const res = await ask(handler, { question: 'May I attack twice?' });
+      expect(res.statusCode).toBe(200);
+      expect(repo.appends.filter((m) => m.role === 'USER')).toHaveLength(3);
+    });
+
+    it('returns 409 CONFLICT without running the pipeline when the USER append keeps colliding', async () => {
+      const pipeline = makeFakePipeline(outcome);
+      const { ctx, handler } = await build(pipeline);
+      const repo = colliding(ctx.messages, (m) => m.role === 'USER');
+      ctx.messages = repo;
+      const res = await ask(handler, { question: 'May I attack twice?' });
+      expect(res.statusCode).toBe(409);
+      expect(bodyAs<{ error: { code: string } }>(res).error.code).toBe('CONFLICT');
+      expect(repo.appends).toHaveLength(3);
+      expect(pipeline.calls).toHaveLength(0);
+    });
+
+    it('returns 500 and logs it when the ASSISTANT append keeps colliding', async () => {
+      const { ctx, handler } = await build(makeFakePipeline(outcome));
+      const repo = colliding(ctx.messages, (m) => m.role === 'ASSISTANT');
+      ctx.messages = repo;
+      const res = await ask(handler, { question: 'May I attack twice?' });
+      expect(res.statusCode).toBe(500);
+      expect(repo.appends.filter((m) => m.role === 'ASSISTANT')).toHaveLength(3);
+      expect(logged().some((l) => l.includes('assistant message not stored'))).toBe(true);
+      expect((await ctx.messages.listMessages(asSessionId(SESSION))).map((m) => m.role)).toEqual([
+        'USER',
+      ]);
+    });
   });
 });

@@ -9,13 +9,24 @@ import {
   asMessageId,
   asSessionId,
   type Authority,
+  type Message,
   type ProvenanceEvidence,
   type RulesAnswer,
+  type SessionId,
   type SourceType,
 } from '@bgr/domain';
+import { MessageIndexTakenError, type MessagesRepository } from '@bgr/persistence';
 import { ZodError, z } from 'zod';
 import type { AppContext } from '../lib/context.js';
-import { badRequest, notFound, ok, serviceUnavailable, tooManyRequests } from '../lib/responses.js';
+import {
+  badRequest,
+  conflict,
+  internalError,
+  notFound,
+  ok,
+  serviceUnavailable,
+  tooManyRequests,
+} from '../lib/responses.js';
 import { parseJsonBody, route, type RequestContext } from '../lib/router.js';
 
 const AskSchema = z.object({ question: z.string().trim().min(1).max(1000) });
@@ -75,6 +86,32 @@ function servedBy(
   return { models, promptVersions };
 }
 
+/** How many times an append re-reads the session and retries after another request took its index. */
+const APPEND_ATTEMPTS = 3;
+
+/**
+ * Append a message at the session's next free index. The index is read (consistently) at write
+ * time and the write is conditional, so a concurrent request in the same session can never
+ * overwrite it; on a collision this re-reads and retries. Returns false once every attempt collided.
+ */
+async function appendAtNextIndex(
+  messages: MessagesRepository,
+  sessionId: SessionId,
+  build: (index: number) => Message,
+): Promise<boolean> {
+  for (let attempt = 0; attempt < APPEND_ATTEMPTS; attempt++) {
+    const existing = await messages.listMessages(sessionId, { consistentRead: true });
+    const index = existing.reduce((max, m) => Math.max(max, m.index + 1), 0);
+    try {
+      await messages.appendMessage(build(index));
+      return true;
+    } catch (error) {
+      if (!(error instanceof MessageIndexTakenError)) throw error;
+    }
+  }
+  return false;
+}
+
 /**
  * Pipeline error mapping for POST /sessions/{id}/messages:
  * - DailyLimitReachedError → 429 DAILY_LIMIT_REACHED (try tomorrow).
@@ -83,6 +120,10 @@ function servedBy(
  * - RetrievalUnavailableError → 503 RETRIEVAL_UNAVAILABLE (retryable): the query embedding, the
  *   vector query or the document lookup failed.
  * - Anything else → 500 INTERNAL_ERROR. None of these stores an ASSISTANT message.
+ *
+ * Message storage: concurrent questions in one session each take the next free index when they
+ * write (see appendAtNextIndex). If the USER message still collides after the retries the request
+ * is 409 CONFLICT and nothing runs; if the ASSISTANT message does, it is 500 and logged.
  */
 export function messageRoutes(ctxFactory: () => AppContext) {
   const postMessage = async (rc: RequestContext, params: Record<string, string>) => {
@@ -99,10 +140,10 @@ export function messageRoutes(ctxFactory: () => AppContext) {
     }
     const { question } = AskSchema.parse(raw);
 
-    const index = (await app.messages.listMessages(sessionId)).length;
-    await app.messages.appendMessage(
+    const userMessageId = asMessageId(app.ids.messageId());
+    const userStored = await appendAtNextIndex(app.messages, sessionId, (index) =>
       buildMessage({
-        messageId: asMessageId(app.ids.messageId()),
+        messageId: userMessageId,
         sessionId,
         index,
         role: 'USER',
@@ -110,6 +151,12 @@ export function messageRoutes(ctxFactory: () => AppContext) {
         createdAt: app.clock.now().toISOString(),
       }),
     );
+    if (!userStored) {
+      rc.logger.warn('user message not stored: the session index stayed taken', {
+        attempts: APPEND_ATTEMPTS,
+      });
+      return conflict('Another question in this session is being saved. Please try again.');
+    }
 
     let outcome;
     try {
@@ -184,11 +231,11 @@ export function messageRoutes(ctxFactory: () => AppContext) {
 
     const { models, promptVersions } = servedBy(outcome.calls);
     const messageId = asMessageId(app.ids.messageId());
-    await app.messages.appendMessage(
+    const assistantStored = await appendAtNextIndex(app.messages, sessionId, (index) =>
       buildMessage({
         messageId,
         sessionId,
-        index: index + 1,
+        index,
         role: 'ASSISTANT',
         content: answer.answer,
         createdAt: app.clock.now().toISOString(),
@@ -197,6 +244,13 @@ export function messageRoutes(ctxFactory: () => AppContext) {
         promptVersions,
       }),
     );
+    if (!assistantStored) {
+      rc.logger.error('assistant message not stored: the session index stayed taken', {
+        messageId,
+        attempts: APPEND_ATTEMPTS,
+      });
+      return internalError();
+    }
 
     const body: MessageResponse = { messageId, answer, citations, models, promptVersions };
     return ok(body);

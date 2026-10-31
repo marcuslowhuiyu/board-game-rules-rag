@@ -1,7 +1,11 @@
 import { MessageSchema, type Message, type SessionId } from '@bgr/domain';
-import type { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import { ConditionalCheckFailedException, type DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
-import type { MessagesRepository } from './messages-repository.js';
+import {
+  MessageIndexTakenError,
+  type ListMessagesOptions,
+  type MessagesRepository,
+} from './messages-repository.js';
 
 export interface DynamoMessagesTables {
   messagesTable: string;
@@ -20,15 +24,30 @@ export class DynamoMessagesRepository implements MessagesRepository {
   }
 
   async appendMessage(message: Message): Promise<void> {
-    await this.doc.send(new PutCommand({ TableName: this.tables.messagesTable, Item: message }));
+    try {
+      await this.doc.send(
+        new PutCommand({
+          TableName: this.tables.messagesTable,
+          Item: message,
+          // The key is (sessionId, index): this fails if that exact item already exists.
+          ConditionExpression: 'attribute_not_exists(sessionId)',
+        }),
+      );
+    } catch (err) {
+      if (err instanceof ConditionalCheckFailedException) {
+        throw new MessageIndexTakenError(message.sessionId, message.index);
+      }
+      throw err;
+    }
   }
 
-  async listMessages(sessionId: SessionId): Promise<Message[]> {
+  async listMessages(sessionId: SessionId, options: ListMessagesOptions = {}): Promise<Message[]> {
     const res = await this.doc.send(
       new QueryCommand({
         TableName: this.tables.messagesTable,
         KeyConditionExpression: 'sessionId = :s',
         ExpressionAttributeValues: { ':s': sessionId },
+        ...(options.consistentRead ? { ConsistentRead: true } : {}),
       }),
     );
     return (res.Items ?? []).map((i) => MessageSchema.parse(i));
