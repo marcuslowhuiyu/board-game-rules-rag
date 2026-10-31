@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { z } from 'zod';
+import { AnswerBarsSchema } from './aggregate-answers.js';
 import type { RoutingResult } from './routing.js';
 import { K_VALUES, type CaseResult } from './score-case.js';
 
@@ -17,6 +18,8 @@ export const EvalConfigSchema = z.object({
   /** Games with fewer chunks than this are reported but left out of the tier bars. */
   smallCorpusThreshold: z.number().int().nonnegative(),
   bars: z.object({ simple: BarSchema, complex: BarSchema }),
+  /** Pass marks for the answer eval. */
+  answerBars: AnswerBarsSchema,
 });
 export type EvalConfig = z.infer<typeof EvalConfigSchema>;
 

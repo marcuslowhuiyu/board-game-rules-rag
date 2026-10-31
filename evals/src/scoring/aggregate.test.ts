@@ -7,6 +7,7 @@ const config: EvalConfig = {
   rerankTopN: 10,
   smallCorpusThreshold: 30,
   bars: { simple: { k: 3, minRate: 0.9 }, complex: { k: 10, minRate: 0.7 } },
+  answerBars: { maxGuesses: 0, minEvidenceRate: 0.85, minCertaintyRate: 0.75 },
 };
 
 function result(
