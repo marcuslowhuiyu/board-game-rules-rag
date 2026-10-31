@@ -48,3 +48,4 @@ Do **not** write ADRs for routine implementation choices (variable names, file l
 | [0010](0010-source-provenance-evidence.md) | Source provenance is stored as evidence | Accepted |
 | [0011](0011-model-roles-and-catalog.md) | Model roles and a configured model catalog | Accepted |
 | [0012](0012-rules-answering-pipeline.md) | Rules answering pipeline | Accepted |
+| [0013](0013-answer-evaluation.md) | Answer evaluation | Accepted |
