@@ -58,3 +58,6 @@ export const notFound = (message: string) => errorResponse(404, 'NOT_FOUND', mes
 export const conflict = (message: string) => errorResponse(409, 'CONFLICT', message);
 export const internalError = (message = 'internal error') =>
   errorResponse(500, 'INTERNAL_ERROR', message);
+export const tooManyRequests = (code: string, message: string) => errorResponse(429, code, message);
+export const serviceUnavailable = (code: string, message: string) =>
+  errorResponse(503, code, message);

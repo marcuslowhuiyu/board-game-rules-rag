@@ -345,3 +345,136 @@ describe('ConverseStructuredModel', () => {
     expect(error).toBeInstanceOf(ModelOutputError);
   });
 });
+
+describe('ConverseStructuredModel run deadline', () => {
+  /** A client whose replies take `ms` on the injected clock; `hang` never answers. */
+  function slowClient(clock: { t: number }, ms: number, text: string, hang = false) {
+    const signals: AbortSignal[] = [];
+    let sends = 0;
+    const client = {
+      send: (_c: unknown, options?: { abortSignal?: AbortSignal }) => {
+        sends += 1;
+        if (options?.abortSignal) signals.push(options.abortSignal);
+        if (hang) {
+          return new Promise((_resolve, reject) => {
+            options?.abortSignal?.addEventListener('abort', () => reject(new Error('aborted')));
+          });
+        }
+        clock.t += ms;
+        return Promise.resolve(reply(text, 100, 50));
+      },
+    };
+    return { client, signals, sends: () => sends };
+  }
+
+  it('bounds the request timeout by the time left before the deadline', async () => {
+    const clock = { t: 0 };
+    const slow = slowClient(clock, 0, '', true);
+    const records: ModelCallRecord[] = [];
+    const model = new ConverseStructuredModel({
+      onCall: (r) => records.push(r),
+      requestTimeoutMs: 20_000,
+      deadline: () => 50,
+      now: () => clock.t,
+      clientFactory: () => slow.client as never,
+    });
+    const started = Date.now();
+    const err = await model.call(request()).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ModelCallError);
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(records).toHaveLength(1);
+  });
+
+  it('does not send when the deadline has passed, and still emits a record', async () => {
+    const clock = { t: 1_000 };
+    const slow = slowClient(clock, 0, '{"tier":"simple"}');
+    const records: ModelCallRecord[] = [];
+    const model = new ConverseStructuredModel({
+      onCall: (r) => records.push(r),
+      deadline: () => 1_000,
+      now: () => clock.t,
+      clientFactory: () => slow.client as never,
+    });
+    const err = await model.call(request()).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ModelCallError);
+    expect((err as ModelCallError).message).toMatch(/deadline/i);
+    expect(slow.sends()).toBe(0);
+    expect(records).toEqual([
+      expect.objectContaining({
+        ok: false,
+        attempts: 0,
+        costUsd: 0,
+        error: expect.stringMatching(/deadline/i),
+      }),
+    ]);
+  });
+
+  it('skips the output retry when less time is left than the first attempt took', async () => {
+    const clock = { t: 0 };
+    // The first attempt takes 700 of the 1000 ms budget and returns invalid output.
+    const slow = slowClient(clock, 700, 'not json');
+    const records: ModelCallRecord[] = [];
+    const model = new ConverseStructuredModel({
+      onCall: (r) => records.push(r),
+      deadline: () => 1_000,
+      now: () => clock.t,
+      clientFactory: () => slow.client as never,
+    });
+    const err = await model.call(request()).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ModelCallError);
+    expect(slow.sends()).toBe(1);
+    // The billed first attempt is still in the record.
+    expect(records).toEqual([
+      expect.objectContaining({ ok: false, attempts: 1, inputTokens: 100, outputTokens: 50 }),
+    ]);
+    expect(records[0]!.costUsd).toBeGreaterThan(0);
+  });
+
+  it('still retries invalid output when enough time is left', async () => {
+    const clock = { t: 0 };
+    const slow = slowClient(clock, 100, 'not json');
+    const model = new ConverseStructuredModel({
+      deadline: () => 1_000,
+      now: () => clock.t,
+      clientFactory: () => slow.client as never,
+    });
+    await expect(model.call(request())).rejects.toBeInstanceOf(ModelOutputError);
+    expect(slow.sends()).toBe(2);
+  });
+
+  it('applies no deadline when the provider returns undefined', async () => {
+    const clock = { t: 10_000_000 };
+    const slow = slowClient(clock, 0, '{"tier":"simple"}');
+    const model = new ConverseStructuredModel({
+      deadline: () => undefined,
+      now: () => clock.t,
+      clientFactory: () => slow.client as never,
+    });
+    await expect(model.call(request())).resolves.toMatchObject({ value: { tier: 'simple' } });
+  });
+});
+
+describe('ConverseStructuredModel stopReason', () => {
+  beforeEach(() => bedrock.reset());
+
+  it('logs the stop reason of the last attempt on the record', async () => {
+    bedrock
+      .on(ConverseCommand)
+      .resolvesOnce({ ...(reply('{"tier":') as object), stopReason: 'max_tokens' } as never)
+      .resolvesOnce({ ...(reply('{"tier":"simple"}') as object), stopReason: 'end_turn' } as never);
+    const { model, records } = setup();
+    await model.call(request());
+    expect(records[0]!.stopReason).toBe('end_turn');
+  });
+
+  it('logs max_tokens truncation on a ModelOutputError record and message', async () => {
+    bedrock
+      .on(ConverseCommand)
+      .resolves({ ...(reply('{"tier":') as object), stopReason: 'max_tokens' } as never);
+    const { model, records } = setup();
+    const err = await model.call(request()).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ModelOutputError);
+    expect((err as Error).message).toContain('max_tokens');
+    expect(records[0]!.stopReason).toBe('max_tokens');
+  });
+});

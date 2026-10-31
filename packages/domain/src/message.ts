@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { RulesAnswerSchema } from './answer.js';
 import { MessageIdSchema, SessionIdSchema } from './ids.js';
 
 export const MESSAGE_ROLES = ['USER', 'ASSISTANT', 'SYSTEM'] as const;
@@ -17,5 +18,9 @@ export const MessageSchema = z.object({
   role: MessageRoleSchema,
   content: z.string(),
   createdAt: z.string().datetime(),
+  // Assistant messages only; rows written before M4 step 3 have none of these.
+  answer: RulesAnswerSchema.optional(),
+  models: z.record(z.string(), z.object({ key: z.string(), modelId: z.string() })).optional(),
+  promptVersions: z.record(z.string(), z.string()).optional(),
 });
 export type Message = z.infer<typeof MessageSchema>;

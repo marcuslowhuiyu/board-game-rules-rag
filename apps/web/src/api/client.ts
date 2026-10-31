@@ -179,6 +179,68 @@ export interface CreateIngestionJobInput {
   version?: string;
 }
 
+export type Certainty = 'DEFINITIVE' | 'QUALIFIED' | 'INCONCLUSIVE';
+
+export type PanelTier =
+  'OFFICIAL' | 'DESIGNER_OR_PUBLISHER' | 'COMMUNITY_CONSENSUS' | 'COMMUNITY_DISCUSSION' | 'UNKNOWN';
+
+export interface Confidence {
+  level: 'HIGH' | 'MEDIUM' | 'LOW';
+  reasons: Array<
+    | 'DIRECTLY_STATED'
+    | 'BEST_READING'
+    | 'NOT_SETTLED'
+    | 'OPERATOR_ATTESTED'
+    | 'MISSING_PROVENANCE'
+    | 'COMMUNITY_SOURCE'
+    | 'SOURCES_DISAGREE'
+  >;
+}
+
+export interface TierAnswer {
+  tier: PanelTier;
+  answer: string;
+  certainty: Certainty;
+  evidence: Array<{ chunkId: string }>;
+  confidence: Confidence;
+}
+
+export interface RulesAnswer {
+  certainty: Certainty;
+  authority: Authority;
+  answer: string;
+  explanation: string;
+  evidence: Array<{ chunkId: string }>;
+  needsResearch: boolean;
+  confidence: Confidence;
+  appliedTier: PanelTier | null;
+  tiers: TierAnswer[];
+  sourcesDisagree: boolean;
+  requiresPlayerChoice: boolean;
+}
+
+export interface Citation {
+  chunkId: string;
+  documentId: string;
+  title: string;
+  sourceType: SourceType;
+  authority: Authority;
+  pageStart: number;
+  pageEnd: number;
+  headingPath: string[];
+  text: string;
+  provenance: ProvenanceEvidence[];
+}
+
+export interface AskQuestionResponse {
+  messageId: string;
+  answer: RulesAnswer;
+  /** Every chunk cited anywhere in the answer (applied ruling and tier panels). */
+  citations: Citation[];
+  models: Record<string, { key: string; modelId: string }>;
+  promptVersions: Record<string, string>;
+}
+
 export class ApiError extends Error {
   constructor(
     public readonly status: number,
@@ -222,6 +284,7 @@ export interface ApiClient {
   createGame(input: CreateGameInput): Promise<Game>;
   createSession(input: CreateSessionInput): Promise<SessionView>;
   deleteSession(sessionId: string): Promise<void>;
+  askQuestion(sessionId: string, question: string): Promise<AskQuestionResponse>;
   presignUpload(input: {
     filename: string;
     contentType: string;
@@ -254,6 +317,11 @@ export function createApiClient(baseUrl: string): ApiClient {
     deleteSession: (sessionId) =>
       request<void>(`${base}/sessions/${encodeURIComponent(sessionId)}`, {
         method: 'DELETE',
+      }),
+    askQuestion: (sessionId, question) =>
+      request<AskQuestionResponse>(`${base}/sessions/${encodeURIComponent(sessionId)}/messages`, {
+        method: 'POST',
+        body: JSON.stringify({ question }),
       }),
     presignUpload: (input) =>
       request<PresignedUploadResponse>(`${base}/uploads/presign`, {

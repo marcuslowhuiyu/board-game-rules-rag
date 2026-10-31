@@ -1,7 +1,7 @@
 import { App } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { DevStack } from '../lib/dev-stack.js';
+import { DevStack, catalogInvokeResources } from '../lib/dev-stack.js';
 import { GithubOidcStack } from '../lib/github-oidc.js';
 import { NON_FILTERABLE_METADATA_KEYS } from '@bgr/retrieval';
 
@@ -35,8 +35,8 @@ describe('DevStack', () => {
     expect((first.Properties as Record<string, unknown>).CorsConfiguration).toBeUndefined();
   });
 
-  it('provisions all M1+M2 DynamoDB tables on-demand', () => {
-    template.resourceCountIs('AWS::DynamoDB::Table', 7);
+  it('provisions all DynamoDB tables on-demand', () => {
+    template.resourceCountIs('AWS::DynamoDB::Table', 8);
     template.allResourcesProperties('AWS::DynamoDB::Table', {
       BillingMode: 'PAY_PER_REQUEST',
     });
@@ -361,6 +361,202 @@ describe('DevStack', () => {
     ]) {
       template.hasResourceProperties('AWS::ApiGatewayV2::Route', { RouteKey: rk });
     }
+  });
+
+  describe('answering', () => {
+    type Statement = { Action: string | string[]; Effect: string; Resource: unknown };
+    const statements = (): Statement[] =>
+      Object.values(template.findResources('AWS::IAM::Policy')).flatMap(
+        (p) =>
+          (p.Properties as { PolicyDocument: { Statement: Statement[] } }).PolicyDocument.Statement,
+      );
+    const actions = (s: Statement): string[] => (Array.isArray(s.Action) ? s.Action : [s.Action]);
+    // Resources with a stack-account token synthesize as Fn::Join; render the
+    // intrinsic parts as `<token>` so ARNs can be compared as strings.
+    const render = (r: unknown): string =>
+      typeof r === 'string'
+        ? r
+        : Array.isArray((r as { 'Fn::Join'?: unknown })['Fn::Join'])
+          ? ((r as { 'Fn::Join': [string, unknown[]] })['Fn::Join'][1] as unknown[])
+              .map(render)
+              .join('')
+          : '<token>';
+    const resources = (s: Statement): string[] =>
+      (Array.isArray(s.Resource) ? s.Resource : [s.Resource]).map(render);
+    const invokeResources = (): string[] =>
+      statements()
+        .filter((s) => actions(s).includes('bedrock:InvokeModel'))
+        .flatMap(resources);
+
+    it('gives the API Lambda a 29 s timeout, 1024 MB and all thirteen answering env keys', () => {
+      const fns = template.findResources('AWS::Lambda::Function', {
+        Properties: { Timeout: 29 },
+      });
+      expect(Object.keys(fns)).toHaveLength(1);
+      const props = Object.values(fns)[0]!.Properties as {
+        MemorySize: number;
+        Environment: { Variables: Record<string, unknown> };
+      };
+      expect(props.MemorySize).toBe(1024);
+      const vars = props.Environment.Variables;
+      for (const key of [
+        'USAGE_TABLE',
+        'DAILY_AI_CAP_USD',
+        'MODEL_REQUEST_TIMEOUT_MS',
+        'EVIDENCE_LIMIT_SIMPLE',
+        'EVIDENCE_LIMIT_COMPLEX',
+        'RERANK_CANDIDATES',
+        'RERANK_TOP_N',
+        'ANSWER_RUN_BUDGET_MS',
+        'EMBEDDING_REGION',
+        'EMBEDDING_MODEL_ID',
+        'EMBEDDING_DIMENSIONS',
+        'VECTOR_REGION',
+        'VECTOR_INDEX_ARN',
+      ]) {
+        expect(vars, key).toHaveProperty(key);
+      }
+      expect(vars).toMatchObject({
+        DAILY_AI_CAP_USD: '1',
+        MODEL_REQUEST_TIMEOUT_MS: '20000',
+        EVIDENCE_LIMIT_SIMPLE: '3',
+        EVIDENCE_LIMIT_COMPLEX: '10',
+        RERANK_CANDIDATES: '15',
+        RERANK_TOP_N: '10',
+        ANSWER_RUN_BUDGET_MS: '26000',
+        EMBEDDING_DIMENSIONS: '1024',
+      });
+    });
+
+    it('provisions a usage table keyed by pk with TTL on ttl', () => {
+      template.hasResourceProperties('AWS::DynamoDB::Table', {
+        KeySchema: [{ AttributeName: 'pk', KeyType: 'HASH' }],
+        TimeToLiveSpecification: { AttributeName: 'ttl', Enabled: true },
+        BillingMode: 'PAY_PER_REQUEST',
+      });
+    });
+
+    it('throttles the default stage at 5 req/s, burst 10', () => {
+      template.hasResourceProperties('AWS::ApiGatewayV2::Stage', {
+        StageName: '$default',
+        DefaultRouteSettings: Match.objectLike({
+          ThrottlingRateLimit: 5,
+          ThrottlingBurstLimit: 10,
+        }),
+      });
+    });
+
+    it('exposes POST /sessions/{sessionId}/messages', () => {
+      template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+        RouteKey: 'POST /sessions/{sessionId}/messages',
+      });
+    });
+
+    it('grants the API Lambda vector reads on the index', () => {
+      template.hasResourceProperties('AWS::IAM::Policy', {
+        PolicyDocument: {
+          Statement: Match.arrayWith([
+            Match.objectLike({
+              Action: ['s3vectors:QueryVectors', 's3vectors:GetVectors'],
+              Effect: 'Allow',
+              Resource: { 'Fn::GetAtt': [Match.stringLikeRegexp('^RuleChunkIndex'), 'IndexArn'] },
+            }),
+          ]),
+        },
+      });
+    });
+
+    it('grants Bedrock invoke on each catalog inference profile and its foundation models', () => {
+      const r = invokeResources();
+      expect(r.some((x) => x.endsWith(':inference-profile/global.openai.gpt-6-luna'))).toBe(true);
+      expect(r.some((x) => x.endsWith(':inference-profile/apac.amazon.nova-micro-v1:0'))).toBe(
+        true,
+      );
+      expect(r).toContain('arn:aws:bedrock:*::foundation-model/openai.gpt-6-luna');
+      expect(r).toContain('arn:aws:bedrock:::foundation-model/openai.gpt-6-luna');
+      expect(r).toContain('arn:aws:bedrock:*::foundation-model/amazon.nova-micro-v1:0');
+      // Only global profiles route to the unqualified-region foundation ARN.
+      expect(r).not.toContain('arn:aws:bedrock:::foundation-model/amazon.nova-micro-v1:0');
+    });
+
+    it('scopes the usage table grant to GetItem and UpdateItem', () => {
+      const usage = statements().filter((s) => JSON.stringify(s.Resource).includes('"UsageTable'));
+      const granted = usage.flatMap(actions).filter((a) => a.startsWith('dynamodb:'));
+      expect(granted.sort()).toEqual(['dynamodb:GetItem', 'dynamodb:UpdateItem']);
+    });
+
+    it('sets env values the API parsers accept', async () => {
+      const fn = Object.values(
+        template.findResources('AWS::Lambda::Function', { Properties: { Timeout: 29 } }),
+      )[0]!;
+      const raw = (fn.Properties as { Environment: { Variables: Record<string, unknown> } })
+        .Environment.Variables;
+      const fakeFor = (key: string): string =>
+        key === 'VECTOR_INDEX_ARN'
+          ? 'arn:aws:s3vectors:ap-southeast-1:000000000000:bucket/b/index/i'
+          : `fake-${key.toLowerCase()}`;
+      const env = Object.fromEntries(
+        Object.entries(raw).map(([k, v]) => [k, typeof v === 'string' ? v : fakeFor(k)]),
+      );
+      // Loaded by a computed specifier: apps/api sits outside this package's
+      // tsconfig rootDir, so a static import would fail `tsc` (TS6059).
+      const apiSrc = new URL('../../../apps/api/src/', import.meta.url).href;
+      const { loadAnsweringConfigFromEnv } = (await import(
+        /* @vite-ignore */ `${apiSrc}lib/context.ts`
+      )) as { loadAnsweringConfigFromEnv: (env: Record<string, string>) => unknown };
+      const { vectorSettingsFromEnv } = (await import(
+        /* @vite-ignore */ `${apiSrc}ingestion/stage-context.ts`
+      )) as {
+        vectorSettingsFromEnv: (env: Record<string, string>) => {
+          embedding: { dimensions: number };
+        };
+      };
+      expect(loadAnsweringConfigFromEnv(env)).toMatchObject({
+        dailyAiCapUsd: 1,
+        evidenceLimits: { simple: 3, complex: 10 },
+        modelRequestTimeoutMs: 20_000,
+        runBudgetMs: 26_000,
+      });
+      expect(vectorSettingsFromEnv(env).embedding.dimensions).toBe(1024);
+    });
+
+    describe('catalogInvokeResources', () => {
+      const entry = (key: string, modelId: string) => ({
+        key,
+        displayName: key,
+        modelId,
+        region: 'ap-southeast-1',
+        inputUsdPerMTok: 1,
+        outputUsdPerMTok: 1,
+        structuredOutput: 'json' as const,
+        maxTokens: 1,
+      });
+      const catalogOf = (modelId: string) => ({
+        models: { m: entry('m', modelId) },
+        approved: { router: ['m'], reranker: ['m'], answerer: ['m'] },
+        defaults: { router: 'm', reranker: 'm', answerer: 'm' },
+      });
+
+      it('grants only the foundation model for a plain model id', () => {
+        expect(catalogInvokeResources(catalogOf('amazon.nova-micro-v1:0'), 'ACCT')).toEqual([
+          'arn:aws:bedrock:ap-southeast-1::foundation-model/amazon.nova-micro-v1:0',
+        ]);
+      });
+
+      it('grants the profile and foundation models for a prefixed id', () => {
+        expect(catalogInvokeResources(catalogOf('us.anthropic.claude-x:0'), 'ACCT')).toEqual([
+          'arn:aws:bedrock:*::foundation-model/anthropic.claude-x:0',
+          'arn:aws:bedrock:ap-southeast-1:ACCT:inference-profile/us.anthropic.claude-x:0',
+        ]);
+      });
+    });
+
+    it('never grants invoke on a wildcard model id', () => {
+      for (const resource of invokeResources()) {
+        expect(resource).not.toMatch(/(foundation-model|inference-profile)\/\*/);
+        expect(resource).not.toBe('*');
+      }
+    });
   });
 
   it('provisions the ingestion Node 22 Lambdas (api + stage-runner + mark-job-failed)', () => {

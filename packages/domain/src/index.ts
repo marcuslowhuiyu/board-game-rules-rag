@@ -9,5 +9,6 @@ export * from './chunk.js';
 export * from './ingestion-job.js';
 export * from './session.js';
 export * from './message.js';
+export * from './answer.js';
 export * from './fingerprint.js';
 export * from './errors.js';

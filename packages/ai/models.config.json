@@ -20,6 +20,7 @@
       "outputUsdPerMTok": 0.5,
       "structuredOutput": "native",
       "maxTokens": 1024,
+      "roleMaxTokens": { "answerer": 4096 },
       "additionalModelRequestFields": {
         "text": { "format": { "strict": true } },
         "reasoning": { "effort": "low" }
@@ -28,10 +29,12 @@
   },
   "approved": {
     "router": ["nova-micro"],
-    "reranker": ["nova-micro", "gpt-6-luna"]
+    "reranker": ["nova-micro", "gpt-6-luna"],
+    "answerer": ["gpt-6-luna"]
   },
   "defaults": {
     "router": "nova-micro",
-    "reranker": "gpt-6-luna"
+    "reranker": "gpt-6-luna",
+    "answerer": "gpt-6-luna"
   }
 }

@@ -23,3 +23,6 @@ export * from './ingestion-jobs/dynamo-ingestion-jobs-repository.js';
 export * from './publisher/atomic-publisher.js';
 export * from './publisher/in-memory-atomic-publisher.js';
 export * from './publisher/dynamo-atomic-publisher.js';
+export * from './usage/spend-ledger.js';
+export * from './usage/in-memory-spend-ledger.js';
+export * from './usage/dynamo-spend-ledger.js';

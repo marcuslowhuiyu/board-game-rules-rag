@@ -2,7 +2,7 @@ import { z } from 'zod';
 // A static JSON import is inlined by esbuild, so it survives the Lambda bundle.
 import bundledConfig from '../../models.config.json' with { type: 'json' };
 
-export const MODEL_ROLES = ['router', 'reranker'] as const; // 'answerer' is added in plan 3
+export const MODEL_ROLES = ['router', 'reranker', 'answerer'] as const;
 export type ModelRole = (typeof MODEL_ROLES)[number];
 
 export interface ModelEntry {
@@ -17,6 +17,8 @@ export interface ModelEntry {
   cacheWriteUsdPerMTok?: number;
   structuredOutput: 'native' | 'json';
   maxTokens: number;
+  /** Output token limits for particular roles, overriding `maxTokens`; `modelFor` applies them. */
+  roleMaxTokens?: Partial<Record<ModelRole, number>>;
   temperature?: number; // omitted for models that reject the field (e.g. GPT-6 Luna)
   additionalModelRequestFields?: Record<string, unknown>;
 }
@@ -38,11 +40,19 @@ const ModelEntrySchema = z.object({
   cacheWriteUsdPerMTok: z.number().nonnegative().optional(),
   structuredOutput: z.enum(['native', 'json']),
   maxTokens: z.number().int().positive(),
+  roleMaxTokens: z
+    .strictObject({
+      router: z.number().int().positive().optional(),
+      reranker: z.number().int().positive().optional(),
+      answerer: z.number().int().positive().optional(),
+    })
+    .optional(),
   temperature: z.number().min(0).optional(),
   additionalModelRequestFields: z.record(z.string(), z.unknown()).optional(),
 });
 
-const roleRecord = <T extends z.ZodType>(value: T) => z.object({ router: value, reranker: value });
+const roleRecord = <T extends z.ZodType>(value: T) =>
+  z.object({ router: value, reranker: value, answerer: value });
 
 export const ModelCatalogSchema = z
   .object({
@@ -84,6 +94,7 @@ export function loadModelCatalog(raw: unknown = bundledConfig): ModelCatalog {
   return ModelCatalogSchema.parse(raw);
 }
 
+/** The entry approved for `role`, with that role's `roleMaxTokens` override applied. */
 export function modelFor(catalog: ModelCatalog, role: ModelRole, key?: string): ModelEntry {
   const chosen = key ?? catalog.defaults[role];
   if (!catalog.approved[role].includes(chosen)) {
@@ -91,7 +102,8 @@ export function modelFor(catalog: ModelCatalog, role: ModelRole, key?: string): 
   }
   const entry = catalog.models[chosen];
   if (!entry) throw new Error(`Model "${chosen}" has no catalog entry`);
-  return entry;
+  const maxTokens = entry.roleMaxTokens?.[role];
+  return maxTokens === undefined ? entry : { ...entry, maxTokens };
 }
 
 /**

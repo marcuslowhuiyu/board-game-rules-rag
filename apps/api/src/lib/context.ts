@@ -1,5 +1,13 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { SFNClient, StartExecutionCommand } from '@aws-sdk/client-sfn';
+import { TitanEmbeddingsProvider } from '@bgr/ai';
+import { S3VectorIndex } from '@bgr/retrieval';
+import { createLogger } from '@bgr/shared';
+import {
+  buildAnswerPipeline,
+  type AnswerPipeline,
+  type AnsweringConfig,
+} from './answer-pipeline.js';
 import {
   DynamoChunksRepository,
   DynamoDocumentsRepository,
@@ -7,6 +15,7 @@ import {
   DynamoIngestionJobsRepository,
   DynamoMessagesRepository,
   DynamoSessionsRepository,
+  DynamoSpendLedger,
   cryptoIdGenerator,
   systemClock,
   type ChunksRepository,
@@ -19,6 +28,7 @@ import {
   type SessionsRepository,
 } from '@bgr/persistence';
 import type { IngestionJobId } from '@bgr/domain';
+import { vectorSettingsFromEnv } from '../ingestion/stage-context.js';
 import { createS3UploadPresigner } from './presigner.js';
 import { S3ObjectStore } from './s3-object-store.js';
 
@@ -38,6 +48,8 @@ export interface AppConfig {
   presignExpirySeconds: number;
   region: string;
 }
+
+export type { AnswerPipeline, AnsweringConfig } from './answer-pipeline.js';
 
 export interface PresignedUpload {
   url: string;
@@ -73,10 +85,11 @@ export interface AppContext {
   normalizedStore: S3ObjectStore;
   presigner: UploadPresigner;
   executor: IngestionExecutor;
+  answerPipeline: AnswerPipeline;
 }
 
-function requireEnv(key: string): string {
-  const v = process.env[key];
+function requireEnv(key: string, env: Record<string, string | undefined> = process.env): string {
+  const v = env[key];
   if (!v || v.length === 0) {
     throw new Error(`missing required env var: ${key}`);
   }
@@ -110,6 +123,39 @@ export function loadConfigFromEnv(): AppConfig {
     presignExpirySeconds: Number(process.env['PRESIGN_EXPIRY_SECONDS'] ?? 600),
     region: process.env['AWS_REGION'] ?? 'ap-southeast-1',
     ...(arn ? { ingestionStateMachineArn: arn } : {}),
+  };
+}
+
+/** A required env var holding a finite number > 0 (an integer when `integer`). */
+function requirePositiveNumber(
+  key: string,
+  env: Record<string, string | undefined>,
+  integer = true,
+) {
+  const raw = requireEnv(key, env);
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0 || (integer && !Number.isInteger(n))) {
+    throw new Error(
+      `${key} must be a positive ${integer ? 'integer' : 'number'}; got ${JSON.stringify(raw)}`,
+    );
+  }
+  return n;
+}
+
+export function loadAnsweringConfigFromEnv(
+  env: Record<string, string | undefined> = process.env,
+): AnsweringConfig {
+  return {
+    usageTable: requireEnv('USAGE_TABLE', env),
+    dailyAiCapUsd: requirePositiveNumber('DAILY_AI_CAP_USD', env, false),
+    modelRequestTimeoutMs: requirePositiveNumber('MODEL_REQUEST_TIMEOUT_MS', env),
+    evidenceLimits: {
+      simple: requirePositiveNumber('EVIDENCE_LIMIT_SIMPLE', env),
+      complex: requirePositiveNumber('EVIDENCE_LIMIT_COMPLEX', env),
+    },
+    rerankCandidates: requirePositiveNumber('RERANK_CANDIDATES', env),
+    rerankTopN: requirePositiveNumber('RERANK_TOP_N', env),
+    runBudgetMs: requirePositiveNumber('ANSWER_RUN_BUDGET_MS', env),
   };
 }
 
@@ -148,6 +194,27 @@ export function getContext(): AppContext {
     },
   };
 
+  const documents = new DynamoDocumentsRepository(ddb, { documentsTable: config.documentsTable });
+  // Built on the first question, so routes that never answer need none of its env.
+  let pipeline: AnswerPipeline | undefined;
+  const answerPipeline: AnswerPipeline = {
+    answer: (input, onCall) => {
+      if (!pipeline) {
+        const answering = loadAnsweringConfigFromEnv();
+        const vectors = vectorSettingsFromEnv(process.env);
+        pipeline = buildAnswerPipeline({
+          config: answering,
+          documents,
+          ledger: new DynamoSpendLedger(ddb, { usageTable: answering.usageTable }),
+          embeddings: new TitanEmbeddingsProvider(vectors.embedding),
+          index: new S3VectorIndex(vectors.index),
+          logger: createLogger({ base: { app: 'bgr-api' } }),
+        });
+      }
+      return pipeline.answer(input, onCall);
+    },
+  };
+
   cached = {
     config,
     clock: systemClock,
@@ -158,7 +225,7 @@ export function getContext(): AppContext {
     }),
     sessions: new DynamoSessionsRepository(ddb, { sessionsTable: config.sessionsTable }),
     messages: new DynamoMessagesRepository(ddb, { messagesTable: config.messagesTable }),
-    documents: new DynamoDocumentsRepository(ddb, { documentsTable: config.documentsTable }),
+    documents,
     chunks: new DynamoChunksRepository(ddb, { chunksTable: config.chunksTable }),
     ingestionJobs: new DynamoIngestionJobsRepository(ddb, {
       ingestionJobsTable: config.ingestionJobsTable,
@@ -167,6 +234,7 @@ export function getContext(): AppContext {
     normalizedStore,
     presigner,
     executor,
+    answerPipeline,
   };
   return cached;
 }

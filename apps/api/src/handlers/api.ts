@@ -1,8 +1,10 @@
 import type { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
+import { loadModelCatalog } from '@bgr/ai';
 import { getContext } from '../lib/context.js';
 import { makeHandler, route } from '../lib/router.js';
 import { ok } from '../lib/responses.js';
 import { gameRoutes } from './games.js';
+import { messageRoutes } from './messages.js';
 import { sessionRoutes } from './sessions.js';
 import { uploadRoutes } from './uploads.js';
 import { ingestionRoutes } from './ingestion.js';
@@ -17,6 +19,7 @@ const routes = [
   healthRoute,
   ...gameRoutes(getContext),
   ...sessionRoutes(getContext),
+  ...messageRoutes(getContext),
   ...uploadRoutes(getContext),
   ...ingestionRoutes(getContext),
   ...sourceRoutes(getContext),
@@ -29,3 +32,6 @@ export const handler = async (
 ): Promise<APIGatewayProxyStructuredResultV2> => {
   return inner(event);
 };
+
+/** Bundle smoke check: the catalog JSON must be inlined, not read from disk. */
+export const catalogSelfCheck = (): number => Object.keys(loadModelCatalog().models).length;

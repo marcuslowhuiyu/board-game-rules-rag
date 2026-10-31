@@ -53,6 +53,9 @@ importers:
       '@bgr/ai':
         specifier: workspace:*
         version: link:../../packages/ai
+      '@bgr/answering':
+        specifier: workspace:*
+        version: link:../../packages/answering
       '@bgr/domain':
         specifier: workspace:*
         version: link:../../packages/domain
@@ -170,6 +173,9 @@ importers:
 
   infrastructure/cdk:
     dependencies:
+      '@bgr/ai':
+        specifier: workspace:*
+        version: link:../../packages/ai
       '@bgr/retrieval':
         specifier: workspace:*
         version: link:../../packages/retrieval
@@ -201,6 +207,9 @@ importers:
       '@aws-sdk/client-bedrock-runtime':
         specifier: ^3.1157.0
         version: 3.1157.0
+      '@bgr/domain':
+        specifier: workspace:*
+        version: link:../domain
       zod:
         specifier: ^4.6.7
         version: 4.6.7
@@ -208,6 +217,31 @@ importers:
       aws-sdk-client-mock:
         specifier: ^4.1.0
         version: 4.1.0
+      typescript:
+        specifier: ^5.6.2
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.20.2)(jsdom@25.0.1)(vite@7.3.7(@types/node@22.20.2)(tsx@4.23.13))
+
+  packages/answering:
+    dependencies:
+      '@bgr/ai':
+        specifier: workspace:*
+        version: link:../ai
+      '@bgr/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@bgr/retrieval':
+        specifier: workspace:*
+        version: link:../retrieval
+      '@bgr/shared':
+        specifier: workspace:*
+        version: link:../shared
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+    devDependencies:
       typescript:
         specifier: ^5.6.2
         version: 5.9.3

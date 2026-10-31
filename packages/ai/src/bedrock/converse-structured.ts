@@ -61,6 +61,16 @@ export interface ConverseStructuredOptions {
   /** Per-request timeout. Defaults to 120_000. */
   requestTimeoutMs?: number;
   clientFactory?: (region: string) => BedrockRuntimeClient;
+  /**
+   * The time, on `now`'s clock, by which the current call must end, or undefined for none. Read
+   * at the start of every call, so one shared model can serve runs with different deadlines.
+   * Each request's timeout is capped by the time left; a call is not sent once the deadline has
+   * passed, and an output retry is skipped when less time is left than the first attempt took.
+   * Both raise `ModelCallError`.
+   */
+  deadline?: () => number | undefined;
+  /** Clock for `deadline`, in ms. Defaults to `Date.now`. */
+  now?: () => number;
 }
 
 const OUTPUT_ATTEMPTS = 2; // the first try plus one retry on invalid output
@@ -71,9 +81,13 @@ export class ConverseStructuredModel implements StructuredModel {
   private readonly onCall: ModelCallSink | undefined;
   private readonly requestTimeoutMs: number;
   private readonly clientFactory: (region: string) => BedrockRuntimeClient;
+  private readonly deadline: () => number | undefined;
+  private readonly now: () => number;
 
   constructor(options: ConverseStructuredOptions = {}) {
     this.onCall = options.onCall;
+    this.deadline = options.deadline ?? (() => undefined);
+    this.now = options.now ?? Date.now;
     this.requestTimeoutMs = options.requestTimeoutMs ?? 120_000;
     const maxAttempts = options.maxAttempts ?? 3;
     this.clientFactory =
@@ -89,6 +103,9 @@ export class ConverseStructuredModel implements StructuredModel {
     let cacheWriteInputTokens = 0;
     let attempts = 0;
     let lastIssue = '';
+    let lastAttemptMs = 0;
+    let stopReason: string | undefined;
+    const deadline = this.deadline();
 
     const record = (ok: boolean, error?: string): ModelCallRecord => {
       const usage = { inputTokens, outputTokens, cacheReadInputTokens, cacheWriteInputTokens };
@@ -102,6 +119,7 @@ export class ConverseStructuredModel implements StructuredModel {
         latencyMs: Math.round(performance.now() - started),
         costUsd: costUsd(req.entry, usage),
         attempts,
+        ...(stopReason === undefined ? {} : { stopReason }),
         ok,
         ...(error === undefined ? {} : { error }),
       };
@@ -114,11 +132,29 @@ export class ConverseStructuredModel implements StructuredModel {
     };
 
     while (attempts < OUTPUT_ATTEMPTS) {
+      let timeoutMs = this.requestTimeoutMs;
+      if (deadline !== undefined) {
+        const left = deadline - this.now();
+        // A retry would likely take as long as the attempt before it.
+        if (left <= 0 || left < lastAttemptMs) {
+          const error =
+            attempts === 0
+              ? 'DeadlineExceeded: the run deadline passed before the call was sent'
+              : `DeadlineExceeded: too little time left for an output retry (${lastIssue})`;
+          throw new ModelCallError(
+            `Bedrock call skipped: ${error}`,
+            record(false, error),
+            undefined,
+          );
+        }
+        timeoutMs = Math.min(timeoutMs, left);
+      }
       attempts += 1;
+      const attemptStarted = this.now();
       let output: ConverseCommandOutput;
       try {
         output = await this.client(req.entry.region).send(new ConverseCommand(input), {
-          abortSignal: AbortSignal.timeout(this.requestTimeoutMs),
+          abortSignal: AbortSignal.timeout(timeoutMs),
         });
       } catch (cause) {
         const name = cause instanceof Error ? cause.name : 'Error';
@@ -130,13 +166,16 @@ export class ConverseStructuredModel implements StructuredModel {
       outputTokens += output.usage?.outputTokens ?? 0;
       cacheReadInputTokens += output.usage?.cacheReadInputTokens ?? 0;
       cacheWriteInputTokens += output.usage?.cacheWriteInputTokens ?? 0;
+      lastAttemptMs = this.now() - attemptStarted;
+      stopReason = output.stopReason;
 
       const parsed = parseOutput(req, textOf(output));
       if (parsed.ok) return { value: parsed.value, record: record(true) };
       lastIssue = parsed.issue;
     }
 
-    const error = `invalid model output after ${attempts} attempts: ${lastIssue}`;
+    const stopped = stopReason === undefined ? '' : ` (stop reason ${stopReason})`;
+    const error = `invalid model output after ${attempts} attempts${stopped}: ${lastIssue}`;
     throw new ModelOutputError(error, record(false, error));
   }
 

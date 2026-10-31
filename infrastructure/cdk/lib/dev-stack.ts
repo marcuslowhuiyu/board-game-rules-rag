@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import * as path from 'node:path';
 import { CfnOutput, Duration, RemovalPolicy, Stack, type StackProps } from 'aws-cdk-lib';
-import { HttpApi, HttpMethod } from 'aws-cdk-lib/aws-apigatewayv2';
+import { HttpApi, HttpMethod, type CfnStage } from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import {
   AllowedMethods,
@@ -42,6 +42,7 @@ import {
   type IChainable,
 } from 'aws-cdk-lib/aws-stepfunctions';
 import { LambdaInvoke } from 'aws-cdk-lib/aws-stepfunctions-tasks';
+import { MODEL_ROLES, loadModelCatalog, type ModelCatalog } from '@bgr/ai';
 import { NON_FILTERABLE_METADATA_KEYS } from '@bgr/retrieval';
 import type { Construct } from 'constructs';
 
@@ -92,6 +93,37 @@ const DEFAULT_EMBEDDING: EmbeddingConfig = {
   dimensions: 1024,
 };
 
+/** Answering settings (M4 step 3); they reach the API Lambda as env vars. */
+export interface AnsweringConfig {
+  /** Daily AI spend cap in USD (Singapore calendar day). */
+  dailyAiCapUsd: number;
+  /** API Gateway default-stage throttle. */
+  throttle: { rateLimit: number; burstLimit: number };
+  /** Per-model-call request timeout. */
+  modelRequestTimeoutMs: number;
+  /**
+   * Time allowed for all model calls of one question. Kept below the 29 s Lambda timeout, so an
+   * exhausted run still returns 503 MODEL_UNAVAILABLE and records its spend.
+   */
+  runBudgetMs: number;
+  /** Evidence kept after reranking, by question tier. */
+  evidenceLimits: { simple: number; complex: number };
+  /** Candidates retrieved before reranking. */
+  rerankCandidates: number;
+  /** Most passages the reranker may keep. */
+  rerankTopN: number;
+}
+
+const DEFAULT_ANSWERING: AnsweringConfig = {
+  dailyAiCapUsd: 1,
+  throttle: { rateLimit: 5, burstLimit: 10 },
+  modelRequestTimeoutMs: 20_000,
+  runBudgetMs: 26_000,
+  evidenceLimits: { simple: 3, complex: 10 },
+  rerankCandidates: 15,
+  rerankTopN: 10,
+};
+
 export interface DevStackProps extends StackProps {
   /** Session TTL in seconds. Defaults to 24h. */
   sessionTtlSeconds?: number;
@@ -101,6 +133,8 @@ export interface DevStackProps extends StackProps {
   presignExpirySeconds?: number;
   /** Embedding model, region and dimension. Defaults to Titan V2, 1024, in Sydney. */
   embedding?: EmbeddingConfig;
+  /** Answering settings. Defaults: $1/day cap, 5 req/s (burst 10), 3/10 evidence of 15 candidates. */
+  answering?: Partial<AnsweringConfig>;
 }
 
 export class DevStack extends Stack {
@@ -111,6 +145,7 @@ export class DevStack extends Stack {
     const uploadMaxBytes = props.uploadMaxBytes ?? 50 * 1024 * 1024;
     const presignExpirySeconds = props.presignExpirySeconds ?? 600;
     const embedding = props.embedding ?? DEFAULT_EMBEDDING;
+    const answering: AnsweringConfig = { ...DEFAULT_ANSWERING, ...props.answering };
 
     // ------ Application data (DynamoDB — see ADR-0006 / ADR-0008) --------
     const gamesTable = new Table(this, 'GamesTable', {
@@ -173,6 +208,16 @@ export class DevStack extends Stack {
       removalPolicy: RemovalPolicy.DESTROY,
     });
 
+    // Per-day spend rows (`pk` = Singapore day); they expire via `ttl`.
+    const usageTable = new Table(this, 'UsageTable', {
+      partitionKey: { name: 'pk', type: AttributeType.STRING },
+      billingMode: BillingMode.PAY_PER_REQUEST,
+      encryption: TableEncryption.AWS_MANAGED,
+      timeToLiveAttribute: 'ttl',
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      removalPolicy: RemovalPolicy.DESTROY,
+    });
+
     // ------ Ingestion S3 bucket (raw/ + normalized/ + stage-state/ + temporary/)
     // CORS is left unset here and applied after the CloudFront distribution
     // is constructed (bottom of the constructor) so `allowedOrigins` can pin
@@ -197,8 +242,9 @@ export class DevStack extends Stack {
       runtime: Runtime.NODEJS_22_X,
       entry: path.resolve(__dirname, '../../../apps/api/src/handlers/api.ts'),
       handler: 'handler',
-      memorySize: 512,
-      timeout: Duration.seconds(15),
+      memorySize: 1024,
+      // API Gateway's HTTP integration limit is 30 s.
+      timeout: Duration.seconds(29),
       logGroup: apiLogGroup,
       environment: baseApiEnvironment({
         gamesTable,
@@ -262,6 +308,43 @@ export class DevStack extends Stack {
       bundling: LAMBDA_BUNDLING,
     });
     stageRunnerFn.node.addDependency(vectorIndex);
+
+    // The API answers questions: Titan embeddings, vector reads, catalog models.
+    apiFn.node.addDependency(vectorIndex);
+    apiFn.addEnvironment('USAGE_TABLE', usageTable.tableName);
+    apiFn.addEnvironment('DAILY_AI_CAP_USD', String(answering.dailyAiCapUsd));
+    apiFn.addEnvironment('MODEL_REQUEST_TIMEOUT_MS', String(answering.modelRequestTimeoutMs));
+    apiFn.addEnvironment('EVIDENCE_LIMIT_SIMPLE', String(answering.evidenceLimits.simple));
+    apiFn.addEnvironment('EVIDENCE_LIMIT_COMPLEX', String(answering.evidenceLimits.complex));
+    apiFn.addEnvironment('RERANK_CANDIDATES', String(answering.rerankCandidates));
+    apiFn.addEnvironment('RERANK_TOP_N', String(answering.rerankTopN));
+    apiFn.addEnvironment('ANSWER_RUN_BUDGET_MS', String(answering.runBudgetMs));
+    apiFn.addEnvironment('EMBEDDING_REGION', embedding.region);
+    apiFn.addEnvironment('EMBEDDING_MODEL_ID', embedding.modelId);
+    apiFn.addEnvironment('EMBEDDING_DIMENSIONS', String(embedding.dimensions));
+    apiFn.addEnvironment('VECTOR_REGION', this.region);
+    apiFn.addEnvironment('VECTOR_INDEX_ARN', vectorIndex.attrIndexArn);
+
+    // The spend ledger only reads (GetItem) and increments (UpdateItem) a day's row.
+    usageTable.grant(apiFn, 'dynamodb:GetItem', 'dynamodb:UpdateItem');
+    apiFn.addToRolePolicy(
+      new PolicyStatement({
+        actions: ['bedrock:InvokeModel'],
+        resources: [`arn:aws:bedrock:${embedding.region}::foundation-model/${embedding.modelId}`],
+      }),
+    );
+    apiFn.addToRolePolicy(
+      new PolicyStatement({
+        actions: ['s3vectors:QueryVectors', 's3vectors:GetVectors'],
+        resources: [vectorIndex.attrIndexArn],
+      }),
+    );
+    apiFn.addToRolePolicy(
+      new PolicyStatement({
+        actions: ['bedrock:InvokeModel'],
+        resources: catalogInvokeResources(loadModelCatalog(), this.account),
+      }),
+    );
 
     stageRunnerFn.addToRolePolicy(
       new PolicyStatement({
@@ -456,6 +539,7 @@ export class DevStack extends Stack {
       { path: '/sessions', method: HttpMethod.POST },
       { path: '/sessions/{sessionId}', method: HttpMethod.GET },
       { path: '/sessions/{sessionId}', method: HttpMethod.DELETE },
+      { path: '/sessions/{sessionId}/messages', method: HttpMethod.POST },
       { path: '/uploads/presign', method: HttpMethod.POST },
       { path: '/ingestion', method: HttpMethod.POST },
       { path: '/ingestion/{jobId}', method: HttpMethod.GET },
@@ -468,6 +552,13 @@ export class DevStack extends Stack {
         integration,
       });
     }
+
+    // The default stage is auto-created by HttpApi; throttle it via the L1 stage.
+    const defaultStage = api.defaultStage!.node.defaultChild as CfnStage;
+    defaultStage.defaultRouteSettings = {
+      throttlingRateLimit: answering.throttle.rateLimit,
+      throttlingBurstLimit: answering.throttle.burstLimit,
+    };
 
     // ------ Frontend: S3 origin + CloudFront ----------------------------
     const siteBucket = new Bucket(this, 'WebBucket', {
@@ -555,6 +646,7 @@ export class DevStack extends Stack {
     new CfnOutput(this, 'DocumentsTableName', { value: documentsTable.tableName });
     new CfnOutput(this, 'ChunksTableName', { value: chunksTable.tableName });
     new CfnOutput(this, 'IngestionJobsTableName', { value: ingestionJobsTable.tableName });
+    new CfnOutput(this, 'UsageTableName', { value: usageTable.tableName });
     new CfnOutput(this, 'IngestionBucketName', { value: ingestionBucket.bucketName });
     new CfnOutput(this, 'IngestionStateMachineArn', { value: stateMachine.stateMachineArn });
   }
@@ -592,6 +684,44 @@ function baseApiEnvironment(args: ApiEnvArgs): Record<string, string> {
     // See ADR-0007 — same-origin routing via CloudFront, no API-side CORS.
     ALLOWED_ORIGIN: 'same-origin',
   };
+}
+
+/** Geography prefixes of Bedrock cross-region inference profile ids (`<prefix>.<foundationId>`). */
+const INFERENCE_PROFILE_PREFIXES: ReadonlySet<string> = new Set([
+  'global',
+  'us',
+  'us-gov',
+  'eu',
+  'apac',
+  'jp',
+  'au',
+  'ca',
+]);
+
+/**
+ * Bedrock InvokeModel resources for every approved catalog model. An
+ * inference profile `<prefix>.<foundationId>` routes to the foundation model in
+ * its destination regions, so IAM needs both ARNs; a `global.` profile also
+ * routes to the region-less ARN. Model ids are never wildcarded.
+ */
+export function catalogInvokeResources(catalog: ModelCatalog, account: string): string[] {
+  const keys = new Set(MODEL_ROLES.flatMap((role) => catalog.approved[role]));
+  const resources = new Set<string>();
+  for (const key of keys) {
+    const { modelId, region } = catalog.models[key]!;
+    const dot = modelId.indexOf('.');
+    const prefix = modelId.slice(0, dot);
+    if (!INFERENCE_PROFILE_PREFIXES.has(prefix)) {
+      // A plain foundation-model id (e.g. `amazon.nova-micro-v1:0`): no profile.
+      resources.add(`arn:aws:bedrock:${region}::foundation-model/${modelId}`);
+      continue;
+    }
+    const foundationId = modelId.slice(dot + 1);
+    resources.add(`arn:aws:bedrock:${region}:${account}:inference-profile/${modelId}`);
+    resources.add(`arn:aws:bedrock:*::foundation-model/${foundationId}`);
+    if (prefix === 'global') resources.add(`arn:aws:bedrock:::foundation-model/${foundationId}`);
+  }
+  return [...resources].sort();
 }
 
 function buildIngestionLifecycle(): LifecycleRule[] {

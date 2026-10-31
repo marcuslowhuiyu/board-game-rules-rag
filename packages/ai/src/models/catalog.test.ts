@@ -21,29 +21,41 @@ const bad = (approved: unknown, defaults: unknown) => ({
 
 describe('model catalog', () => {
   it('bundled config parses and defaults are approved', () => {
-    expect(loadModelCatalog().defaults).toEqual({ router: 'nova-micro', reranker: 'gpt-6-luna' });
+    expect(loadModelCatalog().defaults).toEqual({
+      router: 'nova-micro',
+      reranker: 'gpt-6-luna',
+      answerer: 'gpt-6-luna',
+    });
   });
 
   it('accepts a model entry without temperature', () => {
     const { temperature: _omit, ...noTemp } = entry;
     const catalog = loadModelCatalog({
       models: { m: noTemp },
-      approved: { router: ['m'], reranker: ['m'] },
-      defaults: { router: 'm', reranker: 'm' },
+      approved: { router: ['m'], reranker: ['m'], answerer: ['m'] },
+      defaults: { router: 'm', reranker: 'm', answerer: 'm' },
     });
     expect(catalog.models['m']).not.toHaveProperty('temperature');
   });
 
   it('rejects a default that is not approved for its role', () => {
     expect(() =>
-      loadModelCatalog(bad({ router: ['m'], reranker: ['m'] }, { router: 'm', reranker: 'other' })),
+      loadModelCatalog(
+        bad(
+          { router: ['m'], reranker: ['m'], answerer: ['m'] },
+          { router: 'm', reranker: 'm', answerer: 'other' },
+        ),
+      ),
     ).toThrow();
   });
 
   it('rejects an approved key with no model entry', () => {
     expect(() =>
       loadModelCatalog(
-        bad({ router: ['m', 'ghost'], reranker: ['m'] }, { router: 'm', reranker: 'm' }),
+        bad(
+          { router: ['m', 'ghost'], reranker: ['m'], answerer: ['m'] },
+          { router: 'm', reranker: 'm', answerer: 'm' },
+        ),
       ),
     ).toThrow();
   });
@@ -56,6 +68,36 @@ describe('model catalog', () => {
     });
   });
 
+  it('gives the answerer its own output token limit, separate from the reranker', () => {
+    const catalog = loadModelCatalog();
+    expect(modelFor(catalog, 'reranker').maxTokens).toBe(1024);
+    expect(modelFor(catalog, 'answerer').maxTokens).toBe(4096);
+    expect(modelFor(catalog, 'answerer').modelId).toBe(modelFor(catalog, 'reranker').modelId);
+  });
+
+  it('modelFor applies a per-role maxTokens override only to that role', () => {
+    const catalog = loadModelCatalog({
+      models: { m: { ...entry, roleMaxTokens: { answerer: 99 } } },
+      approved: { router: ['m'], reranker: ['m'], answerer: ['m'] },
+      defaults: { router: 'm', reranker: 'm', answerer: 'm' },
+    });
+    expect(modelFor(catalog, 'answerer').maxTokens).toBe(99);
+    expect(modelFor(catalog, 'router').maxTokens).toBe(10);
+  });
+
+  it.each([{ answerer: 0 }, { answerer: 1.5 }, { judge: 10 }])(
+    'rejects an invalid roleMaxTokens %j',
+    (roleMaxTokens) => {
+      expect(() =>
+        loadModelCatalog({
+          models: { m: { ...entry, roleMaxTokens } },
+          approved: { router: ['m'], reranker: ['m'], answerer: ['m'] },
+          defaults: { router: 'm', reranker: 'm', answerer: 'm' },
+        }),
+      ).toThrow();
+    },
+  );
+
   it('modelFor rejects an unapproved key', () => {
     expect(() => modelFor(loadModelCatalog(), 'router', 'gpt-6-luna')).toThrow(
       /not approved for router/,
@@ -64,6 +106,7 @@ describe('model catalog', () => {
 
   it('modelFor returns the default when no key is given', () => {
     expect(modelFor(loadModelCatalog(), 'reranker').key).toBe('gpt-6-luna');
+    expect(modelFor(loadModelCatalog(), 'answerer').key).toBe('gpt-6-luna');
   });
 
   it('costUsd prices Nova Micro usage', () => {
@@ -103,8 +146,8 @@ describe('model catalog', () => {
       const load = (extra: object) =>
         loadModelCatalog({
           models: { m: { ...entry, ...extra } },
-          approved: { router: ['m'], reranker: ['m'] },
-          defaults: { router: 'm', reranker: 'm' },
+          approved: { router: ['m'], reranker: ['m'], answerer: ['m'] },
+          defaults: { router: 'm', reranker: 'm', answerer: 'm' },
         });
       expect(
         load({ cacheReadUsdPerMTok: 0.01, cacheWriteUsdPerMTok: 0.2 }).models['m'],

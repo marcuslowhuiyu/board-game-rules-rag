@@ -12,7 +12,10 @@ import {
   type IdGenerator,
 } from '@bgr/persistence';
 import { InMemoryObjectStore } from '@bgr/ingestion';
+import type { ModelCallRecord } from '@bgr/ai';
+import type { AnswerRun } from './lib/answer-pipeline.js';
 import type {
+  AnswerPipeline,
   AppConfig,
   AppContext,
   IngestionExecutor,
@@ -92,6 +95,27 @@ export function makeFakeExecutor(): FakeExecutor {
   };
 }
 
+export interface FakePipeline extends AnswerPipeline {
+  calls: Array<{ query: { text: string }; correlationId: string }>;
+}
+
+/** A pipeline returning `outcome` (with the documents it looked up), or throwing it when it is an Error; `records` go to `onCall`. */
+export function makeFakePipeline(
+  outcome: AnswerRun | Error,
+  records: ModelCallRecord[] = [],
+): FakePipeline {
+  const calls: FakePipeline['calls'] = [];
+  return {
+    calls,
+    async answer(input, onCall) {
+      calls.push(input);
+      for (const r of records) onCall(r);
+      if (outcome instanceof Error) throw outcome;
+      return outcome;
+    },
+  };
+}
+
 export function makeTestContext(
   overrides: {
     config?: Partial<AppConfig>;
@@ -101,6 +125,7 @@ export function makeTestContext(
     executor?: IngestionExecutor;
     rawStore?: InMemoryObjectStore;
     normalizedStore?: InMemoryObjectStore;
+    answerPipeline?: AnswerPipeline;
   } = {},
 ): AppContext {
   const config: AppConfig = {
@@ -149,6 +174,13 @@ export function makeTestContext(
     normalizedStore: normalizedStore as unknown as AppContext['normalizedStore'],
     presigner: overrides.presigner ?? makeFakePresigner(),
     executor: overrides.executor ?? makeFakeExecutor(),
+    answerPipeline:
+      overrides.answerPipeline ??
+      ({
+        answer: async () => {
+          throw new Error('no answer pipeline in this test context');
+        },
+      } satisfies AnswerPipeline),
   };
 }
 
