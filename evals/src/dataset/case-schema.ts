@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { basename } from 'node:path';
-import { AuthoritySchema } from '@bgr/domain';
+import { AuthoritySchema, CERTAINTIES } from '@bgr/domain';
 import { z } from 'zod';
 
 const MAX_PHRASE_WORDS = 15;
@@ -10,21 +10,34 @@ const MAX_PHRASE_WORDS = 15;
  * matched by phrase (and heading), never by chunk id, so re-chunking does
  * not break the dataset. Phrases are short anchors, not rulebook excerpts.
  */
+export const PhraseSchema = z
+  .string()
+  .min(1)
+  .max(120)
+  .refine((p) => p.trim().split(/\s+/).length <= MAX_PHRASE_WORDS, {
+    message: `phrase must be at most ${MAX_PHRASE_WORDS} words`,
+  });
+
 export const EvidenceItemSchema = z.object({
   key: z.string().min(1).max(120),
-  phrase: z
-    .string()
-    .min(1)
-    .max(120)
-    .refine((p) => p.trim().split(/\s+/).length <= MAX_PHRASE_WORDS, {
-      message: `phrase must be at most ${MAX_PHRASE_WORDS} words`,
-    }),
+  phrase: PhraseSchema,
   heading: z.string().min(1).max(120).optional(),
   /** Required items decide pass/fail; supporting items are only reported. */
   required: z.boolean(),
   authority: AuthoritySchema.optional(),
 });
 export type EvidenceItem = z.infer<typeof EvidenceItemSchema>;
+
+/** What the answerer should produce for a case; checked deterministically. */
+export const AnswerExpectationSchema = z.strictObject({
+  certainty: z.enum(CERTAINTIES),
+  authority: AuthoritySchema.optional(),
+  /** Short phrases for the tempting wrong answer; none may appear in the answer. */
+  forbiddenClaims: z.array(PhraseSchema).max(5).optional(),
+  sourcesDisagree: z.boolean().optional(),
+  requiresPlayerChoice: z.boolean().optional(),
+});
+export type AnswerExpectation = z.infer<typeof AnswerExpectationSchema>;
 
 export const RetrievalCaseSchema = z
   .object({
@@ -37,6 +50,8 @@ export const RetrievalCaseSchema = z
     requiredEvidence: z.array(EvidenceItemSchema).min(1),
     source: z.object({ url: z.string().url(), title: z.string().min(1) }),
     notes: z.string().optional(),
+    /** Optional answer expectations; cases without this block are retrieval-only. */
+    answer: AnswerExpectationSchema.optional(),
     /** Reserved for M6 (errata, forum and designer evidence); ignored here. */
     futureEvidence: z.array(z.unknown()).optional(),
   })
@@ -52,6 +67,13 @@ export const RetrievalCaseSchema = z
         });
       }
       keys.add(e.key);
+    }
+    if (c.answer?.certainty === 'INCONCLUSIVE') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['answer', 'certainty'],
+        message: 'an answerable case has evidence, so it cannot expect INCONCLUSIVE',
+      });
     }
     const required = c.requiredEvidence.filter((e) => e.required).length;
     if (c.tier === 'simple' && required !== 1) {

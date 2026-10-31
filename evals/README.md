@@ -46,6 +46,29 @@ Reported per game: Recall@1/3/5, MRR, the irrelevant-result rate (top-5 chunks t
 2. Run the verifier (below). It fails if a phrase is in no single chunk (for example, split across a chunk boundary), if the heading doesn't match, or if the phrase also occurs in another game.
 3. Run the eval and check the case behaves as expected.
 
+## Answer cases
+
+The answer eval reuses the retrieval dataset and adds two things, both validated by `src/dataset/answer-case-schema.ts`.
+
+**An `answer` block on a retrieval case** makes it an answerable case. Cases without the block stay retrieval-only.
+
+```jsonc
+"answer": {
+  "certainty": "DEFINITIVE",            // DEFINITIVE | QUALIFIED (INCONCLUSIVE is rejected here)
+  "authority": "OFFICIAL_RULES",        // optional
+  "forbiddenClaims": ["you may draw two cards"],  // optional, up to 5
+  "sourcesDisagree": false,             // optional
+  "requiresPlayerChoice": false         // optional
+}
+```
+
+- **`forbiddenClaims`** are short phrases (same 1-120 character, 15-word rule as evidence phrases) for the tempting wrong answer. The answer must not contain them.
+
+**Answer-only cases** go in `datasets/answer-only/<game>.jsonl`. They have the same fields as a retrieval case, but no `requiredEvidence`, and `answer.certainty` must be `INCONCLUSIVE`.
+
+- **Not-in-rulebook questions** must be plausible questions asked at the table whose answer is truly absent from every enabled source. Examples: app or online play, a house rule, another edition's component, a strategy question.
+- Ids are unique across both sets, and a question text may appear only once per game.
+
 ## Commands
 
 The live commands read AWS settings from env. `scripts/dev-env.sh` exports them from the deployed ingestion stage runner (embedding region, model id, dimension, vector index ARN, and table names), so the eval queries exactly what the pipeline indexed. It also exports `API_BASE` from the `BgrDevStack` outputs. Use Node 22 (`nvm use`).
