@@ -1,6 +1,6 @@
 # Evaluation Framework
 
-Retrieval evaluation (Milestone 3). Rules-answering evals arrive in M4, and the model comparison and LLM-as-judge harness in M7. The design doc is in the private planning repo (`planning/specs/2026-10-27-m3-retrieval-eval-design.md`).
+Retrieval evaluation (Milestone 3) and the answer eval with its answerer model comparison (Milestone 4). An LLM-as-judge harness arrives in M7. The design doc is in the private planning repo (`planning/specs/2026-10-27-m3-retrieval-eval-design.md`).
 
 ## What it measures
 
@@ -83,6 +83,7 @@ pnpm -C evals eval:retrieval --markdown            # full eval; JSON report in e
 pnpm -C evals eval:retrieval --games seti          # one game
 pnpm -C evals eval:retrieval --dimensions 512 --markdown   # local index at 512 dimensions
 pnpm -C evals eval:retrieval --rerank --route --max-cost 1 --markdown   # paid: rerank and routing
+pnpm -C evals eval:answer --max-cost 1 --markdown                       # paid: answer eval (see below)
 ```
 
 ### Comparing embedding settings
@@ -96,6 +97,25 @@ pnpm -C evals eval:retrieval --rerank --route --max-cost 1 --markdown   # paid: 
 Both flags call Bedrock and cost money, so **`--max-cost <usd>` is required** with either. The run prints the planned number of model calls first, counts the cost of every call (failed calls included) and stops issuing model calls once the cap is reached. Remaining cases are scored without rerank and the report is marked `cutShort`. Rerank failures fall back to retrieval-score order and are counted in `rerankFallbacks`. The report also records the models, prompt versions and total model cost. **Paid runs need the operator's OK.**
 
 The full eval is a **local, on-demand command**. It has no CI job. CI minutes are tight (ADR-0009), and a dispatch job would also need AWS access through OIDC.
+
+### Answer eval and model comparison
+
+`eval:answer` runs the real answer pipeline in process: the same router, reranker and answerer wiring as the Lambda (`createAnswerRoles`, `createAnswerPipeline`), the live retriever and dev documents. It bypasses the API and the daily cap. Each answer is scored deterministically against the case's expectations (certainty, authority, required evidence among the applied ruling's citations, forbidden claims, no ruling on a not-in-rulebook case), with no LLM judge. The marks are `answerBars` in `config/eval.config.json`; the pipeline's run budget, request timeout and evidence limits are under `answer` there.
+
+```bash
+pnpm -C evals eval:answer --max-cost 1 --markdown                                  # catalog default answerer
+pnpm -C evals eval:answer --answerer gpt-6-luna,<key> --max-cost 3 --markdown     # side by side
+pnpm -C evals eval:answer --games seti --cases <id>,<id> --max-cost 0.2            # a subset
+pnpm -C evals eval:answer --labelled-tier --max-cost 1 --markdown                  # no router: labelled tiers
+```
+
+- `--answerer <key[,key…]>` runs once per key. Every key must be approved for the answerer role in `packages/ai/models.config.json`. The override is for this run only and never changes the API's defaults. `--reranker <key>` overrides the reranker the same way.
+- `--labelled-tier` gives each question its labelled tier instead of calling the router, which shows what routing costs in misroutes.
+- **`--max-cost <usd>` is required.** Unknown or unapproved keys fail before any call. The run then prints `planned questions: N × M models; estimated cost ≈ $X (cap $Y)`. The estimate is rough: per question, a router call (300 input / 20 output tokens), a rerank (7,800 / 80) and an answer (5,600 / 900), priced from the catalog. The cap covers the whole comparison. Once it is reached the run stops, and the report is `cutShort` with verdict `incomplete`. An incomplete run is never shown as clearing the marks.
+- A case whose pipeline run throws (a model or retrieval failure, a timeout) is an error row. It counts against every rate, and the run goes on.
+- Each answerer's report goes to `reports/answer-<generatedAt>.json`. It records the model in every role, the prompt versions, per-case scores, cost, $/question and p50/p95 latency. `--markdown` prints the comparison table and names the cheapest model whose verdict is `pass`, or "none: operator decides".
+
+**Paid runs need the operator's OK.** With the current catalog defaults the estimate is about $0.002 per question, so about $0.20 for 100 cases per answerer. Check the printed estimate before the run starts.
 
 ### Model availability check
 
@@ -129,3 +149,5 @@ Re-running `plan` overwrites the plan file and discards any confirmations in it.
 ## Regression subset
 
 `src/run-eval.test.ts` runs the whole pipeline over an invented game ("Starfall", `fixtures/retrieval/`). It uses the real `VectorRulesRetriever`, an in-memory index and a deterministic hash embedder. It guards scoring and the retriever's filtering: superseded documents and disabled promos never come back. It does not measure embedding quality. It needs no AWS and no network, and it runs in about a second inside `pnpm test`.
+
+`src/run-answer-eval.test.ts` does the same for the answer eval. It runs the real answer pipeline over Starfall (`fixtures/answer/`: answerable cases, including errata over rules and a forbidden claim, plus not-in-rulebook cases) with a fake Bedrock client. It checks per-case scoring, the cost cap, error rows and labelled-tier mode, at no cost.

@@ -47,6 +47,16 @@ export class CostMeter {
   }
 }
 
+/**
+ * Rough per-call token sizes for pre-run estimates (eval estimates, not model config). The
+ * answer call is 10 passages of about 500 tokens plus the prompt.
+ */
+export const ESTIMATE_TOKENS = {
+  router: { input: 300, output: 20 },
+  reranker: { input: 15 * 500 + 300, output: 80 },
+  answerer: { input: 10 * 500 + 600, output: 900 },
+} as const;
+
 /** Rough up-front cost of a planned run: calls x per-call tokens, priced from the model's catalog entry. */
 export function estimateCostUsd(
   plannedCalls: readonly {

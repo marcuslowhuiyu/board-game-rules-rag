@@ -4,12 +4,7 @@
  * hash embedder. No AWS, no network. It guards scoring and the retriever's
  * filtering, not embedding quality.
  */
-import { readFile } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
-import { SourceDocumentSchema, type SourceDocument } from '@bgr/domain';
-import { InMemoryDocumentsRepository } from '@bgr/persistence';
 import {
-  InMemoryVectorIndex,
   VectorRulesRetriever,
   type RetrievalQuery,
   type RetrievedChunk,
@@ -18,19 +13,9 @@ import {
 import { describe, expect, it } from 'vitest';
 import { loadDataset } from './dataset/case-schema.js';
 import type { EvalConfig } from './scoring/aggregate.js';
-import { EvalConfigError, resolveLiveGames, runEval, type EvalGames } from './run-eval.js';
+import { EvalConfigError, resolveLiveGames, runEval } from './run-eval.js';
 import { HashEmbedder } from './testing/hash-embedder.js';
-
-const fixture = (name: string) =>
-  fileURLToPath(new URL(`../fixtures/retrieval/${name}`, import.meta.url));
-
-interface Corpus {
-  game: { key: string; gameId: string; editionId: string; content: Record<string, string> };
-  documents: Array<
-    Pick<SourceDocument, 'documentId' | 'contentId' | 'status' | 'sourceType' | 'authority'>
-  >;
-  chunks: Array<{ chunkId: string; documentId: string; headingPath: string[]; text: string }>;
-}
+import { fixturePath, loadStarfall } from './testing/starfall.js';
 
 // The subset's corpus is tiny by design, so nothing is excluded as a small corpus here.
 const config: EvalConfig = {
@@ -39,54 +24,15 @@ const config: EvalConfig = {
   smallCorpusThreshold: 0,
   bars: { simple: { k: 3, minRate: 0.9 }, complex: { k: 10, minRate: 0.7 } },
   answerBars: { maxGuesses: 0, minEvidenceRate: 0.85, minCertaintyRate: 0.75 },
+  answer: {
+    runBudgetMs: 26000,
+    requestTimeoutMs: 20000,
+    evidenceLimits: { simple: 3, complex: 10 },
+  },
 };
 
 async function setup() {
-  const corpus = JSON.parse(await readFile(fixture('synthetic-corpus.json'), 'utf8')) as Corpus;
-  const { gameId, editionId } = corpus.game;
-  const documents = new InMemoryDocumentsRepository();
-  for (const d of corpus.documents) {
-    documents.putDocument(
-      SourceDocumentSchema.parse({
-        ...d,
-        gameId,
-        editionId,
-        title: d.documentId,
-        origin: 'UPLOAD',
-        contentHash: 'a'.repeat(64),
-        rawObjectUri: `s3://fixture/${d.documentId}`,
-        chunkCount: 0,
-        supersedes: [],
-        knowledgeRevision: 1,
-        createdAt: '2026-10-27T00:00:00.000Z',
-        updatedAt: '2026-10-27T00:00:00.000Z',
-      }),
-    );
-  }
-  const embeddings = new HashEmbedder();
-  const index = new InMemoryVectorIndex();
-  const { vectors } = await embeddings.embed(corpus.chunks.map((c) => c.text));
-  await index.putVectors(
-    corpus.chunks.map((c, i) => {
-      const doc = corpus.documents.find((d) => d.documentId === c.documentId)!;
-      return {
-        key: c.chunkId,
-        vector: vectors[i]!,
-        metadata: {
-          gameId,
-          editionId,
-          contentId: doc.contentId,
-          documentId: c.documentId,
-          authority: doc.authority,
-          sourceType: doc.sourceType,
-          headingPath: c.headingPath,
-          pageStart: 1,
-          pageEnd: 1,
-          text: c.text,
-        },
-      };
-    }),
-  );
+  const { documents, embeddings, index, games } = await loadStarfall();
   const seen: RetrievedChunk[] = [];
   const inner = new VectorRulesRetriever({ embeddings, index, documents, topK: config.topK });
   const retriever: RulesRetriever & { calls: number } = {
@@ -98,15 +44,7 @@ async function setup() {
       return out;
     },
   };
-  const games: EvalGames = {
-    [corpus.game.key]: {
-      gameId,
-      editionId,
-      content: { base: corpus.game.content['base']! },
-      chunks: corpus.chunks.length,
-    },
-  };
-  const cases = await loadDataset([fixture('synthetic-cases.jsonl')]);
+  const cases = await loadDataset([fixturePath('retrieval/synthetic-cases.jsonl')]);
   return { cases, games, retriever, seen, documents };
 }
 

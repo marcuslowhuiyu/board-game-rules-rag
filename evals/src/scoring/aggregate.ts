@@ -20,6 +20,17 @@ export const EvalConfigSchema = z.object({
   bars: z.object({ simple: BarSchema, complex: BarSchema }),
   /** Pass marks for the answer eval. */
   answerBars: AnswerBarsSchema,
+  /** The answer pipeline as the answer eval runs it. */
+  answer: z.object({
+    /** Time allowed for all model calls of one question. */
+    runBudgetMs: z.number().int().positive(),
+    requestTimeoutMs: z.number().int().positive(),
+    /** Passages kept per routed tier. */
+    evidenceLimits: z.object({
+      simple: z.number().int().positive(),
+      complex: z.number().int().positive(),
+    }),
+  }),
 });
 export type EvalConfig = z.infer<typeof EvalConfigSchema>;
 
