@@ -1,5 +1,9 @@
 import type { ModelCallRecord } from '@bgr/ai';
-import { DailyLimitReachedError, ModelUnavailableError } from '@bgr/answering';
+import {
+  DailyLimitReachedError,
+  ModelUnavailableError,
+  RetrievalUnavailableError,
+} from '@bgr/answering';
 import {
   MessageSchema,
   asMessageId,
@@ -71,6 +75,15 @@ function servedBy(
   return { models, promptVersions };
 }
 
+/**
+ * Pipeline error mapping for POST /sessions/{id}/messages:
+ * - DailyLimitReachedError → 429 DAILY_LIMIT_REACHED (try tomorrow).
+ * - ModelUnavailableError → 503 MODEL_UNAVAILABLE (retryable): a Bedrock call failed, timed out,
+ *   was throttled, or the run budget ran out.
+ * - RetrievalUnavailableError → 503 RETRIEVAL_UNAVAILABLE (retryable): the query embedding, the
+ *   vector query or the document lookup failed.
+ * - Anything else → 500 INTERNAL_ERROR. None of these stores an ASSISTANT message.
+ */
 export function messageRoutes(ctxFactory: () => AppContext) {
   const postMessage = async (rc: RequestContext, params: Record<string, string>) => {
     const app = ctxFactory();
@@ -127,6 +140,15 @@ export function messageRoutes(ctxFactory: () => AppContext) {
         return serviceUnavailable(
           'MODEL_UNAVAILABLE',
           "Couldn't answer right now. Please try again.",
+        );
+      }
+      if (error instanceof RetrievalUnavailableError) {
+        rc.logger.error('retrieval unavailable', {
+          error: error.cause instanceof Error ? error.cause.message : String(error.cause),
+        });
+        return serviceUnavailable(
+          'RETRIEVAL_UNAVAILABLE',
+          "Couldn't look up the rules right now. Please try again.",
         );
       }
       throw error;

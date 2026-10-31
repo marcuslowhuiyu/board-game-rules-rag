@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import type { ModelCallRecord } from '@bgr/ai';
-import { DailyLimitReachedError, ModelUnavailableError } from '@bgr/answering';
+import {
+  DailyLimitReachedError,
+  ModelUnavailableError,
+  RetrievalUnavailableError,
+} from '@bgr/answering';
 import {
   asContentId,
   asEditionId,
@@ -325,6 +329,22 @@ describe('POST /sessions/{sessionId}/messages', () => {
       error: {
         code: 'MODEL_UNAVAILABLE',
         message: "Couldn't answer right now. Please try again.",
+      },
+    });
+    const stored = await ctx.messages.listMessages(asSessionId(SESSION));
+    expect(stored.map((m) => m.role)).toEqual(['USER']);
+  });
+
+  it('maps RetrievalUnavailableError to a retryable 503 RETRIEVAL_UNAVAILABLE', async () => {
+    const { ctx, handler } = await build(
+      makeFakePipeline(new RetrievalUnavailableError(new Error('ThrottlingException'))),
+    );
+    const res = await ask(handler, { question: 'May I attack twice?' });
+    expect(res.statusCode).toBe(503);
+    expect(bodyAs(res)).toEqual({
+      error: {
+        code: 'RETRIEVAL_UNAVAILABLE',
+        message: "Couldn't look up the rules right now. Please try again.",
       },
     });
     const stored = await ctx.messages.listMessages(asSessionId(SESSION));

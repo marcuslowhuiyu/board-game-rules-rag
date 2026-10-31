@@ -39,6 +39,19 @@ export class ModelUnavailableError extends Error {
   }
 }
 
+/**
+ * Retrieval infrastructure failed (query embedding, vector query or document lookup). Transient,
+ * like a model failure: the caller should retry, and it is never reported as INCONCLUSIVE.
+ */
+export class RetrievalUnavailableError extends Error {
+  override readonly cause: unknown;
+  constructor(cause: unknown) {
+    super('Rules retrieval failed');
+    this.name = 'RetrievalUnavailableError';
+    this.cause = cause;
+  }
+}
+
 /** A cited source plus the document facts the answerer prompt shows. */
 export type SourceRecord = CitedSource & {
   title: string;
@@ -116,6 +129,14 @@ export function createAnswerPipeline(deps: AnswerPipelineDeps): {
 } {
   const { logger } = deps;
 
+  const retrieval = async <T>(step: () => Promise<T>): Promise<T> => {
+    try {
+      return await step();
+    } catch (error) {
+      throw new RetrievalUnavailableError(error);
+    }
+  };
+
   async function run(
     input: { query: RetrievalQuery; correlationId: string },
     day: string,
@@ -124,11 +145,13 @@ export function createAnswerPipeline(deps: AnswerPipelineDeps): {
     const options = { logger, correlationId };
 
     const route = await routeQuestion(query.text, deps.classifier, options);
-    const candidates = await deps.retriever.retrieve(query);
+    const candidates = await retrieval(() => deps.retriever.retrieve(query));
     const { ranked } = await rerankEvidence(query.text, candidates, deps.ranker, options);
     // Look up every reranked candidate, so chunks without a source do not shrink the kept set.
     const found =
-      ranked.length === 0 ? new Map<string, SourceRecord>() : await deps.sources(ranked);
+      ranked.length === 0
+        ? new Map<string, SourceRecord>()
+        : await retrieval(() => deps.sources(ranked));
     const passages = ranked
       .filter((c) => found.has(c.chunkId))
       .slice(0, evidenceLimit(route.tier, deps.limits));

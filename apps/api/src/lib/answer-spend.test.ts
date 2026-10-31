@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { EmbeddingsProvider } from '@bgr/ai';
-import { ModelUnavailableError, singaporeDayKey } from '@bgr/answering';
+import { ModelUnavailableError, RetrievalUnavailableError, singaporeDayKey } from '@bgr/answering';
 import {
   asContentId,
   asEditionId,
@@ -108,7 +108,11 @@ const hangingBedrock = () => ({
     }),
 });
 
-async function setup(config: Partial<AnsweringConfig> = {}, client: unknown = fakeBedrock()) {
+async function setup(
+  config: Partial<AnsweringConfig> = {},
+  client: unknown = fakeBedrock(),
+  embedError?: Error,
+) {
   const repo = new InMemoryDocumentsRepository();
   for (const id of ['doc_1', 'doc_2']) await repo.createDocument(doc(id));
   // doc_2 is listed as current but its lookup finds nothing (removed since retrieval).
@@ -129,7 +133,10 @@ async function setup(config: Partial<AnsweringConfig> = {}, client: unknown = fa
   const embeddings: EmbeddingsProvider = {
     modelId: 'embed',
     dimensions: 1,
-    embed: async () => ({ vectors: [[1]], inputTokens: 1 }),
+    embed: async () => {
+      if (embedError) throw embedError;
+      return { vectors: [[1]], inputTokens: 1 };
+    },
   };
   const lines: string[] = [];
   const ledger = new InMemorySpendLedger();
@@ -225,5 +232,42 @@ describe('buildAnswerPipeline (the Lambda wiring), with fake Bedrock, vectors an
     expect(Date.now() - started).toBeLessThan(3_000);
     const routerCost = (200 * 0.035 + 10 * 0.14) / 1e6;
     expect(await ledger.spentUsd(singaporeDayKey(NOW))).toBeCloseTo(routerCost, 12);
+  });
+
+  it('turns an embedding failure into RetrievalUnavailableError, with the router spend recorded', async () => {
+    const { run, ledger } = await setup({}, fakeBedrock(), new Error('ThrottlingException'));
+    const err = await run().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(RetrievalUnavailableError);
+    const routerCost = (200 * 0.035 + 10 * 0.14) / 1e6;
+    expect(await ledger.spentUsd(singaporeDayKey(NOW))).toBeCloseTo(routerCost, 12);
+  });
+
+  it('records billed failed calls: two bad reranker outputs, then an answerer throttle', async () => {
+    const answering = fakeBedrock();
+    const client = {
+      async send(command: { input: { system?: Array<{ text?: string }> } }) {
+        const system = command.input.system?.[0]?.text ?? '';
+        if (system.startsWith('You rank passages')) {
+          // Billed, but not valid JSON: the adapter retries once, then the stage falls back.
+          return {
+            output: { message: { role: 'assistant', content: [{ text: 'not json' }] } },
+            usage: { inputTokens: 900, outputTokens: 20 },
+          };
+        }
+        if (system.startsWith('You answer questions')) {
+          throw Object.assign(new Error('Rate exceeded'), { name: 'ThrottlingException' });
+        }
+        return answering.send(command);
+      },
+    };
+    const { run, ledger } = await setup({}, client);
+    const err = await run().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ModelUnavailableError);
+    const routerCost = (200 * 0.035 + 10 * 0.14) / 1e6;
+    const rerankAttempt = (900 * 0.1 + 20 * 0.5) / 1e6;
+    expect(await ledger.spentUsd(singaporeDayKey(NOW))).toBeCloseTo(
+      routerCost + 2 * rerankAttempt,
+      12,
+    );
   });
 });

@@ -13,6 +13,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   DailyLimitReachedError,
   ModelUnavailableError,
+  RetrievalUnavailableError,
   createAnswerPipeline,
   currentRunDeadline,
   recordModelCall,
@@ -77,6 +78,8 @@ function setup(
     answererError?: Error;
     missingSources?: string[];
     addError?: Error;
+    retrieveError?: Error;
+    sourcesError?: Error;
   } = {},
 ) {
   const order: string[] = [];
@@ -89,6 +92,7 @@ function setup(
   });
   const retrieve = vi.fn(async () => {
     order.push('retrieve');
+    if (opts.retrieveError) throw opts.retrieveError;
     return opts.retrieved ?? chunks;
   });
   const rank = vi.fn(async () => {
@@ -118,6 +122,7 @@ function setup(
   const logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() };
   const sources = vi.fn(async (cs: readonly RetrievedChunk[]) => {
     order.push('sources');
+    if (opts.sourcesError) throw opts.sourcesError;
     return new Map(
       cs
         .filter((c) => !opts.missingSources?.includes(c.chunkId))
@@ -213,6 +218,22 @@ describe('answer pipeline', () => {
     expect(day).toBe(DAY);
     expect(usd).toBeCloseTo(0.013);
   });
+
+  it.each([
+    ['retriever (embedding or vector query)', 'retrieveError'],
+    ['document lookup', 'sourcesError'],
+  ] as const)(
+    'turns a %s failure into RetrievalUnavailableError and still records the spend',
+    async (_stage, key) => {
+      const cause = new Error('ThrottlingException');
+      const t = setup({ [key]: cause });
+      const err = await t.run().catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(RetrievalUnavailableError);
+      expect((err as RetrievalUnavailableError).cause).toBe(cause);
+      expect(t.answer).not.toHaveBeenCalled();
+      expect(vi.mocked(t.ledger.add).mock.calls[0]?.[1]).toBeGreaterThan(0);
+    },
+  );
 
   it('turns a ModelOutputError into INCONCLUSIVE and records its cost', async () => {
     const t = setup({ answererError: new ModelOutputError('bad json', rec('answerer', 0)) });
