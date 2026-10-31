@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { AnswerOnlyCaseSchema, loadAnswerDataset } from './answer-case-schema.js';
 import { DatasetError, RetrievalCaseSchema } from './case-schema.js';
+import { normalize } from '../scoring/match.js';
 
 const retrieval = {
   id: 'seti-sector-timing',
@@ -112,5 +113,59 @@ describe('loadAnswerDataset', () => {
     const games = (kind: string) =>
       new Set(cases.filter((c) => c.kind === kind).map((c) => c.case.game));
     expect(games('not-in-rulebook')).toEqual(games('answerable'));
+  });
+
+  it('has no forbidden claim that a correct answer would contain by negating it', async () => {
+    // "not X" always contains X, so a claim is only safe when its natural
+    // negation goes inside it ("the orbiter must be" -> "need not be"). It
+    // goes in front when the claim opens with a quantifier or adverb
+    // ("not every orbiter scores ...") or with a bare verb ("never reveal ...").
+    const prefixNegated = new Set([
+      'not',
+      'no',
+      'never',
+      'ever',
+      'every',
+      'all',
+      'any',
+      'each',
+      'always',
+      'both',
+    ]);
+    const bareVerbs = new Set([
+      'reveal',
+      'draw',
+      'take',
+      'skip',
+      'lay',
+      'pay',
+      'play',
+      'score',
+      'claim',
+      'discard',
+      'keep',
+      'place',
+      'mark',
+      'count',
+    ]);
+    const unsafe = (claim: string) => {
+      const first = normalize(claim).split(' ')[0] ?? '';
+      return prefixNegated.has(first) || bareVerbs.has(first);
+    };
+    expect(unsafe('Every orbiter scores 3 points')).toBe(true);
+    expect(unsafe('reveal the top three cards')).toBe(true);
+    expect(unsafe('later orbiters also score 3 points')).toBe(false);
+
+    const jsonl = (sub: string) => {
+      const dir = fileURLToPath(new URL(`../../datasets/${sub}/`, import.meta.url));
+      return readdirSync(dir)
+        .filter((f) => f.endsWith('.jsonl'))
+        .map((f) => join(dir, f));
+    };
+    const cases = await loadAnswerDataset(jsonl('retrieval'), jsonl('answer-only'));
+    const bad = cases.flatMap(({ case: c }) =>
+      (c.answer.forbiddenClaims ?? []).filter(unsafe).map((claim) => `${c.id}: ${claim}`),
+    );
+    expect(bad).toEqual([]);
   });
 });
