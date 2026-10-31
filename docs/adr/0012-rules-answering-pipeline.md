@@ -1,0 +1,50 @@
+# ADR-0012: Rules answering pipeline
+
+- **Status:** Accepted
+- **Date:** 2026-10-31
+- **Deciders:** Marcus Low, Claude Code
+- **Related:** ADR-0003, ADR-0010, ADR-0011, Milestone 4 (rules answering), MASTER_PLAN §11, §12, §21
+
+## Context
+
+Retrieval now returns a small, reranked set of passages (ADR-0011). Turning them into an answer is the step where a fabricated ruling can reach a player, so correctness, evidence and honesty about uncertainty come before latency and cost. Three forces shape the design. The model's output is untrusted until checked: it can cite a passage it was never shown, claim an authority it does not have, or hedge while sounding certain. Sources carry different authority (ADR-0010), and when they disagree the player needs to see that. And every question costs money on a public-facing endpoint, so spend needs a ceiling.
+
+## Decision
+
+- **One answer call, per-tier output.** `createRulesAnswerer` (`packages/ai/src/roles/rules-answerer.ts`, prompt `answerer-v1`) makes a single structured call. It returns the applied tier, a certainty (`DEFINITIVE`, `QUALIFIED` or `INCONCLUSIVE`), the answer, an explanation, evidence as passage labels (`P1..Pn`) and one entry per panel tier that has relevant passages. This replaces ADR-0003's separate `assessEvidence` operation. Passages are delimited, labelled with tier, type, title and version, and escaped as in the reranker; the prompt states they are untrusted data. The answerer is configured as a role in the model catalog (starting assignment GPT-6 Luna).
+- **The model's output is validated in code** (`packages/answering/src/validate-answer.ts`) against the passages that were actually sent. Labels resolve to chunk ids and are de-duplicated; an unknown label, or a label for a passage that was not sent, makes the whole ruling unverifiable. A non-`INCONCLUSIVE` ruling with no resolvable evidence is downgraded to `INCONCLUSIVE` and its wording is not shown, not even in the explanation. A tier panel is kept only if it is settled, has evidence, and every piece of its evidence comes from that tier; the first surviving panel per tier wins. For an `INCONCLUSIVE` ruling the answer is always the fixed "not settled" message, and the model's wording goes into the explanation only.
+- **Authority and tier are derived, never trusted.** The authority of the answer is the strongest cited source, in the order `OFFICIAL_ERRATA` > `OFFICIAL_RULES` > `DESIGNER_OR_PUBLISHER` > `COMMUNITY_CONSENSUS` > `COMMUNITY_DISCUSSION` > `UNKNOWN`. The panel tier is always derived from authority (`panelTierOf`), so `OFFICIAL_RULES` and `OFFICIAL_ERRATA` share the `OFFICIAL` panel. The model's own `appliedTier` is not used for the ruling. `sourcesDisagree` is kept only if the model flagged it and at least two panels survive. If an `OFFICIAL` panel and a `DESIGNER_OR_PUBLISHER` panel disagree, `requiresPlayerChoice` is set and a `DEFINITIVE` ruling is capped at `QUALIFIED`.
+- **Confidence is computed, not asked for** (`packages/answering/src/confidence.ts`). `DEFINITIVE` starts at `HIGH`, `QUALIFIED` at `MEDIUM`, `INCONCLUSIVE` is `LOW` with `NOT_SETTLED`. Cited sources that are not all operator-attested (and not downgraded) cap it at `MEDIUM` with `MISSING_PROVENANCE`. A community or unknown tier caps it at `MEDIUM` with `COMMUNITY_SOURCE`. Disagreement drops it one level with `SOURCES_DISAGREE`. Every adjustment is a listed reason.
+- **Errors are not rulings** (`packages/answering/src/pipeline.ts`, `apps/api/src/handlers/messages.ts`).
+  - No evidence (no passages after retrieval, reranking and source lookup) gives `INCONCLUSIVE` without calling the answerer.
+  - A model output failure (`ModelOutputError`, after the adapter's retry) gives `INCONCLUSIVE` and is logged with `modelFailure: true`.
+  - A model call failure (`ModelCallError`) gives HTTP 503 `MODEL_UNAVAILABLE`.
+  - The daily cap gives HTTP 429 `DAILY_LIMIT_REACHED`.
+  - Anything else is an unexpected error and propagates (500).
+- **Keep counts are decided by the router.** After reranking 15 candidates, the router's tier decides how many passages the answerer sees: 3 for a simple question, 10 for a complex one (`EVIDENCE_LIMIT_SIMPLE`, `EVIDENCE_LIMIT_COMPLEX`). If routing fails, the question is treated as complex. Chunks whose source document is missing are dropped before the limit is applied.
+- **Daily spend cap.** The pipeline checks the day's spend before a run and adds the run's cost after it (`DynamoSpendLedger`, one item per Singapore calendar day, keyed `ai-spend#YYYY-MM-DD`, atomic `ADD`, 8-day TTL). The cap is `DAILY_AI_CAP_USD` (1.00). Cost comes from every model call of the run (router, reranker and answerer, including failed calls and cache tokens), collected through an `AsyncLocalStorage` sink so concurrent requests in one Lambda never mix costs. A failed ledger write is logged, not raised. A corrupt spend item raises rather than reading as zero, so the cap cannot be bypassed silently.
+- **Rate limit.** The HTTP API default stage throttles to 5 requests/s with a burst of 10. The API Lambda timeout is 29 s (the HTTP API integration limit is 30 s) and each model call has a 20 s request timeout (`MODEL_REQUEST_TIMEOUT_MS`).
+- **Bedrock grants come from the catalog.** `catalogInvokeResources` in `infrastructure/cdk/lib/dev-stack.ts` derives the `bedrock:InvokeModel` resources from the approved models at synth time: the foundation-model ARN for a plain id, and for an inference-profile id (`global.`, `apac.` and so on) the profile ARN plus the foundation-model ARNs it routes to. There is no wildcard on model ids.
+- **Stored message metadata.** An assistant message stores the answer, and the models and prompt versions that served it, listed per role from the calls that succeeded only. A failed call is not listed.
+
+## Alternatives considered
+
+- **A separate evidence-assessment call before answering** (ADR-0003's `assessEvidence`). Rejected: one more call, more latency and cost, and the validation in code needs the same per-passage facts either way.
+- **Trust the model's authority, tier and confidence.** Rejected: they would be unverifiable claims on a ruling a player may rely on. Code derives them from the cited sources.
+- **Return `INCONCLUSIVE` on any model failure.** Rejected for call failures: an outage is not a rules finding, and showing it as one would look like "the rulebook doesn't say". Unusable output is different (the model answered but nothing can be verified), so it is `INCONCLUSIVE`.
+- **A hard, atomic cap** (a conditional write that reserves spend before the run). Rejected for now as more machinery than a $1 dev cap warrants; see the known gaps.
+- **A fixed keep count.** Rejected: simple questions are cheaper and less noisy with 3 passages.
+
+## Consequences
+
+- **Positive:** a ruling is only ever shown with evidence that was sent to the model and matches its tier. Authority, confidence and disagreement are deterministic and testable. Infrastructure failures are visible as HTTP errors. Model, prices, cap, limits and timeouts are configuration.
+- **Negative and known gaps:**
+  - **The cap is soft.** The spend check happens before the run and the add happens after it, and they are not atomic. Concurrent requests can overshoot $1 by about one run each.
+  - **A Lambda timeout (29 s) loses that request's spend record**, because the record is written after the run. This is a known gap.
+  - **Routing risk.** A complex question wrongly routed as simple gets only 3 passages. Step 2 measured this risk; the step 4 eval re-checks it.
+  - Delimiters reduce but do not eliminate prompt injection. Validation limits the damage: a model cannot cite a passage it was not shown, and cannot raise a ruling's authority.
+  - Cross-region inference profiles mean questions and passages may leave Singapore (ADR-0011).
+- **Follow-up (parked):**
+  - Add a `bedrock:InferenceProfileArn` condition to the foundation-model grants, so those grants only apply when the call arrives through an approved profile.
+  - Validate the answering props (cap, throttle, limits, timeouts) at synth time.
+  - Re-check the answerer and router choices against the larger answer eval (step 4).

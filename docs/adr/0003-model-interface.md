@@ -39,3 +39,7 @@ Model selection is an evaluation question, not an architectural commitment. The 
 ## Revision (2026-10-29)
 
 ADR-0011 adds the model catalog (approved models per role and defaults in `packages/ai/models.config.json`) and the structured Converse adapter with the router and reranker roles. The separate `assessEvidence` operation above is expected to be replaced by a single answer call in the next step of Milestone 4; that change will be recorded when it lands. The decisions above otherwise stand.
+
+## Revision (2026-10-31)
+
+ADR-0012 lands that change: the separate `assessEvidence` operation is replaced by the single answer call (`RulesAnswerer`, prompt `answerer-v1`), whose output is validated in code. The decisions above otherwise stand.
