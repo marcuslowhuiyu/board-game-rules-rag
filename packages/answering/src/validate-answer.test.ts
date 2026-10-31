@@ -318,6 +318,18 @@ describe('validateAnswer: tier panels', () => {
     expect(got.tiers.map((t) => t.tier)).toEqual(['OFFICIAL']);
   });
 
+  it.each(['', '  \n\t'])('drops a panel whose answer is %j', (answer) => {
+    const got = run(
+      model({
+        tiers: [
+          officialPanel,
+          { tier: 'DESIGNER_OR_PUBLISHER', answer, certainty: 'DEFINITIVE', evidence: ['P3'] },
+        ],
+      }),
+    );
+    expect(got.tiers.map((t) => t.tier)).toEqual(['OFFICIAL']);
+  });
+
   it('drops an INCONCLUSIVE panel even when it carries evidence', () => {
     const got = run(
       model({

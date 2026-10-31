@@ -99,8 +99,8 @@ interface Panel {
 }
 
 /**
- * Keeps a tier panel only if it settles the question with evidence that is all
- * known and all from its own tier. The first surviving panel per tier wins.
+ * Keeps a tier panel only if it settles the question, has wording, and has evidence
+ * that is all known and all from its own tier. The first surviving panel per tier wins.
  */
 function survivingPanels(
   tiers: ModelAnswer['tiers'],
@@ -110,6 +110,8 @@ function survivingPanels(
   const kept = new Map<PanelTier, Panel>();
   for (const t of tiers) {
     if (kept.has(t.tier) || t.certainty === 'INCONCLUSIVE') continue;
+    // A blank panel is no ruling, the same as a blank applied answer.
+    if (t.answer.trim().length === 0) continue;
     const cited = resolve(t.evidence, labels, sources);
     if (cited === null || cited.length === 0) continue;
     if (cited.some((s) => panelTierOf(s.authority) !== t.tier)) continue;
