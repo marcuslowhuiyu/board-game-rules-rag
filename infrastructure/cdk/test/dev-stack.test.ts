@@ -35,8 +35,8 @@ describe('DevStack', () => {
     expect((first.Properties as Record<string, unknown>).CorsConfiguration).toBeUndefined();
   });
 
-  it('provisions all M1+M2 DynamoDB tables on-demand', () => {
-    template.resourceCountIs('AWS::DynamoDB::Table', 7);
+  it('provisions all DynamoDB tables on-demand', () => {
+    template.resourceCountIs('AWS::DynamoDB::Table', 8);
     template.allResourcesProperties('AWS::DynamoDB::Table', {
       BillingMode: 'PAY_PER_REQUEST',
     });
@@ -361,6 +361,127 @@ describe('DevStack', () => {
     ]) {
       template.hasResourceProperties('AWS::ApiGatewayV2::Route', { RouteKey: rk });
     }
+  });
+
+  describe('answering', () => {
+    type Statement = { Action: string | string[]; Effect: string; Resource: unknown };
+    const statements = (): Statement[] =>
+      Object.values(template.findResources('AWS::IAM::Policy')).flatMap(
+        (p) =>
+          (p.Properties as { PolicyDocument: { Statement: Statement[] } }).PolicyDocument.Statement,
+      );
+    const actions = (s: Statement): string[] => (Array.isArray(s.Action) ? s.Action : [s.Action]);
+    // Resources with a stack-account token synthesize as Fn::Join; render the
+    // intrinsic parts as `<token>` so ARNs can be compared as strings.
+    const render = (r: unknown): string =>
+      typeof r === 'string'
+        ? r
+        : Array.isArray((r as { 'Fn::Join'?: unknown })['Fn::Join'])
+          ? ((r as { 'Fn::Join': [string, unknown[]] })['Fn::Join'][1] as unknown[])
+              .map(render)
+              .join('')
+          : '<token>';
+    const resources = (s: Statement): string[] =>
+      (Array.isArray(s.Resource) ? s.Resource : [s.Resource]).map(render);
+    const invokeResources = (): string[] =>
+      statements()
+        .filter((s) => actions(s).includes('bedrock:InvokeModel'))
+        .flatMap(resources);
+
+    it('gives the API Lambda a 29 s timeout, 1024 MB and all twelve answering env keys', () => {
+      const fns = template.findResources('AWS::Lambda::Function', {
+        Properties: { Timeout: 29 },
+      });
+      expect(Object.keys(fns)).toHaveLength(1);
+      const props = Object.values(fns)[0]!.Properties as {
+        MemorySize: number;
+        Environment: { Variables: Record<string, unknown> };
+      };
+      expect(props.MemorySize).toBe(1024);
+      const vars = props.Environment.Variables;
+      for (const key of [
+        'USAGE_TABLE',
+        'DAILY_AI_CAP_USD',
+        'MODEL_REQUEST_TIMEOUT_MS',
+        'EVIDENCE_LIMIT_SIMPLE',
+        'EVIDENCE_LIMIT_COMPLEX',
+        'RERANK_CANDIDATES',
+        'RERANK_TOP_N',
+        'EMBEDDING_REGION',
+        'EMBEDDING_MODEL_ID',
+        'EMBEDDING_DIMENSIONS',
+        'VECTOR_REGION',
+        'VECTOR_INDEX_ARN',
+      ]) {
+        expect(vars, key).toHaveProperty(key);
+      }
+      expect(vars).toMatchObject({
+        DAILY_AI_CAP_USD: '1',
+        MODEL_REQUEST_TIMEOUT_MS: '20000',
+        EVIDENCE_LIMIT_SIMPLE: '3',
+        EVIDENCE_LIMIT_COMPLEX: '10',
+        RERANK_CANDIDATES: '15',
+        RERANK_TOP_N: '10',
+        EMBEDDING_DIMENSIONS: '1024',
+      });
+    });
+
+    it('provisions a usage table keyed by pk with TTL on ttl', () => {
+      template.hasResourceProperties('AWS::DynamoDB::Table', {
+        KeySchema: [{ AttributeName: 'pk', KeyType: 'HASH' }],
+        TimeToLiveSpecification: { AttributeName: 'ttl', Enabled: true },
+        BillingMode: 'PAY_PER_REQUEST',
+      });
+    });
+
+    it('throttles the default stage at 5 req/s, burst 10', () => {
+      template.hasResourceProperties('AWS::ApiGatewayV2::Stage', {
+        StageName: '$default',
+        DefaultRouteSettings: Match.objectLike({
+          ThrottlingRateLimit: 5,
+          ThrottlingBurstLimit: 10,
+        }),
+      });
+    });
+
+    it('exposes POST /sessions/{sessionId}/messages', () => {
+      template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+        RouteKey: 'POST /sessions/{sessionId}/messages',
+      });
+    });
+
+    it('grants the API Lambda vector reads on the index', () => {
+      template.hasResourceProperties('AWS::IAM::Policy', {
+        PolicyDocument: {
+          Statement: Match.arrayWith([
+            Match.objectLike({
+              Action: ['s3vectors:QueryVectors', 's3vectors:GetVectors'],
+              Effect: 'Allow',
+            }),
+          ]),
+        },
+      });
+    });
+
+    it('grants Bedrock invoke on each catalog inference profile and its foundation models', () => {
+      const r = invokeResources();
+      expect(r.some((x) => x.endsWith(':inference-profile/global.openai.gpt-6-luna'))).toBe(true);
+      expect(r.some((x) => x.endsWith(':inference-profile/apac.amazon.nova-micro-v1:0'))).toBe(
+        true,
+      );
+      expect(r).toContain('arn:aws:bedrock:*::foundation-model/openai.gpt-6-luna');
+      expect(r).toContain('arn:aws:bedrock:::foundation-model/openai.gpt-6-luna');
+      expect(r).toContain('arn:aws:bedrock:*::foundation-model/amazon.nova-micro-v1:0');
+      // Only global profiles route to the unqualified-region foundation ARN.
+      expect(r).not.toContain('arn:aws:bedrock:::foundation-model/amazon.nova-micro-v1:0');
+    });
+
+    it('never grants invoke on a wildcard model id', () => {
+      for (const resource of invokeResources()) {
+        expect(resource).not.toMatch(/(foundation-model|inference-profile)\/\*/);
+        expect(resource).not.toBe('*');
+      }
+    });
   });
 
   it('provisions the ingestion Node 22 Lambdas (api + stage-runner + mark-job-failed)', () => {

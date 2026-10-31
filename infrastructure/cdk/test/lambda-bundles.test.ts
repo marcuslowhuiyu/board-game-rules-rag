@@ -53,6 +53,22 @@ describe('Lambda bundles', () => {
     expect(bundles).toHaveLength(3);
   });
 
+  it('inlines the model catalog into the api bundle and can read it at runtime', () => {
+    const apiBundle = bundles.find((b) => readFileSync(b, 'utf8').includes('catalogSelfCheck'));
+    expect(apiBundle).toBeDefined();
+    expect(readFileSync(apiBundle!, 'utf8')).toContain('apac.amazon.nova-micro-v1:0');
+    const out = execFileSync(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        `const m = await import(${JSON.stringify(apiBundle)}); console.log(m.catalogSelfCheck());`,
+      ],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    expect(Number(out.trim())).toBeGreaterThan(0);
+  });
+
   it('every bundle loads in Node and exports a handler function', () => {
     for (const bundle of bundles) {
       const out = execFileSync(

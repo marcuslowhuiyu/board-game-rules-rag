@@ -1,4 +1,5 @@
 import type { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
+import { loadModelCatalog } from '@bgr/ai';
 import { getContext } from '../lib/context.js';
 import { makeHandler, route } from '../lib/router.js';
 import { ok } from '../lib/responses.js';
@@ -31,3 +32,6 @@ export const handler = async (
 ): Promise<APIGatewayProxyStructuredResultV2> => {
   return inner(event);
 };
+
+/** Bundle smoke check: the catalog JSON must be inlined, not read from disk. */
+export const catalogSelfCheck = (): number => Object.keys(loadModelCatalog().models).length;

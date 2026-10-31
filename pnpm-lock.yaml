@@ -173,6 +173,9 @@ importers:
 
   infrastructure/cdk:
     dependencies:
+      '@bgr/ai':
+        specifier: workspace:*
+        version: link:../../packages/ai
       '@bgr/retrieval':
         specifier: workspace:*
         version: link:../../packages/retrieval

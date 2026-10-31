@@ -15,6 +15,7 @@
     "deploy:oidc": "cdk deploy BgrGithubOidcStack --require-approval never"
   },
   "dependencies": {
+    "@bgr/ai": "workspace:*",
     "@bgr/retrieval": "workspace:*",
     "aws-cdk-lib": "^2.160.0",
     "constructs": "^10.3.0"
