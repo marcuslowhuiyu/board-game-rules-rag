@@ -64,6 +64,21 @@ const expectInconclusive = (got: RulesAnswer): void => {
 };
 
 describe('validateAnswer: applied ruling', () => {
+  it.each(['', '   \n\t'])('downgrades a %j applied answer to INCONCLUSIVE', (answer) => {
+    const got = run(model({ answer }));
+    expectInconclusive(got);
+    expect(got.explanation).not.toContain('The rulebook says so.');
+  });
+
+  it('caps an applied ruling citing OFFICIAL and COMMUNITY passages at MEDIUM', () => {
+    const got = run(model({ evidence: ['P1', 'P4'] }));
+    expect(got.appliedTier).toBe('OFFICIAL');
+    expect(got.confidence).toEqual({
+      level: 'MEDIUM',
+      reasons: ['DIRECTLY_STATED', 'OPERATOR_ATTESTED', 'COMMUNITY_SOURCE'],
+    });
+  });
+
   it('passes a good DEFINITIVE official answer with HIGH confidence', () => {
     const got = run(model());
     expect(got).toEqual({

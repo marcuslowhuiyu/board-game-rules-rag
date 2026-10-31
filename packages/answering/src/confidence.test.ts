@@ -173,4 +173,27 @@ describe('confidenceFor', () => {
     expect(got).toEqual(want);
     expect(ConfidenceSchema.parse(got)).toEqual(got);
   });
+
+  it.each([
+    ['COMMUNITY_CONSENSUS', community],
+    [
+      'UNKNOWN',
+      source({ chunkId: 'chk_u', authority: 'UNKNOWN', provenance: [attested('UNKNOWN')] }),
+    ],
+  ] as const)(
+    'caps mixed OFFICIAL + %s evidence at MEDIUM with COMMUNITY_SOURCE',
+    (_tier, other) => {
+      expect(
+        confidenceFor({
+          certainty: 'DEFINITIVE',
+          tier: 'OFFICIAL',
+          cited: [source(), other],
+          sourcesDisagree: false,
+        }),
+      ).toEqual({
+        level: 'MEDIUM',
+        reasons: ['DIRECTLY_STATED', 'OPERATOR_ATTESTED', 'COMMUNITY_SOURCE'],
+      });
+    },
+  );
 });

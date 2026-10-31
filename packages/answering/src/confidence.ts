@@ -1,3 +1,4 @@
+import { panelTierOf } from '@bgr/domain';
 import type {
   Certainty,
   Confidence,
@@ -48,7 +49,11 @@ export function confidenceFor(input: {
     reasons.push('MISSING_PROVENANCE');
   }
 
-  if (COMMUNITY_TIERS.has(input.tier)) {
+  // Any community or unknown source in the ruling caps it, not only when it is the applied tier.
+  if (
+    COMMUNITY_TIERS.has(input.tier) ||
+    input.cited.some((s) => COMMUNITY_TIERS.has(panelTierOf(s.authority)))
+  ) {
     level = capAtMedium(level);
     reasons.push('COMMUNITY_SOURCE');
   }

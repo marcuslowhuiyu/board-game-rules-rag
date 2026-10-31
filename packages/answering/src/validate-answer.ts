@@ -167,7 +167,8 @@ export function validateAnswer(
   }
 
   const cited = resolve(output.evidence, labels, sources);
-  if (cited === null || cited.length === 0) {
+  // A blank ruling is no ruling, whatever its certainty and evidence.
+  if (cited === null || cited.length === 0 || output.answer.trim().length === 0) {
     // An unverifiable ruling: never show its wording, not even in the explanation.
     return notSettled(REJECTED_EXPLANATION);
   }
