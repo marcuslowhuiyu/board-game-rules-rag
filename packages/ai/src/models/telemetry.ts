@@ -17,6 +17,8 @@ export interface ModelCallRecord {
   latencyMs: number;
   costUsd: number;
   attempts: number;
+  /** Converse stopReason of the last attempt (e.g. end_turn, max_tokens), when one was received. */
+  stopReason?: string;
   ok: boolean;
   error?: string;
 }

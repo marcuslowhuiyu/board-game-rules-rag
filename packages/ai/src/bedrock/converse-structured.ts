@@ -104,6 +104,7 @@ export class ConverseStructuredModel implements StructuredModel {
     let attempts = 0;
     let lastIssue = '';
     let lastAttemptMs = 0;
+    let stopReason: string | undefined;
     const deadline = this.deadline();
 
     const record = (ok: boolean, error?: string): ModelCallRecord => {
@@ -118,6 +119,7 @@ export class ConverseStructuredModel implements StructuredModel {
         latencyMs: Math.round(performance.now() - started),
         costUsd: costUsd(req.entry, usage),
         attempts,
+        ...(stopReason === undefined ? {} : { stopReason }),
         ok,
         ...(error === undefined ? {} : { error }),
       };
@@ -165,13 +167,15 @@ export class ConverseStructuredModel implements StructuredModel {
       cacheReadInputTokens += output.usage?.cacheReadInputTokens ?? 0;
       cacheWriteInputTokens += output.usage?.cacheWriteInputTokens ?? 0;
       lastAttemptMs = this.now() - attemptStarted;
+      stopReason = output.stopReason;
 
       const parsed = parseOutput(req, textOf(output));
       if (parsed.ok) return { value: parsed.value, record: record(true) };
       lastIssue = parsed.issue;
     }
 
-    const error = `invalid model output after ${attempts} attempts: ${lastIssue}`;
+    const stopped = stopReason === undefined ? '' : ` (stop reason ${stopReason})`;
+    const error = `invalid model output after ${attempts} attempts${stopped}: ${lastIssue}`;
     throw new ModelOutputError(error, record(false, error));
   }
 

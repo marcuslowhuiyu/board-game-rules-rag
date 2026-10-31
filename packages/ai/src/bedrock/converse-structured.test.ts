@@ -453,3 +453,28 @@ describe('ConverseStructuredModel run deadline', () => {
     await expect(model.call(request())).resolves.toMatchObject({ value: { tier: 'simple' } });
   });
 });
+
+describe('ConverseStructuredModel stopReason', () => {
+  beforeEach(() => bedrock.reset());
+
+  it('logs the stop reason of the last attempt on the record', async () => {
+    bedrock
+      .on(ConverseCommand)
+      .resolvesOnce({ ...(reply('{"tier":') as object), stopReason: 'max_tokens' } as never)
+      .resolvesOnce({ ...(reply('{"tier":"simple"}') as object), stopReason: 'end_turn' } as never);
+    const { model, records } = setup();
+    await model.call(request());
+    expect(records[0]!.stopReason).toBe('end_turn');
+  });
+
+  it('logs max_tokens truncation on a ModelOutputError record and message', async () => {
+    bedrock
+      .on(ConverseCommand)
+      .resolves({ ...(reply('{"tier":') as object), stopReason: 'max_tokens' } as never);
+    const { model, records } = setup();
+    const err = await model.call(request()).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ModelOutputError);
+    expect((err as Error).message).toContain('max_tokens');
+    expect(records[0]!.stopReason).toBe('max_tokens');
+  });
+});

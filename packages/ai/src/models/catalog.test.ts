@@ -68,6 +68,36 @@ describe('model catalog', () => {
     });
   });
 
+  it('gives the answerer its own output token limit, separate from the reranker', () => {
+    const catalog = loadModelCatalog();
+    expect(modelFor(catalog, 'reranker').maxTokens).toBe(1024);
+    expect(modelFor(catalog, 'answerer').maxTokens).toBe(4096);
+    expect(modelFor(catalog, 'answerer').modelId).toBe(modelFor(catalog, 'reranker').modelId);
+  });
+
+  it('modelFor applies a per-role maxTokens override only to that role', () => {
+    const catalog = loadModelCatalog({
+      models: { m: { ...entry, roleMaxTokens: { answerer: 99 } } },
+      approved: { router: ['m'], reranker: ['m'], answerer: ['m'] },
+      defaults: { router: 'm', reranker: 'm', answerer: 'm' },
+    });
+    expect(modelFor(catalog, 'answerer').maxTokens).toBe(99);
+    expect(modelFor(catalog, 'router').maxTokens).toBe(10);
+  });
+
+  it.each([{ answerer: 0 }, { answerer: 1.5 }, { judge: 10 }])(
+    'rejects an invalid roleMaxTokens %j',
+    (roleMaxTokens) => {
+      expect(() =>
+        loadModelCatalog({
+          models: { m: { ...entry, roleMaxTokens } },
+          approved: { router: ['m'], reranker: ['m'], answerer: ['m'] },
+          defaults: { router: 'm', reranker: 'm', answerer: 'm' },
+        }),
+      ).toThrow();
+    },
+  );
+
   it('modelFor rejects an unapproved key', () => {
     expect(() => modelFor(loadModelCatalog(), 'router', 'gpt-6-luna')).toThrow(
       /not approved for router/,
