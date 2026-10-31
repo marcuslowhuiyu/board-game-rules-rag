@@ -6,7 +6,7 @@ import type { ModelEntry } from '../models/catalog.js';
 import type { ModelCallRecord } from '../models/telemetry.js';
 import { escapeAttribute, escapeDelimiters } from './escape.js';
 
-export const ANSWERER_PROMPT_VERSION = 'answerer-v2';
+export const ANSWERER_PROMPT_VERSION = 'answerer-v3';
 
 export interface AnswerPassage {
   id: string;
@@ -18,15 +18,27 @@ export interface AnswerPassage {
   version?: string;
 }
 
-/** What the model returns: evidence is passage labels (P1..Pn), not chunk ids. */
+/** One tier's own answer, as the model gives it. */
+export interface ModelTierAnswer {
+  tier: PanelTier;
+  answer: string;
+  certainty: Certainty;
+  evidence: string[];
+  /** True when this tier's answer differs from the applied answer. */
+  disagreesWithApplied: boolean;
+}
+
+/**
+ * What the model returns: evidence is passage labels (P1..Pn), not chunk ids.
+ * There is no global disagreement flag: code derives it from the per-panel flags.
+ */
 export interface ModelAnswer {
   appliedTier: PanelTier | null;
   certainty: Certainty;
   answer: string;
   explanation: string;
   evidence: string[];
-  tiers: { tier: PanelTier; answer: string; certainty: Certainty; evidence: string[] }[];
-  sourcesDisagree: boolean;
+  tiers: ModelTierAnswer[];
 }
 
 export interface RulesAnswerer {
@@ -54,9 +66,9 @@ const ModelAnswerSchema = z.object({
       answer: z.string(),
       certainty: CertaintySchema,
       evidence: z.array(z.string()),
+      disagreesWithApplied: z.boolean(),
     }),
   ),
-  sourcesDisagree: z.boolean(),
 });
 
 const stringArray = { type: 'array', items: { type: 'string' } };
@@ -79,22 +91,14 @@ const ANSWER_JSON_SCHEMA: Record<string, unknown> = {
           answer: { type: 'string' },
           certainty: { type: 'string', enum: [...CERTAINTIES] },
           evidence: stringArray,
+          disagreesWithApplied: { type: 'boolean' },
         },
-        required: ['tier', 'answer', 'certainty', 'evidence'],
+        required: ['tier', 'answer', 'certainty', 'evidence', 'disagreesWithApplied'],
         additionalProperties: false,
       },
     },
-    sourcesDisagree: { type: 'boolean' },
   },
-  required: [
-    'appliedTier',
-    'certainty',
-    'answer',
-    'explanation',
-    'evidence',
-    'tiers',
-    'sourcesDisagree',
-  ],
+  required: ['appliedTier', 'certainty', 'answer', 'explanation', 'evidence', 'tiers'],
   additionalProperties: false,
 };
 
@@ -109,7 +113,7 @@ Rules:
 - certainty is DEFINITIVE when the passages state the answer directly; QUALIFIED when it is your best reading of the passages, and then say what is uncertain in the explanation; INCONCLUSIVE when the passages do not settle the question. For INCONCLUSIVE, say so plainly in the answer, do not guess, set appliedTier to null and evidence to [].
 - Give one entry in "tiers" for each tier that has relevant passages, with that tier's own answer, certainty and evidence. Omit a tier that is silent on the question.
 - Within OFFICIAL passages, newer errata or FAQ wording overrides older rulebook wording: apply the newer wording and say so in the explanation. Use each passage's type (such as ERRATA, FAQ or RULEBOOK) and version to decide which official wording is newer.
-- Set sourcesDisagree to true only when two tiers give different answers to the same question. A tier being silent is not disagreement.
+- In each tier entry, disagreesWithApplied is true when that tier's answer differs from the applied answer (the top-level answer), and false when it gives the same ruling, even in other words. The applied tier's own entry is always false. When certainty is INCONCLUSIVE there is no applied answer: compare each tier with the highest-authority tier in "tiers" instead, whose own entry is then false. A tier being silent is not disagreement: omit it rather than flag it.
 - appliedTier is the tier whose answer you go with: OFFICIAL when it covers the question, otherwise the highest-authority tier that does (order: OFFICIAL, DESIGNER_OR_PUBLISHER, COMMUNITY_CONSENSUS, COMMUNITY_DISCUSSION, UNKNOWN), or null when INCONCLUSIVE. The top-level answer, certainty and evidence are those of the applied tier.
 - evidence lists the labels (such as "P3") of the passages that support the answer, never anything else.
 - Respond only as JSON in the required format.`;

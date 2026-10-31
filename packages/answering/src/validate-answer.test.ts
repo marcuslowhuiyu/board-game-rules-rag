@@ -37,8 +37,15 @@ const model = (over: Partial<ModelAnswer> = {}): ModelAnswer => ({
   answer: 'Yes, you may.',
   explanation: 'The rulebook says so.',
   evidence: ['P1'],
-  tiers: [{ tier: 'OFFICIAL', answer: 'Yes, you may.', certainty: 'DEFINITIVE', evidence: ['P1'] }],
-  sourcesDisagree: false,
+  tiers: [
+    {
+      tier: 'OFFICIAL',
+      answer: 'Yes, you may.',
+      certainty: 'DEFINITIVE',
+      evidence: ['P1'],
+      disagreesWithApplied: false,
+    },
+  ],
   ...over,
 });
 
@@ -187,7 +194,15 @@ describe('validateAnswer: applied ruling', () => {
       model({
         appliedTier: 'OFFICIAL',
         evidence: ['P1'],
-        tiers: [{ tier: 'OFFICIAL', answer: 'Yes.', certainty: 'DEFINITIVE', evidence: ['P1'] }],
+        tiers: [
+          {
+            tier: 'OFFICIAL',
+            answer: 'Yes.',
+            certainty: 'DEFINITIVE',
+            evidence: ['P1'],
+            disagreesWithApplied: false,
+          },
+        ],
       }),
       new Map([['P1', 'chk_forged']]),
       new Map([['chk_forged', forged]]),
@@ -235,7 +250,15 @@ describe('validateAnswer: applied ruling', () => {
     const got = run(
       model({
         evidence: ['P5'],
-        tiers: [{ tier: 'OFFICIAL', answer: 'x', certainty: 'DEFINITIVE', evidence: ['P5'] }],
+        tiers: [
+          {
+            tier: 'OFFICIAL',
+            answer: 'x',
+            certainty: 'DEFINITIVE',
+            evidence: ['P5'],
+            disagreesWithApplied: false,
+          },
+        ],
       }),
     );
     expect(got.confidence).toEqual({
@@ -250,7 +273,13 @@ describe('validateAnswer: applied ruling', () => {
         appliedTier: 'COMMUNITY_CONSENSUS',
         evidence: ['P4'],
         tiers: [
-          { tier: 'COMMUNITY_CONSENSUS', answer: 'x', certainty: 'DEFINITIVE', evidence: ['P4'] },
+          {
+            tier: 'COMMUNITY_CONSENSUS',
+            answer: 'x',
+            certainty: 'DEFINITIVE',
+            evidence: ['P4'],
+            disagreesWithApplied: false,
+          },
         ],
       }),
     );
@@ -266,17 +295,26 @@ describe('validateAnswer: tier panels', () => {
     answer: 'Yes.',
     certainty: 'DEFINITIVE' as const,
     evidence: ['P1'],
+    disagreesWithApplied: false,
   };
+  const designer = (answer: string, disagreesWithApplied: boolean) => ({
+    tier: 'DESIGNER_OR_PUBLISHER' as const,
+    answer,
+    certainty: 'DEFINITIVE' as const,
+    evidence: ['P3'],
+    disagreesWithApplied,
+  });
+  const community = (answer: string, disagreesWithApplied: boolean) => ({
+    tier: 'COMMUNITY_CONSENSUS' as const,
+    answer,
+    certainty: 'DEFINITIVE' as const,
+    evidence: ['P4'],
+    disagreesWithApplied,
+  });
 
   it('drops a community panel citing an OFFICIAL passage (Review Focus 2)', () => {
     const got = run(
-      model({
-        tiers: [
-          officialPanel,
-          { tier: 'COMMUNITY_CONSENSUS', answer: 'No.', certainty: 'DEFINITIVE', evidence: ['P1'] },
-        ],
-        sourcesDisagree: true,
-      }),
+      model({ tiers: [officialPanel, { ...community('No.', true), evidence: ['P1'] }] }),
     );
     expect(got.tiers.map((t) => t.tier)).toEqual(['OFFICIAL']);
     expect(got.sourcesDisagree).toBe(false);
@@ -284,29 +322,14 @@ describe('validateAnswer: tier panels', () => {
 
   it('drops a panel mixing its own tier with another tier', () => {
     const got = run(
-      model({
-        tiers: [
-          officialPanel,
-          {
-            tier: 'COMMUNITY_CONSENSUS',
-            answer: 'No.',
-            certainty: 'DEFINITIVE',
-            evidence: ['P4', 'P1'],
-          },
-        ],
-      }),
+      model({ tiers: [officialPanel, { ...community('No.', true), evidence: ['P4', 'P1'] }] }),
     );
     expect(got.tiers.map((t) => t.tier)).toEqual(['OFFICIAL']);
   });
 
   it('drops a panel with an unknown label', () => {
     const got = run(
-      model({
-        tiers: [
-          officialPanel,
-          { ...officialPanel, tier: 'DESIGNER_OR_PUBLISHER', evidence: ['P3', 'P7'] },
-        ],
-      }),
+      model({ tiers: [officialPanel, { ...designer('Yes.', false), evidence: ['P3', 'P7'] }] }),
     );
     expect(got.tiers.map((t) => t.tier)).toEqual(['OFFICIAL']);
   });
@@ -319,34 +342,18 @@ describe('validateAnswer: tier panels', () => {
   });
 
   it.each(['', '  \n\t'])('drops a panel whose answer is %j', (answer) => {
-    const got = run(
-      model({
-        tiers: [
-          officialPanel,
-          { tier: 'DESIGNER_OR_PUBLISHER', answer, certainty: 'DEFINITIVE', evidence: ['P3'] },
-        ],
-      }),
-    );
+    const got = run(model({ tiers: [officialPanel, designer(answer, true)] }));
     expect(got.tiers.map((t) => t.tier)).toEqual(['OFFICIAL']);
+    expect(got.sourcesDisagree).toBe(false);
   });
 
   it('drops an INCONCLUSIVE panel even when it carries evidence', () => {
     const got = run(
-      model({
-        tiers: [
-          officialPanel,
-          {
-            tier: 'DESIGNER_OR_PUBLISHER',
-            answer: '?',
-            certainty: 'INCONCLUSIVE',
-            evidence: ['P3'],
-          },
-        ],
-        sourcesDisagree: true,
-      }),
+      model({ tiers: [officialPanel, { ...designer('?', true), certainty: 'INCONCLUSIVE' }] }),
     );
     expect(got.tiers.map((t) => t.tier)).toEqual(['OFFICIAL']);
     expect(got.sourcesDisagree).toBe(false);
+    expect(got.requiresPlayerChoice).toBe(false);
   });
 
   it('keeps only the first surviving panel per tier', () => {
@@ -361,28 +368,51 @@ describe('validateAnswer: tier panels', () => {
     const got = run(model({ tiers: [{ ...officialPanel, evidence: ['P1', 'P2', 'P1'] }] }));
     expect(got.tiers[0]?.evidence).toEqual([{ chunkId: 'chk_rules' }, { chunkId: 'chk_errata' }]);
   });
+});
 
-  it('keeps sourcesDisagree only with two surviving panels', () => {
-    const got = run(model({ tiers: [officialPanel], sourcesDisagree: true }));
+describe('validateAnswer: disagreement between tiers', () => {
+  const officialPanel = {
+    tier: 'OFFICIAL' as const,
+    answer: 'Yes.',
+    certainty: 'DEFINITIVE' as const,
+    evidence: ['P1'],
+    disagreesWithApplied: false,
+  };
+  const designer = (disagreesWithApplied: boolean) => ({
+    tier: 'DESIGNER_OR_PUBLISHER' as const,
+    answer: disagreesWithApplied ? 'No.' : 'Yes.',
+    certainty: 'DEFINITIVE' as const,
+    evidence: ['P3'],
+    disagreesWithApplied,
+  });
+  const community = (disagreesWithApplied: boolean) => ({
+    tier: 'COMMUNITY_CONSENSUS' as const,
+    answer: disagreesWithApplied ? 'No.' : 'Yes.',
+    certainty: 'DEFINITIVE' as const,
+    evidence: ['P4'],
+    disagreesWithApplied,
+  });
+
+  it('reports no disagreement when every panel agrees with the applied ruling', () => {
+    const got = run(model({ tiers: [officialPanel, designer(false), community(false)] }));
     expect(got.sourcesDisagree).toBe(false);
+    expect(got.requiresPlayerChoice).toBe(false);
     expect(got.confidence.reasons).not.toContain('SOURCES_DISAGREE');
   });
 
-  it('flags designer vs official disagreement as a player choice', () => {
-    const got = run(
-      model({
-        tiers: [
-          officialPanel,
-          {
-            tier: 'DESIGNER_OR_PUBLISHER',
-            answer: 'No.',
-            certainty: 'DEFINITIVE',
-            evidence: ['P3'],
-          },
-        ],
-        sourcesDisagree: true,
-      }),
-    );
+  it('does not require a player choice when OFFICIAL and DESIGNER agree and only COMMUNITY disagrees (Codex P2)', () => {
+    const got = run(model({ tiers: [officialPanel, designer(false), community(true)] }));
+    expect(got.sourcesDisagree).toBe(true);
+    expect(got.requiresPlayerChoice).toBe(false);
+    expect(got.certainty).toBe('DEFINITIVE');
+    expect(got.confidence).toEqual({
+      level: 'MEDIUM',
+      reasons: ['DIRECTLY_STATED', 'OPERATOR_ATTESTED', 'SOURCES_DISAGREE'],
+    });
+  });
+
+  it('flags an OFFICIAL ruling that a DESIGNER panel disagrees with as a player choice', () => {
+    const got = run(model({ tiers: [officialPanel, designer(true)] }));
     expect(got.requiresPlayerChoice).toBe(true);
     expect(got.sourcesDisagree).toBe(true);
     expect(got.certainty).toBe('QUALIFIED');
@@ -393,15 +423,58 @@ describe('validateAnswer: tier panels', () => {
     });
   });
 
-  it('drops each panel a level when sources disagree', () => {
+  it('flags a DESIGNER ruling that an OFFICIAL panel disagrees with as a player choice', () => {
     const got = run(
       model({
-        tiers: [
-          officialPanel,
-          { tier: 'COMMUNITY_CONSENSUS', answer: 'No.', certainty: 'QUALIFIED', evidence: ['P4'] },
-        ],
-        sourcesDisagree: true,
+        appliedTier: 'DESIGNER_OR_PUBLISHER',
+        evidence: ['P3'],
+        tiers: [{ ...officialPanel, disagreesWithApplied: true }, designer(false)],
       }),
+    );
+    expect(got.appliedTier).toBe('DESIGNER_OR_PUBLISHER');
+    expect(got.requiresPlayerChoice).toBe(true);
+    expect(got.certainty).toBe('QUALIFIED');
+  });
+
+  it('treats an OFFICIAL applied ruling with no OFFICIAL panel as the official side', () => {
+    const got = run(model({ tiers: [designer(true)] }));
+    expect(got.sourcesDisagree).toBe(true);
+    expect(got.requiresPlayerChoice).toBe(true);
+    expect(got.certainty).toBe('QUALIFIED');
+  });
+
+  it('flags OFFICIAL vs DESIGNER whenever exactly one of them disagrees with the applied ruling', () => {
+    // An inconsistent model: the applied ruling cites an official passage, its OFFICIAL panel
+    // says it differs, and the DESIGNER panel matches it. The two panels still differ.
+    const got = run(
+      model({ tiers: [{ ...officialPanel, disagreesWithApplied: true }, designer(false)] }),
+    );
+    expect(got.requiresPlayerChoice).toBe(true);
+  });
+
+  it('does not claim an OFFICIAL vs DESIGNER conflict when both differ from a community ruling', () => {
+    // Both differ from the applied ruling, which cannot say whether they differ from each other.
+    const got = run(
+      model({
+        appliedTier: 'COMMUNITY_CONSENSUS',
+        evidence: ['P4'],
+        tiers: [{ ...officialPanel, disagreesWithApplied: true }, designer(true), community(false)],
+      }),
+    );
+    expect(got.appliedTier).toBe('COMMUNITY_CONSENSUS');
+    expect(got.sourcesDisagree).toBe(true);
+    expect(got.requiresPlayerChoice).toBe(false);
+  });
+
+  it('ignores the flag on a dropped panel', () => {
+    const got = run(model({ tiers: [officialPanel, { ...designer(true), evidence: ['P1'] }] }));
+    expect(got.sourcesDisagree).toBe(false);
+    expect(got.requiresPlayerChoice).toBe(false);
+  });
+
+  it('drops each panel a level when sources disagree', () => {
+    const got = run(
+      model({ tiers: [officialPanel, { ...community(true), certainty: 'QUALIFIED' }] }),
     );
     expect(got.tiers.map((t) => t.confidence)).toEqual([
       { level: 'MEDIUM', reasons: ['DIRECTLY_STATED', 'OPERATOR_ATTESTED', 'SOURCES_DISAGREE'] },
@@ -412,23 +485,17 @@ describe('validateAnswer: tier panels', () => {
     ]);
   });
 
-  it('does not require a player choice when official disagrees only with community', () => {
+  it('flags OFFICIAL vs DESIGNER on an INCONCLUSIVE ruling from the panel flags alone', () => {
     const got = run(
       model({
-        tiers: [
-          officialPanel,
-          { tier: 'COMMUNITY_CONSENSUS', answer: 'No.', certainty: 'DEFINITIVE', evidence: ['P4'] },
-        ],
-        sourcesDisagree: true,
+        certainty: 'INCONCLUSIVE',
+        evidence: [],
+        tiers: [officialPanel, designer(true)],
       }),
     );
-    expect(got.requiresPlayerChoice).toBe(false);
+    expect(got.certainty).toBe('INCONCLUSIVE');
     expect(got.sourcesDisagree).toBe(true);
-    expect(got.certainty).toBe('DEFINITIVE');
-    expect(got.confidence).toEqual({
-      level: 'MEDIUM',
-      reasons: ['DIRECTLY_STATED', 'OPERATOR_ATTESTED', 'SOURCES_DISAGREE'],
-    });
+    expect(got.requiresPlayerChoice).toBe(true);
   });
 
   it('keeps valid panels when the applied ruling is rejected', () => {
@@ -449,7 +516,6 @@ describe('validateAnswer: never throws on schema-valid garbage', () => {
         explanation: '',
         evidence: [],
         tiers: [],
-        sourcesDisagree: true,
       },
     ],
     [
@@ -460,10 +526,21 @@ describe('validateAnswer: never throws on schema-valid garbage', () => {
       'panels full of junk',
       model({
         tiers: [
-          { tier: 'UNKNOWN', answer: '', certainty: 'QUALIFIED', evidence: ['toString'] },
-          { tier: 'OFFICIAL', answer: '', certainty: 'INCONCLUSIVE', evidence: [] },
+          {
+            tier: 'UNKNOWN',
+            answer: '',
+            certainty: 'QUALIFIED',
+            evidence: ['toString'],
+            disagreesWithApplied: false,
+          },
+          {
+            tier: 'OFFICIAL',
+            answer: '',
+            certainty: 'INCONCLUSIVE',
+            evidence: [],
+            disagreesWithApplied: true,
+          },
         ],
-        sourcesDisagree: true,
       }),
     ],
   ])('%s', (_name, output) => {

@@ -41,8 +41,15 @@ const modelAnswer = {
   answer: 'Yes.',
   explanation: 'P1 says so.',
   evidence: ['P1'],
-  tiers: [{ tier: 'OFFICIAL', answer: 'Yes.', certainty: 'DEFINITIVE', evidence: ['P1'] }],
-  sourcesDisagree: false,
+  tiers: [
+    {
+      tier: 'OFFICIAL',
+      answer: 'Yes.',
+      certainty: 'DEFINITIVE',
+      evidence: ['P1'],
+      disagreesWithApplied: false,
+    },
+  ],
 };
 
 function fake(value: unknown = modelAnswer) {
@@ -82,7 +89,7 @@ describe('rules answerer', () => {
     const result = await createRulesAnswerer(model, entry).answer('Q?', passages, 'corr-1');
     const req = requests[0]!;
     expect(req.role).toBe('answerer');
-    expect(req.promptVersion).toBe('answerer-v2');
+    expect(req.promptVersion).toBe('answerer-v3');
     expect(req.correlationId).toBe('corr-1');
     expect(req.user).toContain(
       '<passage id="P1" tier="OFFICIAL" type="FAQ" title="Official FAQ" version="2.1">',
@@ -180,6 +187,10 @@ describe('rules answerer', () => {
     expect(system).toMatch(/INCONCLUSIVE when the passages do not settle the question/);
     expect(system).toMatch(/newer errata or FAQ wording overrides older rulebook wording/);
     expect(system).toMatch(/A tier being silent is not disagreement/);
+    expect(system).toMatch(
+      /disagreesWithApplied is true when that tier's answer differs from the applied answer/,
+    );
+    expect(system).toMatch(/When certainty is INCONCLUSIVE there is no applied answer/);
     expect(system).toMatch(/or null when INCONCLUSIVE/);
     expect(system).toMatch(/set appliedTier to null and evidence to \[\]/);
   });
@@ -191,8 +202,8 @@ describe('rules answerer', () => {
     const hash = createHash('sha256').update(`${system}\n---\n${user}`).digest('hex');
     // On a prompt edit: bump ANSWERER_PROMPT_VERSION, then update this pair together.
     expect({ version: ANSWERER_PROMPT_VERSION, hash }).toEqual({
-      version: 'answerer-v2',
-      hash: 'c122f839582f12263e7c79b86a6e7cff8111d0f3640381a5498816e456b24a04',
+      version: 'answerer-v3',
+      hash: '17d0db416eee6138f9edf37185d0f801a88cb3e354ff296271f8f38a75d40320',
     });
   });
 
@@ -215,6 +226,24 @@ describe('rules answerer', () => {
     const props = schema['properties'] as Record<string, Record<string, unknown>>;
     expect(props['appliedTier']!['enum']).toContain(null);
     expect(props['certainty']!['enum']).toEqual(['DEFINITIVE', 'QUALIFIED', 'INCONCLUSIVE']);
+  });
+
+  it('asks each tier panel whether it disagrees with the applied ruling, and has no global flag', async () => {
+    const { model, requests } = fake();
+    await createRulesAnswerer(model, entry).answer('Q?', passages);
+    const props = requests[0]!.jsonSchema['properties'] as Record<string, Record<string, unknown>>;
+    expect(props).not.toHaveProperty('sourcesDisagree');
+    const panel = (props['tiers']!['items'] as Record<string, unknown>)['properties'];
+    expect(panel).toHaveProperty('disagreesWithApplied', { type: 'boolean' });
+  });
+
+  it('rejects a tier panel without disagreesWithApplied', async () => {
+    const { tiers, ...rest } = modelAnswer;
+    const bad = { ...rest, tiers: tiers.map(({ disagreesWithApplied: _, ...t }) => t) };
+    const strict: StructuredModel = {
+      call: async <T>(req: StructuredRequest<T>) => ({ value: req.schema.parse(bad), record }),
+    };
+    await expect(createRulesAnswerer(strict, entry).answer('Q?', passages)).rejects.toThrow();
   });
 
   it('rejects a response that does not match the schema', async () => {

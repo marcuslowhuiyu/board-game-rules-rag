@@ -96,6 +96,8 @@ interface Panel {
   answer: string;
   certainty: Certainty;
   cited: CitedSource[];
+  /** The model's claim that this panel's ruling differs from the applied ruling. */
+  disagreesWithApplied: boolean;
 }
 
 /**
@@ -115,9 +117,36 @@ function survivingPanels(
     const cited = resolve(t.evidence, labels, sources);
     if (cited === null || cited.length === 0) continue;
     if (cited.some((s) => panelTierOf(s.authority) !== t.tier)) continue;
-    kept.set(t.tier, { tier: t.tier, answer: t.answer, certainty: t.certainty, cited });
+    kept.set(t.tier, {
+      tier: t.tier,
+      answer: t.answer,
+      certainty: t.certainty,
+      cited,
+      disagreesWithApplied: t.disagreesWithApplied,
+    });
   }
   return [...kept.values()];
+}
+
+/**
+ * Whether the OFFICIAL and DESIGNER_OR_PUBLISHER rulings are known to differ from each other.
+ * Each side's ruling is its surviving panel, or the applied ruling when that is of its tier and it
+ * has no panel. The flags compare each panel with the applied ruling, so two sides differ exactly
+ * when one matches the applied ruling and the other does not. When both differ from it (a ruling
+ * of a third tier) the flags cannot tell whether they differ from each other, so no conflict is claimed.
+ */
+function officialAndDesignerDisagree(
+  panels: readonly Panel[],
+  appliedTier: PanelTier | null,
+): boolean {
+  const differsFromApplied = (tier: PanelTier): boolean | undefined => {
+    const panel = panels.find((p) => p.tier === tier);
+    if (panel !== undefined) return panel.disagreesWithApplied;
+    return appliedTier === tier ? false : undefined;
+  };
+  const official = differsFromApplied('OFFICIAL');
+  const designer = differsFromApplied('DESIGNER_OR_PUBLISHER');
+  return official !== undefined && designer !== undefined && official !== designer;
 }
 
 /**
@@ -133,10 +162,8 @@ export function validateAnswer(
   sources: ReadonlyMap<string, CitedSource>,
 ): RulesAnswer {
   const panels = survivingPanels(output.tiers, labels, sources);
-  const sourcesDisagree = output.sourcesDisagree && panels.length >= 2;
-  const panelTiers = new Set(panels.map((p) => p.tier));
-  const requiresPlayerChoice =
-    sourcesDisagree && panelTiers.has('OFFICIAL') && panelTiers.has('DESIGNER_OR_PUBLISHER');
+  // Derived from the surviving panels only: a dropped panel's claim counts for nothing.
+  const sourcesDisagree = panels.some((p) => p.disagreesWithApplied);
 
   const tiers: TierAnswer[] = panels.map((p) => ({
     tier: p.tier,
@@ -152,11 +179,12 @@ export function validateAnswer(
     }),
   }));
 
-  const shared = { tiers, sourcesDisagree, requiresPlayerChoice };
   // An INCONCLUSIVE ruling's answer is always the fixed message, so a hedge never reads as a ruling.
   const notSettled = (explanation: string): RulesAnswer => ({
     ...inconclusiveAnswer(explanation),
-    ...shared,
+    tiers,
+    sourcesDisagree,
+    requiresPlayerChoice: officialAndDesignerDisagree(panels, null),
   });
 
   if (output.certainty === 'INCONCLUSIVE') {
@@ -177,6 +205,7 @@ export function validateAnswer(
 
   const top = strongest(cited);
   const appliedTier = panelTierOf(top.authority);
+  const requiresPlayerChoice = officialAndDesignerDisagree(panels, appliedTier);
   const certainty: Certainty =
     requiresPlayerChoice && output.certainty === 'DEFINITIVE' ? 'QUALIFIED' : output.certainty;
 
@@ -189,6 +218,8 @@ export function validateAnswer(
     needsResearch: false,
     confidence: confidenceFor({ certainty, tier: appliedTier, cited, sourcesDisagree }),
     appliedTier,
-    ...shared,
+    tiers,
+    sourcesDisagree,
+    requiresPlayerChoice,
   };
 }

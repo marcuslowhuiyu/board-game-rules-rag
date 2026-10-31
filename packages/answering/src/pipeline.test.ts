@@ -63,8 +63,15 @@ const MODEL: ModelAnswer = {
   answer: 'Yes.',
   explanation: 'Stated.',
   evidence: ['P1'],
-  tiers: [{ tier: 'OFFICIAL', answer: 'Yes.', certainty: 'DEFINITIVE', evidence: ['P1'] }],
-  sourcesDisagree: false,
+  tiers: [
+    {
+      tier: 'OFFICIAL',
+      answer: 'Yes.',
+      certainty: 'DEFINITIVE',
+      evidence: ['P1'],
+      disagreesWithApplied: false,
+    },
+  ],
 };
 
 const NOW = new Date('2026-10-30T04:00:00Z');

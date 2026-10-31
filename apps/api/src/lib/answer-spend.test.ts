@@ -75,8 +75,15 @@ function fakeBedrock() {
     answer: 'Yes.',
     explanation: 'Rule 1 says so.',
     evidence: ['P1'],
-    tiers: [{ tier: 'OFFICIAL', answer: 'Yes.', certainty: 'DEFINITIVE', evidence: ['P1'] }],
-    sourcesDisagree: false,
+    tiers: [
+      {
+        tier: 'OFFICIAL',
+        answer: 'Yes.',
+        certainty: 'DEFINITIVE',
+        evidence: ['P1'],
+        disagreesWithApplied: false,
+      },
+    ],
   };
   return {
     async send(command: { input: { system?: Array<{ text?: string }> } }) {
