@@ -77,7 +77,8 @@ const stringArray = { type: 'array', items: { type: 'string' } };
 const ANSWER_JSON_SCHEMA: Record<string, unknown> = {
   type: 'object',
   properties: {
-    appliedTier: { type: ['string', 'null'], enum: [...PANEL_TIERS, null] },
+    // anyOf, not `type: ['string', 'null']` with an enum: Claude on Bedrock rejects that form.
+    appliedTier: { anyOf: [{ type: 'string', enum: [...PANEL_TIERS] }, { type: 'null' }] },
     certainty: { type: 'string', enum: [...CERTAINTIES] },
     answer: { type: 'string' },
     explanation: { type: 'string' },
