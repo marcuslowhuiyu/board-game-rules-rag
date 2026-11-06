@@ -74,6 +74,29 @@ const run = (a: RulesAnswer, tier: 'simple' | 'complex' = 'simple') => ({
 });
 
 describe('scoreAnswerCase', () => {
+  it('a tier panel ruling on a not-in-rulebook case is a guess, even under an INCONCLUSIVE answer', () => {
+    // The player sees the panel's ruling, so it counts like a top-level one.
+    const inconclusive = answer({
+      certainty: 'INCONCLUSIVE',
+      authority: 'UNKNOWN',
+      evidence: [],
+      appliedTier: null,
+      tiers: [
+        {
+          tier: 'OFFICIAL',
+          answer: 'Yes, you may.',
+          certainty: 'DEFINITIVE',
+          evidence: [{ chunkId: 'c2' }],
+          confidence: { level: 'HIGH', reasons: ['DIRECTLY_STATED'] },
+        },
+      ],
+    });
+    expect(scoreAnswerCase(notInRulebook(), run(inconclusive))).toMatchObject({
+      guess: true,
+      certaintyOk: true,
+    });
+  });
+
   it('correct definitive answer with cited evidence scores right', () => {
     const s = scoreAnswerCase(answerable({ authority: 'OFFICIAL_RULES' }), run(answer()));
     expect(s).toMatchObject({

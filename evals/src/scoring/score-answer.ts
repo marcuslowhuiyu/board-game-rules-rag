@@ -10,7 +10,7 @@ export interface AnswerCaseScore {
   /** Set when the pipeline threw; the case then counts as a miss everywhere. */
   error?: string;
   certaintyOk: boolean;
-  /** Not-in-rulebook case answered with anything but INCONCLUSIVE. */
+  /** Not-in-rulebook case given a ruling: a non-INCONCLUSIVE answer or tier panel. */
   guess: boolean;
   /** null for not-in-rulebook cases. */
   evidenceOk: boolean | null;
@@ -75,7 +75,11 @@ export function scoreAnswerCase(c: AnswerCase, run: AnswerRun): AnswerCaseScore 
   return {
     ...base,
     certaintyOk: answer.certainty === expected.certainty,
-    guess: !answerable && answer.certainty !== 'INCONCLUSIVE',
+    // A tier panel's ruling is shown to the player too, so it counts even under an INCONCLUSIVE answer.
+    guess:
+      !answerable &&
+      (answer.certainty !== 'INCONCLUSIVE' ||
+        answer.tiers.some((t) => t.certainty !== 'INCONCLUSIVE')),
     evidenceOk,
     authorityOk: expects(expected.authority) ? answer.authority === expected.authority : null,
     forbiddenHit,
