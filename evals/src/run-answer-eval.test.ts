@@ -80,7 +80,7 @@ const reply = (text: string) => ({
 });
 
 /** A Bedrock client that answers each role from its system prompt, and counts calls by role. */
-function fakeBedrock(routeAs: (question: string) => QuestionTier) {
+function fakeBedrock(routeAs: (question: string) => QuestionTier, garble?: string) {
   const calls = { router: 0, reranker: 0, answerer: 0 };
   const client = {
     async send(command: {
@@ -104,6 +104,8 @@ function fakeBedrock(routeAs: (question: string) => QuestionTier) {
       if (system.startsWith('You answer questions')) {
         calls.answerer++;
         const question = /<question>\n([\s\S]*?)\n<\/question>/.exec(user)?.[1] ?? '';
+        // Output that fails the answer schema on every attempt.
+        if (question === garble) return reply('{"certainty": "maybe"}');
         const script = SCRIPT[question];
         if (!script) throw new Error(`no script for question: ${question}`);
         if (script.certainty === 'INCONCLUSIVE') {
@@ -154,7 +156,11 @@ function fakeBedrock(routeAs: (question: string) => QuestionTier) {
 }
 
 async function setup(
-  opts: { tierFor?: (q: string) => QuestionTier; routeAs?: (q: string) => QuestionTier } = {},
+  opts: {
+    tierFor?: (q: string) => QuestionTier;
+    routeAs?: (q: string) => QuestionTier;
+    garble?: string;
+  } = {},
 ) {
   const { documents, embeddings, index, games } = await loadStarfall();
   const cases = await loadAnswerDataset(
@@ -162,7 +168,7 @@ async function setup(
     [fixturePath('answer/starfall-answer-only.jsonl')],
   );
   const labelled = tierLookup(cases);
-  const bedrock = fakeBedrock(opts.routeAs ?? labelled);
+  const bedrock = fakeBedrock(opts.routeAs ?? labelled, opts.garble);
   const wired = createEvalAnswerPipeline({
     keys: { answerer: 'fake-answerer' },
     config,
@@ -305,6 +311,19 @@ describe('answer eval PR subset (Starfall, fake Bedrock)', () => {
     expect(report.summary.guesses).toBe(0);
     // The errored complex case is in no misroute bucket; the captured-station case is.
     expect(report.summary.misroutes.complexAsSimple.cases).toBe(1);
+  });
+
+  it('unusable answerer output is an error row, not a right INCONCLUSIVE', async () => {
+    // The pipeline answers INCONCLUSIVE when the answerer's output fails validation; on a
+    // not-in-rulebook case that would score as right and hide what the model said.
+    const s = await setup({ garble: 'Is there an official app for playing Starfall online?' });
+    const report = await run(s);
+
+    const row = report.cases.find((c) => c.id === 'starfall-answer-online-app')!;
+    expect(row.error).toMatch(/answerer output unusable.*invalid model output/);
+    expect(row).toMatchObject({ certaintyOk: false, guess: false });
+    expect(row.costUsd).toBeGreaterThan(0);
+    expect(report.summary.errors).toBe(1);
   });
 
   it('labelled-tier mode never calls the router', async () => {

@@ -73,7 +73,8 @@ function describeError(error: unknown): string {
  * Runs the answer cases through the pipeline one at a time and scores them. Every case's game
  * and content are resolved before the first question. Before each case an exhausted meter stops
  * the run (`cutShort`, verdict `incomplete`). A case whose run throws is an error row, and the run
- * goes on to the next case.
+ * goes on to the next case. So is a case whose answerer output was unusable: the pipeline then
+ * answers INCONCLUSIVE, which would otherwise score as right on a not-in-rulebook case.
  */
 export async function runAnswerEval(input: {
   cases: readonly AnswerCase[];
@@ -122,6 +123,8 @@ export async function runAnswerEval(input: {
     let run: AnswerRun;
     let answer: RulesAnswer | undefined;
     let citedText: string[] | undefined;
+    let answererFailure: string | undefined;
+    let answererOk = false;
     try {
       // Every call, failed ones included, reaches the meter, also when the run then throws.
       const outcome = await pipeline.answer(
@@ -130,8 +133,15 @@ export async function runAnswerEval(input: {
           meter.record(record);
           costUsd += record.costUsd;
           calls += 1;
+          if (record.role === 'answerer') {
+            if (record.ok) answererOk = true;
+            else answererFailure = record.error ?? 'unknown error';
+          }
         },
       );
+      if (answererFailure !== undefined && !answererOk) {
+        throw new Error(`answerer output unusable: ${answererFailure}`);
+      }
       run = { answer: outcome.answer, passages: outcome.passages, tier: outcome.tier };
       answer = outcome.answer;
       const cited = new Set(outcome.answer.evidence.map((e) => e.chunkId));
