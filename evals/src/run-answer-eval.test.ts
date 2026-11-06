@@ -343,6 +343,19 @@ describe('answer eval PR subset (Starfall, fake Bedrock)', () => {
   });
 });
 
+describe('tierLookup', () => {
+  it('throws when one question has different labelled tiers in two games', async () => {
+    const cases = await loadAnswerDataset(
+      [fixturePath('answer/starfall-answer-cases.jsonl')],
+      [fixturePath('answer/starfall-answer-only.jsonl')],
+    );
+    const first = cases.find((c) => c.kind === 'answerable')!;
+    const flipped = first.case.tier === 'simple' ? 'complex' : 'simple';
+    const clash = { ...first, case: { ...first.case, game: 'other', tier: flipped } } as AnswerCase;
+    expect(() => tierLookup([...cases, clash])).toThrow(/different labelled tiers/);
+  });
+});
+
 describe('resolveRunPlan', () => {
   it('unknown --answerer fails before spending', () => {
     expect(() =>
@@ -403,6 +416,13 @@ describe('resolveRunPlan', () => {
       markdown: true,
       maxCost: 2,
     });
+  });
+
+  it('warns when the estimate is over the cap', () => {
+    const plan = resolveRunPlan(['--max-cost', '0.0001'], catalog);
+    expect(formatRunPlan(plan, catalog, 6)).toMatch(
+      /\nwarning: the estimate is over the cap, so the run will likely be cut short and incomplete$/,
+    );
   });
 
   it('prints the planned questions and the estimate against the cap', () => {

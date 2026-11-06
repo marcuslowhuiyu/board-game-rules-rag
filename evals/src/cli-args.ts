@@ -111,5 +111,8 @@ export function formatRunPlan(
   questions: number,
 ): string {
   const usd = estimateAnswerRunUsd(plan, catalog, questions);
-  return `planned questions: ${questions} × ${plan.answererKeys.length} models; estimated cost ≈ $${usd.toFixed(4)} (cap $${plan.maxCost})`;
+  const line = `planned questions: ${questions} × ${plan.answererKeys.length} models; estimated cost ≈ $${usd.toFixed(4)} (cap $${plan.maxCost})`;
+  return usd > plan.maxCost
+    ? `${line}\nwarning: the estimate is over the cap, so the run will likely be cut short and incomplete`
+    : line;
 }

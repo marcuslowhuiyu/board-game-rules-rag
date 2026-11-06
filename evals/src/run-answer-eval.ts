@@ -45,9 +45,21 @@ export interface AnswerRunReport {
   cutShort: boolean;
 }
 
-/** Question text → labelled tier, for labelled-tier runs. Questions are unique per game. */
+/**
+ * Question text → labelled tier, for labelled-tier runs. Questions are unique per game; the same
+ * text in two games with different tiers would make the lookup ambiguous, so it throws.
+ */
 export function tierLookup(cases: readonly AnswerCase[]): (question: string) => QuestionTier {
-  const tiers = new Map(cases.map(({ case: c }) => [c.question, c.tier]));
+  const tiers = new Map<string, QuestionTier>();
+  for (const { case: c } of cases) {
+    const seen = tiers.get(c.question);
+    if (seen !== undefined && seen !== c.tier) {
+      throw new EvalConfigError(
+        `question has different labelled tiers in two games: ${c.question}`,
+      );
+    }
+    tiers.set(c.question, c.tier);
+  }
   return (question) => {
     const tier = tiers.get(question);
     if (tier === undefined) throw new Error(`no labelled tier for question: ${question}`);
