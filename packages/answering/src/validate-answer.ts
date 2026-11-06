@@ -35,6 +35,15 @@ const REJECTED_EXPLANATION =
   'The answer could not be checked against the cited rules passages, so it is not given.';
 const NO_WORDING_EXPLANATION = 'The rules passages found do not answer this question.';
 
+/**
+ * Whether `validateAnswer` replaced the model's ruling because it could not be checked (unknown or
+ * no evidence, or a blank answer). The player sees an INCONCLUSIVE either way; the eval needs to
+ * tell this apart from the model's own INCONCLUSIVE.
+ */
+export function isRejectedRuling(answer: RulesAnswer): boolean {
+  return answer.certainty === 'INCONCLUSIVE' && answer.explanation === REJECTED_EXPLANATION;
+}
+
 /** A safe INCONCLUSIVE ruling with no evidence; used for invalid model output. */
 export function inconclusiveAnswer(explanation: string): RulesAnswer {
   return {

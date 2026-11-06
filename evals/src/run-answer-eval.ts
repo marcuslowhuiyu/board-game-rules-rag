@@ -1,4 +1,5 @@
 import type { ModelRole, QuestionTier } from '@bgr/ai';
+import { isRejectedRuling } from '@bgr/answering';
 import { asContentId, asEditionId, asGameId, type RulesAnswer } from '@bgr/domain';
 import type { RetrievalQuery } from '@bgr/retrieval';
 import type { CostMeter } from './cost-meter.js';
@@ -85,8 +86,9 @@ function describeError(error: unknown): string {
  * Runs the answer cases through the pipeline one at a time and scores them. Every case's game
  * and content are resolved before the first question. Before each case an exhausted meter stops
  * the run (`cutShort`, verdict `incomplete`). A case whose run throws is an error row, and the run
- * goes on to the next case. So is a case whose answerer output was unusable: the pipeline then
- * answers INCONCLUSIVE, which would otherwise score as right on a not-in-rulebook case.
+ * goes on to the next case. So is a case whose answerer output was unusable, or whose ruling
+ * validation rejected: the pipeline then answers INCONCLUSIVE, which would otherwise score as right
+ * on a not-in-rulebook case.
  */
 export async function runAnswerEval(input: {
   cases: readonly AnswerCase[];
@@ -153,6 +155,9 @@ export async function runAnswerEval(input: {
       );
       if (answererFailure !== undefined && !answererOk) {
         throw new Error(`answerer output unusable: ${answererFailure}`);
+      }
+      if (isRejectedRuling(outcome.answer)) {
+        throw new Error('answerer ruling rejected: it could not be checked against the passages');
       }
       run = { answer: outcome.answer, passages: outcome.passages, tier: outcome.tier };
       answer = outcome.answer;

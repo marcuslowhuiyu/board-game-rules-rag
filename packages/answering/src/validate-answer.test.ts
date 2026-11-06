@@ -6,7 +6,12 @@ import {
   type RulesAnswer,
 } from '@bgr/domain';
 import { describe, expect, it } from 'vitest';
-import { inconclusiveAnswer, validateAnswer, type CitedSource } from './validate-answer.js';
+import {
+  inconclusiveAnswer,
+  isRejectedRuling,
+  validateAnswer,
+  type CitedSource,
+} from './validate-answer.js';
 
 const attested = (authority: Authority): ProvenanceEvidence => ({
   kind: 'OPERATOR_ATTESTED',
@@ -579,5 +584,16 @@ describe('inconclusiveAnswer', () => {
     expect(inconclusiveAnswer('b').confidence).toEqual({ level: 'LOW', reasons: ['NOT_SETTLED'] });
     const rejected = run(model({ evidence: ['P9'] }));
     expect(rejected.confidence).toEqual({ level: 'LOW', reasons: ['NOT_SETTLED'] });
+  });
+});
+
+describe('isRejectedRuling', () => {
+  it('is true only when validation replaced an unverifiable ruling', () => {
+    expect(isRejectedRuling(run(model({ evidence: ['P999'] })))).toBe(true);
+    expect(isRejectedRuling(run(model({ evidence: [] })))).toBe(true);
+    expect(isRejectedRuling(run(model({ answer: '  ' })))).toBe(true);
+    // The model's own INCONCLUSIVE and a verified ruling are not rejections.
+    expect(isRejectedRuling(run(model({ certainty: 'INCONCLUSIVE', tiers: [] })))).toBe(false);
+    expect(isRejectedRuling(run(model()))).toBe(false);
   });
 });
