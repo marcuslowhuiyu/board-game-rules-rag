@@ -30,7 +30,7 @@ const catalog: ModelCatalog = {
 const config: Pick<EvalConfig, 'topK' | 'rerankTopN' | 'answer' | 'answerBars'> = {
   topK: 15,
   rerankTopN: 10,
-  answerBars: { maxGuesses: 0, minEvidenceRate: 0.85, minCertaintyRate: 0.75 },
+  answerBars: { maxGuesses: 0, maxForbiddenHits: 0, minEvidenceRate: 0.85, minCertaintyRate: 0.75 },
   answer: {
     runBudgetMs: 26000,
     requestTimeoutMs: 20000,

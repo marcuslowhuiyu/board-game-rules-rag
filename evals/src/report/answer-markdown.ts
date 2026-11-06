@@ -57,6 +57,9 @@ export function toAnswerMarkdown(reports: readonly AnswerRunReport[]): string {
     `| | ${reports.map(name).join(' | ')} |`,
     `|---|${reports.map(() => '---').join('|')}|`,
     row(`guesses (bar ${bars?.maxGuesses ?? 0})`, (r) => String(r.summary.guesses)),
+    row(`wrong rulings (bar ${bars?.maxForbiddenHits ?? 0})`, (r) =>
+      String(r.summary.forbiddenHits),
+    ),
     row(`right passages (bar ${pct(bars?.minEvidenceRate ?? 0)})`, (r) =>
       pct(r.summary.evidenceRate),
     ),
@@ -92,6 +95,12 @@ export function toAnswerMarkdown(reports: readonly AnswerRunReport[]): string {
   for (const r of reports.filter((x) => x.cutShort)) {
     lines.push(
       `> **Incomplete:** the ${name(r)} run was cut short by --max-cost after ${r.cases.length} cases; its scores do not count as clearing the marks.`,
+      '',
+    );
+  }
+  for (const r of reports.filter((x) => x.summary.verdict === 'incomplete' && !x.cutShort)) {
+    lines.push(
+      `> **Incomplete:** the ${name(r)} run errored on a not-in-rulebook case, so the zero-guess mark was not tested there; its scores do not count as clearing the marks.`,
       '',
     );
   }

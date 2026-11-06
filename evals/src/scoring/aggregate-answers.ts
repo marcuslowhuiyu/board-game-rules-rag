@@ -5,6 +5,8 @@ import type { AnswerCaseScore } from './score-answer.js';
 export const AnswerBarsSchema = z.object({
   /** Most DEFINITIVE/QUALIFIED rulings allowed on not-in-rulebook cases. */
   maxGuesses: z.number().int().nonnegative(),
+  /** Most answers allowed to state a forbidden claim (a wrong ruling). */
+  maxForbiddenHits: z.number().int().nonnegative(),
   minEvidenceRate: z.number().min(0).max(1),
   minCertaintyRate: z.number().min(0).max(1),
 });
@@ -20,6 +22,8 @@ export interface AnswerSummary {
   cases: number;
   errors: number;
   guesses: number;
+  /** Answers that state a forbidden claim. */
+  forbiddenHits: number;
   /** Over answerable cases, errors included. */
   evidenceRate: number;
   /** Over all cases, errors included. */
@@ -51,6 +55,7 @@ export function aggregateAnswers(
   );
   const certaintyRate = ratio(scores.filter((s) => s.certaintyOk).length, scores.length);
   const guesses = scores.filter((s) => s.guess).length;
+  const forbiddenHits = scores.filter((s) => s.forbiddenHit !== null).length;
 
   const withAuthority = scores.filter((s) => s.authorityOk !== null);
   const authorityRate =
@@ -82,8 +87,12 @@ export function aggregateAnswers(
     (s) => s.labelledTier === 'simple' && s.routedTier === 'complex',
   );
 
+  // An errored not-in-rulebook case never tested the zero-guess mark, so a run that otherwise
+  // passes is incomplete rather than pass.
+  const untestedNoGuess = scores.some((s) => s.kind === 'not-in-rulebook' && s.error !== undefined);
   const passes =
     guesses <= bars.maxGuesses &&
+    forbiddenHits <= bars.maxForbiddenHits &&
     evidenceRate >= bars.minEvidenceRate - EPS &&
     certaintyRate >= bars.minCertaintyRate - EPS;
 
@@ -91,6 +100,7 @@ export function aggregateAnswers(
     cases: scores.length,
     errors: scores.filter((s) => s.error !== undefined).length,
     guesses,
+    forbiddenHits,
     evidenceRate,
     certaintyRate,
     authorityRate,
@@ -106,6 +116,6 @@ export function aggregateAnswers(
       },
       simpleAsComplex: { cases: simpleAsComplex.length },
     },
-    verdict: opts.cutShort ? 'incomplete' : passes ? 'pass' : 'fail',
+    verdict: opts.cutShort || (passes && untestedNoGuess) ? 'incomplete' : passes ? 'pass' : 'fail',
   };
 }

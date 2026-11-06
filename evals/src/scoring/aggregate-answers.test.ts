@@ -2,7 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { aggregateAnswers, type AnswerBars } from './aggregate-answers.js';
 import type { AnswerCaseScore } from './score-answer.js';
 
-const bars: AnswerBars = { maxGuesses: 0, minEvidenceRate: 0.85, minCertaintyRate: 0.75 };
+const bars: AnswerBars = {
+  maxGuesses: 0,
+  maxForbiddenHits: 0,
+  minEvidenceRate: 0.85,
+  minCertaintyRate: 0.75,
+};
 
 const score = (over: Partial<AnswerCaseScore> = {}): AnswerCaseScore => ({
   id: Math.random().toString(36).slice(2),
@@ -54,6 +59,40 @@ describe('aggregateAnswers', () => {
       { cutShort: false },
     );
     expect(s.guesses).toBe(1);
+    expect(s.verdict).toBe('fail');
+  });
+
+  it('a forbidden claim fails the verdict and is counted', () => {
+    const s = aggregateAnswers([...many(19), score({ forbiddenHit: 'keep both' })], bars, {
+      cutShort: false,
+    });
+    expect(s.forbiddenHits).toBe(1);
+    expect(s.verdict).toBe('fail');
+  });
+
+  it('an errored not-in-rulebook case leaves the verdict incomplete, not pass', () => {
+    // Every rate clears its bar, but the zero-guess mark was never tested on that case.
+    const nir = (over: Partial<AnswerCaseScore> = {}) =>
+      score({ kind: 'not-in-rulebook', evidenceOk: null, ...over });
+    const s = aggregateAnswers(
+      [...many(30), ...many(5).map(() => nir()), nir({ error: 'boom', certaintyOk: false })],
+      bars,
+      { cutShort: false },
+    );
+    expect(s.certaintyRate).toBeGreaterThan(bars.minCertaintyRate);
+    expect(s.guesses).toBe(0);
+    expect(s.verdict).toBe('incomplete');
+  });
+
+  it('a failing run with an errored not-in-rulebook case is still fail', () => {
+    const s = aggregateAnswers(
+      [
+        score({ kind: 'not-in-rulebook', guess: true, certaintyOk: false, evidenceOk: null }),
+        score({ kind: 'not-in-rulebook', error: 'boom', certaintyOk: false, evidenceOk: null }),
+      ],
+      bars,
+      { cutShort: false },
+    );
     expect(s.verdict).toBe('fail');
   });
 

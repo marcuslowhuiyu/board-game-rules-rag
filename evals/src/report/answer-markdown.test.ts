@@ -23,7 +23,7 @@ function report(
     generatedAt: '2026-10-31T00:00:00.000Z',
     labelledTier: false,
     filters: over.filters ?? { games: null, caseIds: null },
-    bars: { maxGuesses: 0, minEvidenceRate: 0.85, minCertaintyRate: 0.75 },
+    bars: { maxGuesses: 0, maxForbiddenHits: 0, minEvidenceRate: 0.85, minCertaintyRate: 0.75 },
     models: {
       router: { key: 'nova-micro', modelId: 'r' },
       reranker: { key: 'gpt-6-luna', modelId: 'k' },
@@ -68,6 +68,7 @@ function report(
       cases: 2,
       errors: 0,
       guesses: 0,
+      forbiddenHits: 1,
       evidenceRate: 0.9,
       certaintyRate: 0.8,
       authorityRate: null,
@@ -91,6 +92,18 @@ function report(
 }
 
 describe('toAnswerMarkdown', () => {
+  it('shows wrong rulings (forbidden claims) against their bar', () => {
+    const md = toAnswerMarkdown([report('a'), report('b')]);
+    expect(md).toContain('| wrong rulings (bar 0) | 1 | 1 |');
+  });
+
+  it('explains an incomplete verdict that was not cut short', () => {
+    const md = toAnswerMarkdown([report('flaky', { verdict: 'incomplete', cutShort: false })]);
+    expect(md).toContain(
+      '> **Incomplete:** the flaky run errored on a not-in-rulebook case, so the zero-guess mark was not tested there; its scores do not count as clearing the marks.',
+    );
+  });
+
   it('markdown names the cheapest passing model', () => {
     const md = toAnswerMarkdown([
       report('sonnet', { perQuestionUsd: 0.01 }),
