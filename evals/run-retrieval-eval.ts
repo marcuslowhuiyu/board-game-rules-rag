@@ -26,17 +26,11 @@ import {
 } from './src/live/aws.js';
 import { buildLocalIndex } from './src/live/local-index.js';
 import { checkModelFlags } from './src/cli-args.js';
-import { estimateCostUsd } from './src/cost-meter.js';
+import { ESTIMATE_TOKENS, estimateCostUsd } from './src/cost-meter.js';
 import { createEvalModels } from './src/live/models.js';
 import { toMarkdown } from './src/report/markdown.js';
 import { resolveLiveGames, runEval } from './src/run-eval.js';
 import { loadEvalConfig } from './src/scoring/aggregate.js';
-
-// Rough per-call sizes for the pre-run estimate (eval estimates, not model config).
-const ROUTER_INPUT_TOKENS = 300;
-const ROUTER_OUTPUT_TOKENS = 20;
-const RERANK_INPUT_TOKENS = 15 * 500 + 300;
-const RERANK_OUTPUT_TOKENS = 80;
 
 const here = (p: string) => fileURLToPath(new URL(p, import.meta.url));
 // `--rerank` takes an optional key: a bare flag means the catalog default.
@@ -117,8 +111,8 @@ if (wired) {
           {
             entry: modelFor(catalog, 'reranker', rerankKey),
             calls: cases.length,
-            inputTokensPerCall: RERANK_INPUT_TOKENS,
-            outputTokensPerCall: RERANK_OUTPUT_TOKENS,
+            inputTokensPerCall: ESTIMATE_TOKENS.reranker.input,
+            outputTokensPerCall: ESTIMATE_TOKENS.reranker.output,
           },
         ]
       : []),
@@ -127,8 +121,8 @@ if (wired) {
           {
             entry: modelFor(catalog, 'router'),
             calls: cases.length,
-            inputTokensPerCall: ROUTER_INPUT_TOKENS,
-            outputTokensPerCall: ROUTER_OUTPUT_TOKENS,
+            inputTokensPerCall: ESTIMATE_TOKENS.router.input,
+            outputTokensPerCall: ESTIMATE_TOKENS.router.output,
           },
         ]
       : []),

@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { z } from 'zod';
+import { AnswerBarsSchema } from './aggregate-answers.js';
 import type { RoutingResult } from './routing.js';
 import { K_VALUES, type CaseResult } from './score-case.js';
 
@@ -17,6 +18,19 @@ export const EvalConfigSchema = z.object({
   /** Games with fewer chunks than this are reported but left out of the tier bars. */
   smallCorpusThreshold: z.number().int().nonnegative(),
   bars: z.object({ simple: BarSchema, complex: BarSchema }),
+  /** Pass marks for the answer eval. */
+  answerBars: AnswerBarsSchema,
+  /** The answer pipeline as the answer eval runs it. */
+  answer: z.object({
+    /** Time allowed for all model calls of one question. */
+    runBudgetMs: z.number().int().positive(),
+    requestTimeoutMs: z.number().int().positive(),
+    /** Passages kept per routed tier. */
+    evidenceLimits: z.object({
+      simple: z.number().int().positive(),
+      complex: z.number().int().positive(),
+    }),
+  }),
 });
 export type EvalConfig = z.infer<typeof EvalConfigSchema>;
 

@@ -9,17 +9,20 @@
     "eval:retrieval": "tsx run-retrieval-eval.ts",
     "models:check": "tsx scripts/check-models.ts",
     "eval:ingest": "tsx scripts/ingest-eval-games.ts",
-    "provenance:backfill": "tsx scripts/backfill-provenance.ts"
+    "provenance:backfill": "tsx scripts/backfill-provenance.ts",
+    "eval:answer": "tsx run-model-eval.ts"
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.679.0",
     "@aws-sdk/client-s3": "^3.679.0",
     "@aws-sdk/lib-dynamodb": "^3.679.0",
     "@bgr/ai": "workspace:*",
+    "@bgr/answering": "workspace:*",
     "@bgr/domain": "workspace:*",
     "@bgr/ingestion": "workspace:*",
     "@bgr/persistence": "workspace:*",
     "@bgr/retrieval": "workspace:*",
+    "@bgr/shared": "workspace:*",
     "zod": "^4.6.7"
   },
   "devDependencies": {

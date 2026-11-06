@@ -224,7 +224,6 @@ describe('rules answerer', () => {
     };
     visit(schema);
     const props = schema['properties'] as Record<string, Record<string, unknown>>;
-    expect(props['appliedTier']!['enum']).toContain(null);
     expect(props['certainty']!['enum']).toEqual(['DEFINITIVE', 'QUALIFIED', 'INCONCLUSIVE']);
   });
 
@@ -264,6 +263,41 @@ describe('rules answerer', () => {
     });
     const result = await createRulesAnswerer(model, entry).answer('Q?', passages);
     expect(result.output.appliedTier).toBeNull();
+  });
+
+  it('sends a JSON schema Claude on Bedrock accepts: no enum on a multi-type property', async () => {
+    // Bedrock rejects an enum next to `type: ['string', 'null']` for Claude models; a nullable
+    // enum must be an anyOf of the enum and null instead.
+    const { model, requests } = fake();
+    await createRulesAnswerer(model, entry).answer('Q?', passages);
+    const offending: string[] = [];
+    const walk = (node: unknown, path: string): void => {
+      if (node === null || typeof node !== 'object') return;
+      const obj = node as Record<string, unknown>;
+      if (Array.isArray(obj['type']) && 'enum' in obj) offending.push(path);
+      for (const [key, child] of Object.entries(obj)) walk(child, `${path}.${key}`);
+    };
+    walk(requests[0]!.jsonSchema, '$');
+    expect(offending).toEqual([]);
+    expect(requests[0]!.jsonSchema).toMatchObject({
+      properties: {
+        appliedTier: {
+          anyOf: [
+            {
+              type: 'string',
+              enum: [
+                'OFFICIAL',
+                'DESIGNER_OR_PUBLISHER',
+                'COMMUNITY_CONSENSUS',
+                'COMMUNITY_DISCUSSION',
+                'UNKNOWN',
+              ],
+            },
+            { type: 'null' },
+          ],
+        },
+      },
+    });
   });
 
   it('throws without calling the model when there are no passages', async () => {

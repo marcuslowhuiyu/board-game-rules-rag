@@ -145,6 +145,9 @@ importers:
       '@bgr/ai':
         specifier: workspace:*
         version: link:../packages/ai
+      '@bgr/answering':
+        specifier: workspace:*
+        version: link:../packages/answering
       '@bgr/domain':
         specifier: workspace:*
         version: link:../packages/domain
@@ -157,6 +160,9 @@ importers:
       '@bgr/retrieval':
         specifier: workspace:*
         version: link:../packages/retrieval
+      '@bgr/shared':
+        specifier: workspace:*
+        version: link:../packages/shared
       zod:
         specifier: ^4.6.7
         version: 4.6.7

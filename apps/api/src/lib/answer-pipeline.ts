@@ -1,22 +1,16 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import {
-  ConverseStructuredModel,
-  createPassageRanker,
-  createQuestionClassifier,
-  createRulesAnswerer,
   loadModelCatalog,
-  modelFor,
   type ConverseStructuredOptions,
   type EmbeddingsProvider,
   type ModelCallRecord,
 } from '@bgr/ai';
 import {
   createAnswerPipeline,
-  currentRunDeadline,
-  recordModelCall,
+  createAnswerRoles,
+  createSourceLookup,
   setUnroutedCallListener,
   type AnswerOutcome,
-  type SourceRecord,
 } from '@bgr/answering';
 import { asSourceDocumentId, type SourceDocument } from '@bgr/domain';
 import type { DocumentsRepository, SpendLedger } from '@bgr/persistence';
@@ -72,11 +66,10 @@ export function buildAnswerPipeline(parts: AnswerPipelineParts): AnswerPipeline 
   );
 
   const catalog = loadModelCatalog();
-  const model = new ConverseStructuredModel({
-    onCall: recordModelCall,
+  const { classifier, ranker, answerer } = createAnswerRoles({
+    catalog,
     requestTimeoutMs: config.modelRequestTimeoutMs,
-    // Both default to Date.now, the clock the pipeline sets the deadline on.
-    deadline: currentRunDeadline,
+    rerankTopN: config.rerankTopN,
     ...(parts.clientFactory ? { clientFactory: parts.clientFactory } : {}),
   });
   const retriever = new VectorRulesRetriever({
@@ -95,36 +88,11 @@ export function buildAnswerPipeline(parts: AnswerPipelineParts): AnswerPipeline 
   };
 
   const inner = createAnswerPipeline({
-    classifier: createQuestionClassifier(model, modelFor(catalog, 'router')),
+    classifier,
     retriever,
-    ranker: createPassageRanker(model, modelFor(catalog, 'reranker'), {
-      maxRanked: config.rerankTopN,
-    }),
-    answerer: createRulesAnswerer(model, modelFor(catalog, 'answerer')),
-    sources: async (chunks) => {
-      const docs = new Map<string, SourceDocument | null>();
-      for (const id of new Set(chunks.map((c) => c.documentId))) docs.set(id, await lookup(id));
-      const out = new Map<string, SourceRecord>();
-      for (const c of chunks) {
-        const doc = docs.get(c.documentId);
-        if (!doc) {
-          logger.warn('chunk dropped: its document is missing', {
-            chunkId: c.chunkId,
-            documentId: c.documentId,
-          });
-          continue;
-        }
-        out.set(c.chunkId, {
-          chunkId: c.chunkId,
-          authority: doc.authority,
-          provenance: doc.provenance,
-          title: doc.title,
-          sourceType: doc.sourceType,
-          ...(doc.version === undefined ? {} : { version: doc.version }),
-        });
-      }
-      return out;
-    },
+    ranker,
+    answerer,
+    sources: createSourceLookup({ getDocument: lookup, logger }),
     ledger: parts.ledger,
     dailyCapUsd: config.dailyAiCapUsd,
     limits: config.evidenceLimits,

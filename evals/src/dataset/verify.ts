@@ -1,10 +1,15 @@
 import { evidenceMatches } from '../scoring/match.js';
+import type { AnswerOnlyCase } from './answer-case-schema.js';
 import type { RetrievalCase } from './case-schema.js';
 
 export interface VerifyIssue {
   caseId: string;
   itemKey: string;
-  problem: 'phrase-not-found' | 'heading-mismatch' | 'phrase-in-multiple-games';
+  problem:
+    | 'phrase-not-found'
+    | 'heading-mismatch'
+    | 'phrase-in-multiple-games'
+    | 'forbidden-claim-in-chunk';
 }
 
 type ChunkText = { text: string; headingPath: string[] };
@@ -40,6 +45,27 @@ export function verifyDataset(
         ([game, chunks]) => game !== c.game && chunks.some((ch) => evidenceMatches(phraseOnly, ch)),
       );
       if (elsewhere) issue('phrase-in-multiple-games');
+    }
+  }
+  return issues;
+}
+
+/**
+ * A not-in-rulebook case's forbidden claim should be stated by no chunk of its
+ * game: a chunk that contains it verbatim probably answers the question, so
+ * the case is likely answerable. The issue's `itemKey` is the claim itself.
+ */
+export function verifyAnswerOnly(
+  cases: readonly AnswerOnlyCase[],
+  chunksByGame: Record<string, readonly ChunkText[]>,
+): VerifyIssue[] {
+  const issues: VerifyIssue[] = [];
+  for (const c of cases) {
+    for (const claim of c.answer.forbiddenClaims ?? []) {
+      const item = { key: claim, phrase: claim, required: true };
+      if ((chunksByGame[c.game] ?? []).some((ch) => evidenceMatches(item, ch))) {
+        issues.push({ caseId: c.id, itemKey: claim, problem: 'forbidden-claim-in-chunk' });
+      }
     }
   }
   return issues;

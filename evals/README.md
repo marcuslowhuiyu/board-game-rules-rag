@@ -1,6 +1,6 @@
 # Evaluation Framework
 
-Retrieval evaluation (Milestone 3). Rules-answering evals arrive in M4, and the model comparison and LLM-as-judge harness in M7. The design doc is in the private planning repo (`planning/specs/2026-10-27-m3-retrieval-eval-design.md`).
+Retrieval evaluation (Milestone 3) and the answer eval with its answerer model comparison (Milestone 4). An LLM-as-judge harness arrives in M7. The design doc is in the private planning repo (`planning/specs/2026-10-27-m3-retrieval-eval-design.md`).
 
 ## What it measures
 
@@ -46,6 +46,31 @@ Reported per game: Recall@1/3/5, MRR, the irrelevant-result rate (top-5 chunks t
 2. Run the verifier (below). It fails if a phrase is in no single chunk (for example, split across a chunk boundary), if the heading doesn't match, or if the phrase also occurs in another game.
 3. Run the eval and check the case behaves as expected.
 
+## Answer cases
+
+The answer eval reuses the retrieval dataset and adds two things, both validated by `src/dataset/answer-case-schema.ts`.
+
+**An `answer` block on a retrieval case** makes it an answerable case. Cases without the block stay retrieval-only.
+
+```jsonc
+"answer": {
+  "certainty": "DEFINITIVE",            // DEFINITIVE | QUALIFIED (INCONCLUSIVE is rejected here)
+  "authority": "OFFICIAL_RULES",        // optional
+  "forbiddenClaims": ["you may draw two cards"],  // optional, up to 5
+  "sourcesDisagree": false,             // optional
+  "requiresPlayerChoice": false         // optional
+}
+```
+
+- **`forbiddenClaims`** are short phrases (same 1-120 character, 15-word rule as evidence phrases) for the tempting wrong answer. The answer must not contain them. A not-in-rulebook case may carry one only if no true statement from another edition, expansion or variant could contain it, since a correct INCONCLUSIVE explanation may mention that other source.
+
+**Answer-only cases** go in `datasets/answer-only/<game>.jsonl`. They have the same fields as a retrieval case, but no `requiredEvidence`, and `answer.certainty` must be `INCONCLUSIVE`.
+
+- **Not-in-rulebook questions** must be plausible questions asked at the table whose answer is truly absent from every enabled source. Examples: app or online play, a house rule, another edition's component, a strategy question.
+- Ids are unique across both sets, and a question text may appear only once per game.
+- Each not-in-rulebook case lists in `notes` the terms searched across every chunk of its game. The verifier fails if one of its `forbiddenClaims` appears in a chunk of that game, since the case is then probably answerable.
+- Errata cases set `authority: "OFFICIAL_ERRATA"` only when the Stonemaier FAQ alone states the ruling. Where Rulepop repeats the FAQ text, the applied authority depends on which passage the answer cites, so `authority` is left unset.
+
 ## Commands
 
 The live commands read AWS settings from env. `scripts/dev-env.sh` exports them from the deployed ingestion stage runner (embedding region, model id, dimension, vector index ARN, and table names), so the eval queries exactly what the pipeline indexed. It also exports `API_BASE` from the `BgrDevStack` outputs. Use Node 22 (`nvm use`).
@@ -55,11 +80,12 @@ pnpm -C evals test                     # unit tests + the AWS-free regression su
 
 source evals/scripts/dev-env.sh        # once per shell, needs AWS credentials
 pnpm -C evals eval:ingest              # create/reuse the eval games and ingest their sources; writes config/eval-games.dev.json
-pnpm -C evals exec tsx scripts/verify-dataset.ts   # check every evidence phrase against the ingested chunks
+pnpm -C evals exec tsx scripts/verify-dataset.ts   # check evidence phrases and not-in-rulebook forbidden claims against the chunks
 pnpm -C evals eval:retrieval --markdown            # full eval; JSON report in evals/reports/ (gitignored)
 pnpm -C evals eval:retrieval --games seti          # one game
 pnpm -C evals eval:retrieval --dimensions 512 --markdown   # local index at 512 dimensions
 pnpm -C evals eval:retrieval --rerank --route --max-cost 1 --markdown   # paid: rerank and routing
+pnpm -C evals eval:answer --max-cost 1 --markdown                       # paid: answer eval (see below)
 ```
 
 ### Comparing embedding settings
@@ -74,9 +100,29 @@ Both flags call Bedrock and cost money, so **`--max-cost <usd>` is required** wi
 
 The full eval is a **local, on-demand command**. It has no CI job. CI minutes are tight (ADR-0009), and a dispatch job would also need AWS access through OIDC.
 
+### Answer eval and model comparison
+
+`eval:answer` runs the real answer pipeline in process: the same router, reranker and answerer wiring as the Lambda (`createAnswerRoles`, `createAnswerPipeline`), the live retriever and dev documents. It bypasses the API and the daily cap. Each answer is scored deterministically against the case's expectations (certainty, authority, required evidence among the applied ruling's citations, forbidden claims, no ruling on a not-in-rulebook case), with no LLM judge. The marks are `answerBars` in `config/eval.config.json`; the pipeline's run budget, request timeout and evidence limits are under `answer` there.
+
+```bash
+pnpm -C evals eval:answer --max-cost 1 --markdown                                  # catalog default answerer
+pnpm -C evals eval:answer --answerer gpt-6-luna,<key> --max-cost 3 --markdown     # side by side
+pnpm -C evals eval:answer --games seti --cases <id>,<id> --max-cost 0.2            # a subset
+pnpm -C evals eval:answer --labelled-tier --max-cost 1 --markdown                  # no router: labelled tiers
+```
+
+- `--answerer <key[,key…]>` runs once per key. Every key must be approved for the answerer role in `packages/ai/models.config.json`. The override is for this run only and never changes the API's defaults. `--reranker <key>` overrides the reranker the same way.
+- `--labelled-tier` gives each question its labelled tier instead of calling the router, which shows what routing costs in misroutes.
+- **`--max-cost <usd>` is required.** Unknown or unapproved keys fail before any call. The run then prints `planned questions: N × M models; estimated cost ≈ $X (cap $Y)`. The estimate is rough: per question, a router call (300 input / 20 output tokens), a rerank (7,800 / 80) and an answer (5,600 / 900), priced from the catalog. The cap covers the whole comparison. The cap is checked before each question, so a run can go over it by about one question's cost. Once it is reached the run stops, and the report is `cutShort` with verdict `incomplete`. An incomplete run is never shown as clearing the marks.
+- A case whose pipeline run throws (a model or retrieval failure, a timeout) is an error row. So is a case whose answerer output was unusable, or whose ruling validation rejected because it could not be checked against the passages: the pipeline then answers INCONCLUSIVE, which would otherwise score as right on a not-in-rulebook case. An error row counts against every rate, and the run goes on.
+- **Verdict.** `pass` needs every mark in `answerBars`: at most `maxGuesses` rulings on not-in-rulebook cases (0; a ruling in a tier panel counts, even under an INCONCLUSIVE answer), at most `maxForbiddenHits` answers stating a forbidden claim (0, shown as "wrong rulings"), and the evidence and certainty rates. A run that would pass but errored on a not-in-rulebook case is `incomplete`, because the zero-guess mark was never tested there.
+- Each answerer's report goes to `reports/answer-<generatedAt>.json`. It records the model in every role, the prompt versions, the `--games` and `--cases` filters (the markdown header marks a filtered run as a **subset**), per-case scores, cost, $/question and p50/p95 latency. `--markdown` prints the comparison table and names the cheapest model whose verdict is `pass`, or "none: operator decides".
+
+**Paid runs need the operator's OK.** With the current catalog defaults the estimate is about $0.002 per question, so about $0.20 for 100 cases per answerer. Check the printed estimate before the run starts.
+
 ### Model availability check
 
-`pnpm -C evals models:check` makes one tiny structured call (a router-style tier question) to every model in the catalog, using each entry's own region and structured-output mode, and prints a table with latency, cost and any error plus the total cost. An entry is called with the first role it is approved for (router before reranker); an entry approved for no role is reported as failed and not called. It exits non-zero if any model fails. It costs a fraction of a cent, needs AWS credentials and **needs the operator's OK**.
+`pnpm -C evals models:check` makes one tiny call to every model in the catalog for each role it is approved for, through that role's own code: the router classifies a question, the reranker ranks one passage, and the answerer answers from one passage. Each request therefore carries the role's real prompt and schema, so a schema the model rejects fails here rather than in a paid comparison. It uses each entry's own region and structured-output mode, and prints a row per model and role with latency, cost and any error, plus the total cost. An entry approved for no role is reported as failed and not called. It exits non-zero if any model fails. It costs a fraction of a cent, needs AWS credentials and **needs the operator's OK**.
 
 ### Eval games and sources
 
@@ -106,3 +152,5 @@ Re-running `plan` overwrites the plan file and discards any confirmations in it.
 ## Regression subset
 
 `src/run-eval.test.ts` runs the whole pipeline over an invented game ("Starfall", `fixtures/retrieval/`). It uses the real `VectorRulesRetriever`, an in-memory index and a deterministic hash embedder. It guards scoring and the retriever's filtering: superseded documents and disabled promos never come back. It does not measure embedding quality. It needs no AWS and no network, and it runs in about a second inside `pnpm test`.
+
+`src/run-answer-eval.test.ts` does the same for the answer eval. It runs the real answer pipeline over Starfall (`fixtures/answer/`: answerable cases, including errata over rules and a forbidden claim, plus not-in-rulebook cases) with a fake Bedrock client. It checks per-case scoring, the cost cap, error rows and labelled-tier mode, at no cost.

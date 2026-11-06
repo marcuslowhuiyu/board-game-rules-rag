@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import type { AnswerOnlyCase } from './answer-case-schema.js';
 import type { RetrievalCase } from './case-schema.js';
-import { verifyDataset } from './verify.js';
+import { verifyAnswerOnly, verifyDataset } from './verify.js';
 
 const make = (phrase: string, heading?: string): RetrievalCase => ({
   id: 'c1',
@@ -49,5 +50,30 @@ describe('verifyDataset', () => {
   it('flags a case whose game has no chunks loaded', () => {
     const c = { ...make('main action'), game: 'ghost' };
     expect(verifyDataset([c], chunks).map((i) => i.problem)).toEqual(['phrase-not-found']);
+  });
+});
+
+const notInRulebook = (forbiddenClaims?: string[], game = 'seti'): AnswerOnlyCase => ({
+  id: 'n1',
+  game,
+  edition: 'base',
+  enabledContent: ['base'],
+  tier: 'simple',
+  question: 'q',
+  source: { url: 'https://example.com/t', title: 't' },
+  answer: { certainty: 'INCONCLUSIVE', ...(forbiddenClaims ? { forbiddenClaims } : {}) },
+});
+
+describe('verifyAnswerOnly', () => {
+  it('flags a forbidden claim that a chunk of the same game states', () => {
+    expect(verifyAnswerOnly([notInRulebook(['Rotate the  SOLAR system'])], chunks)).toEqual([
+      { caseId: 'n1', itemKey: 'Rotate the  SOLAR system', problem: 'forbidden-claim-in-chunk' },
+    ]);
+  });
+
+  it('passes claims found in no chunk of the case game', () => {
+    expect(verifyAnswerOnly([notInRulebook(['launch a probe'])], chunks)).toEqual([]);
+    expect(verifyAnswerOnly([notInRulebook(['main action'], 'wingspan')], chunks)).toEqual([]);
+    expect(verifyAnswerOnly([notInRulebook()], chunks)).toEqual([]);
   });
 });
