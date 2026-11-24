@@ -4,6 +4,7 @@ import { GameSearchScreen } from './screens/GameSearchScreen.js';
 import { GameConfigurationScreen } from './screens/GameConfigurationScreen.js';
 import { AddGameScreen } from './screens/AddGameScreen.js';
 import { SettingsScreen } from './screens/SettingsScreen.js';
+import { RulesChatScreen } from './screens/RulesChatScreen.js';
 import { SourcesScreen } from './screens/SourcesScreen.js';
 
 type Screen =
@@ -12,7 +13,7 @@ type Screen =
   | { kind: 'sources'; gameId: string }
   | { kind: 'add' }
   | { kind: 'settings' }
-  | { kind: 'started'; session: SessionView };
+  | { kind: 'chat'; session: SessionView; gameName: string };
 
 const defaultApiUrl = (): string => {
   // In prod CloudFront serves the SPA at `/` and forwards `/api/*` to API
@@ -33,7 +34,6 @@ export const App = ({ apiUrl }: { apiUrl?: string } = {}): JSX.Element => {
     <div className="app-shell">
       <header className="app-header">
         <h1>Board Game Rules Referee</h1>
-        <p className="subtitle">Milestone 1 — game catalog &amp; anonymous sessions</p>
         <button className="button" type="button" onClick={() => setScreen({ kind: 'settings' })}>
           Settings
         </button>
@@ -52,7 +52,7 @@ export const App = ({ apiUrl }: { apiUrl?: string } = {}): JSX.Element => {
             gameId={screen.gameId}
             onBack={() => setScreen({ kind: 'search' })}
             onManageSources={() => setScreen({ kind: 'sources', gameId: screen.gameId })}
-            onSessionStarted={(session) => setScreen({ kind: 'started', session })}
+            onSessionStarted={(session, gameName) => setScreen({ kind: 'chat', session, gameName })}
           />
         )}
         {screen.kind === 'sources' && (
@@ -72,26 +72,13 @@ export const App = ({ apiUrl }: { apiUrl?: string } = {}): JSX.Element => {
             onCreated={(g) => setScreen({ kind: 'configure', gameId: g.gameId })}
           />
         )}
-        {screen.kind === 'started' && (
-          <section className="screen" aria-labelledby="started-title">
-            <h2 id="started-title">Session started</h2>
-            <p className="notice">Anonymous session is live. A chat UI arrives in Milestone 4.</p>
-            <ul className="list">
-              <li className="list-item">
-                <span className="meta">Session id</span>
-                <span className="name" style={{ wordBreak: 'break-all' }}>
-                  {screen.session.sessionId}
-                </span>
-              </li>
-              <li className="list-item">
-                <span className="meta">Expires</span>
-                <span className="name">{new Date(screen.session.expiresAt).toLocaleString()}</span>
-              </li>
-            </ul>
-            <button className="button" type="button" onClick={() => setScreen({ kind: 'search' })}>
-              Back to games
-            </button>
-          </section>
+        {screen.kind === 'chat' && (
+          <RulesChatScreen
+            api={api}
+            session={screen.session}
+            gameName={screen.gameName}
+            onExit={() => setScreen({ kind: 'search' })}
+          />
         )}
       </main>
     </div>

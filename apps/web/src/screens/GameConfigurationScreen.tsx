@@ -5,7 +5,7 @@ interface Props {
   api: ApiClient;
   gameId: string;
   onBack: () => void;
-  onSessionStarted: (session: SessionView) => void;
+  onSessionStarted: (session: SessionView, gameName: string) => void;
   onManageSources?: () => void;
 }
 
@@ -58,7 +58,7 @@ export const GameConfigurationScreen = ({
           .filter(([, v]) => v)
           .map(([k]) => k),
       });
-      onSessionStarted(session);
+      onSessionStarted(session, game.name);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'unknown error');
     } finally {
