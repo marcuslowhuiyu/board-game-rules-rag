@@ -40,6 +40,13 @@ pnpm -C apps/web dev   # frontend dev server
 pnpm -C infrastructure/cdk synth  # verify CDK compiles
 ```
 
+## Using the app
+
+Run `pnpm -C apps/web dev`, then:
+
+- **Rules Chat**: pick a game, configure it, and start a session. Ask a question and the applied ruling appears first, with a confidence meter and its source. "See sources" shows what each source tier says, with citations. A ruling the rules don't settle is shown as unsettled, not as a guess.
+- **Settings**: open it from the header. It chooses the model for each role (router, reranker, answerer) from the approved list. Changes apply to new questions within about a minute. It has no auth in dev, which is an M10 launch blocker ([ADR-0014](./docs/adr/0014-runtime-model-settings.md)).
+
 ## Deployment
 
 Automatic on merge to `main` via `.github/workflows/deploy-dev.yml`, which:
