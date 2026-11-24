@@ -9,6 +9,7 @@ import { sessionRoutes } from './sessions.js';
 import { uploadRoutes } from './uploads.js';
 import { ingestionRoutes } from './ingestion.js';
 import { sourceRoutes } from './sources.js';
+import { settingsRoutes } from './settings.js';
 
 const healthRoute = route('GET', '/health', async () => {
   const commit = process.env['GIT_COMMIT'] ?? 'unknown';
@@ -23,6 +24,7 @@ const routes = [
   ...uploadRoutes(getContext),
   ...ingestionRoutes(getContext),
   ...sourceRoutes(getContext),
+  ...settingsRoutes(getContext),
 ];
 
 const inner = makeHandler(routes);
