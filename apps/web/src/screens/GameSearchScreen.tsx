@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { ApiClient, Game } from '../api/client.js';
+import { isTestFixtureGame } from '../game-visibility.js';
 
 interface Props {
   api: ApiClient;
@@ -21,7 +22,7 @@ export const GameSearchScreen = ({ api, onSelectGame, onAddGame }: Props): JSX.E
       .listGames(query || undefined)
       .then((res) => {
         if (cancelled) return;
-        setGames(res.items);
+        setGames(res.items.filter((g) => !isTestFixtureGame(g)));
       })
       .catch((err: unknown) => {
         if (cancelled) return;
