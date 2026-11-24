@@ -241,6 +241,26 @@ export interface AskQuestionResponse {
   promptVersions: Record<string, string>;
 }
 
+export type ModelRole = 'router' | 'reranker' | 'answerer';
+
+export interface ModelOptionView {
+  key: string;
+  displayName: string;
+  inputUsdPerMTok: number;
+  outputUsdPerMTok: number;
+}
+
+export interface RoleSettingView {
+  role: ModelRole;
+  chosen: string;
+  default: string;
+  options: ModelOptionView[];
+}
+
+export interface ModelSettingsView {
+  roles: RoleSettingView[];
+}
+
 export class ApiError extends Error {
   constructor(
     public readonly status: number,
@@ -294,6 +314,8 @@ export interface ApiClient {
   createIngestion(input: CreateIngestionJobInput): Promise<IngestionJobView>;
   getIngestion(jobId: string): Promise<IngestionJobView>;
   getSource(sourceId: string): Promise<SourceDocumentView>;
+  getModelSettings(): Promise<ModelSettingsView>;
+  setModelChoice(role: ModelRole, key: string): Promise<ModelSettingsView>;
 }
 
 export function createApiClient(baseUrl: string): ApiClient {
@@ -347,5 +369,11 @@ export function createApiClient(baseUrl: string): ApiClient {
       request<IngestionJobView>(`${base}/ingestion/${encodeURIComponent(jobId)}`),
     getSource: (sourceId) =>
       request<SourceDocumentView>(`${base}/sources/${encodeURIComponent(sourceId)}`),
+    getModelSettings: () => request<ModelSettingsView>(`${base}/settings/models`),
+    setModelChoice: (role, key) =>
+      request<ModelSettingsView>(`${base}/settings/models/${encodeURIComponent(role)}`, {
+        method: 'PUT',
+        body: JSON.stringify({ key }),
+      }),
   };
 }

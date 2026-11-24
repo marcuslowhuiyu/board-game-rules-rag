@@ -3,6 +3,7 @@ import { createApiClient, type SessionView } from './api/client.js';
 import { GameSearchScreen } from './screens/GameSearchScreen.js';
 import { GameConfigurationScreen } from './screens/GameConfigurationScreen.js';
 import { AddGameScreen } from './screens/AddGameScreen.js';
+import { SettingsScreen } from './screens/SettingsScreen.js';
 import { SourcesScreen } from './screens/SourcesScreen.js';
 
 type Screen =
@@ -10,6 +11,7 @@ type Screen =
   | { kind: 'configure'; gameId: string }
   | { kind: 'sources'; gameId: string }
   | { kind: 'add' }
+  | { kind: 'settings' }
   | { kind: 'started'; session: SessionView };
 
 const defaultApiUrl = (): string => {
@@ -32,6 +34,9 @@ export const App = ({ apiUrl }: { apiUrl?: string } = {}): JSX.Element => {
       <header className="app-header">
         <h1>Board Game Rules Referee</h1>
         <p className="subtitle">Milestone 1 — game catalog &amp; anonymous sessions</p>
+        <button className="button" type="button" onClick={() => setScreen({ kind: 'settings' })}>
+          Settings
+        </button>
       </header>
       <main>
         {screen.kind === 'search' && (
@@ -56,6 +61,9 @@ export const App = ({ apiUrl }: { apiUrl?: string } = {}): JSX.Element => {
             gameId={screen.gameId}
             onBack={() => setScreen({ kind: 'configure', gameId: screen.gameId })}
           />
+        )}
+        {screen.kind === 'settings' && (
+          <SettingsScreen api={api} onBack={() => setScreen({ kind: 'search' })} />
         )}
         {screen.kind === 'add' && (
           <AddGameScreen
