@@ -112,6 +112,8 @@ export interface AnsweringConfig {
   rerankCandidates: number;
   /** Most passages the reranker may keep. */
   rerankTopN: number;
+  /** How long the API reuses the stored model choices before reading them again. */
+  modelSettingsCacheMs: number;
 }
 
 const DEFAULT_ANSWERING: AnsweringConfig = {
@@ -122,6 +124,7 @@ const DEFAULT_ANSWERING: AnsweringConfig = {
   evidenceLimits: { simple: 3, complex: 10 },
   rerankCandidates: 15,
   rerankTopN: 10,
+  modelSettingsCacheMs: 60_000,
 };
 
 export interface DevStackProps extends StackProps {
@@ -319,6 +322,7 @@ export class DevStack extends Stack {
     apiFn.addEnvironment('RERANK_CANDIDATES', String(answering.rerankCandidates));
     apiFn.addEnvironment('RERANK_TOP_N', String(answering.rerankTopN));
     apiFn.addEnvironment('ANSWER_RUN_BUDGET_MS', String(answering.runBudgetMs));
+    apiFn.addEnvironment('MODEL_SETTINGS_CACHE_MS', String(answering.modelSettingsCacheMs));
     apiFn.addEnvironment('EMBEDDING_REGION', embedding.region);
     apiFn.addEnvironment('EMBEDDING_MODEL_ID', embedding.modelId);
     apiFn.addEnvironment('EMBEDDING_DIMENSIONS', String(embedding.dimensions));

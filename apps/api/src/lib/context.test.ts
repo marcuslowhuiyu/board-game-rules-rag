@@ -10,6 +10,7 @@ const ENV = {
   RERANK_CANDIDATES: '15',
   RERANK_TOP_N: '10',
   ANSWER_RUN_BUDGET_MS: '26000',
+  MODEL_SETTINGS_CACHE_MS: '60000',
 };
 
 describe('loadAnsweringConfigFromEnv', () => {
@@ -22,6 +23,7 @@ describe('loadAnsweringConfigFromEnv', () => {
       rerankCandidates: 15,
       rerankTopN: 10,
       runBudgetMs: 26000,
+      modelSettingsCacheMs: 60000,
     });
   });
 
@@ -40,6 +42,7 @@ describe('loadAnsweringConfigFromEnv', () => {
     ['EVIDENCE_LIMIT_COMPLEX', '-3'],
     ['RERANK_CANDIDATES', ' '],
     ['RERANK_TOP_N', '0'],
+    ['MODEL_SETTINGS_CACHE_MS', '0'],
     ['ANSWER_RUN_BUDGET_MS', '0'],
     ['ANSWER_RUN_BUDGET_MS', '25.5'],
     ['ANSWER_RUN_BUDGET_MS', '26s'],

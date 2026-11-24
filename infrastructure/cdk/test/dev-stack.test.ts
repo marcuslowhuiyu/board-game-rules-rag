@@ -425,6 +425,7 @@ describe('DevStack', () => {
         'RERANK_CANDIDATES',
         'RERANK_TOP_N',
         'ANSWER_RUN_BUDGET_MS',
+        'MODEL_SETTINGS_CACHE_MS',
         'EMBEDDING_REGION',
         'EMBEDDING_MODEL_ID',
         'EMBEDDING_DIMENSIONS',
@@ -441,6 +442,7 @@ describe('DevStack', () => {
         RERANK_CANDIDATES: '15',
         RERANK_TOP_N: '10',
         ANSWER_RUN_BUDGET_MS: '26000',
+        MODEL_SETTINGS_CACHE_MS: '60000',
         EMBEDDING_DIMENSIONS: '1024',
       });
     });
@@ -547,6 +549,7 @@ describe('DevStack', () => {
         evidenceLimits: { simple: 3, complex: 10 },
         modelRequestTimeoutMs: 20_000,
         runBudgetMs: 26_000,
+        modelSettingsCacheMs: 60_000,
       });
       expect(vectorSettingsFromEnv(env).embedding.dimensions).toBe(1024);
     });
