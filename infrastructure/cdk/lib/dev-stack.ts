@@ -585,6 +585,23 @@ export class DevStack extends Stack {
       comment: 'Strip /api prefix before forwarding to API Gateway',
     });
 
+    // SPA fallback for the site behavior only. Distribution-level
+    // errorResponses would also rewrite API 404/403s to index.html; a viewer
+    // function on the default (S3) behavior leaves API errors untouched.
+    const spaFallbackFn = new CfFunction(this, 'SpaFallbackFn', {
+      code: FunctionCode.fromInline(`
+        function handler(event) {
+          var req = event.request;
+          var last = req.uri.substring(req.uri.lastIndexOf('/') + 1);
+          if (last.indexOf('.') === -1) {
+            req.uri = '/index.html';
+          }
+          return req;
+        }
+      `),
+      comment: 'Rewrite extensionless site paths to /index.html (SPA routing)',
+    });
+
     const apiOriginDomain = `${api.apiId}.execute-api.${this.region}.${this.urlSuffix}`;
 
     const distribution = new Distribution(this, 'WebDistribution', {
@@ -592,6 +609,12 @@ export class DevStack extends Stack {
       defaultBehavior: {
         origin: S3BucketOrigin.withOriginAccessControl(siteBucket),
         viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        functionAssociations: [
+          {
+            function: spaFallbackFn,
+            eventType: FunctionEventType.VIEWER_REQUEST,
+          },
+        ],
       },
       additionalBehaviors: {
         '/api/*': {
@@ -608,10 +631,6 @@ export class DevStack extends Stack {
           ],
         },
       },
-      errorResponses: [
-        { httpStatus: 403, responseHttpStatus: 200, responsePagePath: '/index.html' },
-        { httpStatus: 404, responseHttpStatus: 200, responsePagePath: '/index.html' },
-      ],
     });
 
     // Tighten the ingestion bucket CORS to only the CloudFront web origin
