@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { EmbeddingsProvider } from '@bgr/ai';
+import { loadModelCatalog, type EmbeddingsProvider } from '@bgr/ai';
 import { ModelUnavailableError, RetrievalUnavailableError, singaporeDayKey } from '@bgr/answering';
 import {
   asContentId,
@@ -11,7 +11,11 @@ import {
 import { InMemoryDocumentsRepository, InMemorySpendLedger } from '@bgr/persistence';
 import type { VectorHit, VectorIndex } from '@bgr/retrieval';
 import { createLogger } from '@bgr/shared';
-import { buildAnswerPipeline, type AnsweringConfig } from './answer-pipeline.js';
+import {
+  buildAnswerPipeline,
+  type AnswerPipelineParts,
+  type AnsweringConfig,
+} from './answer-pipeline.js';
 
 const NOW = new Date('2026-10-30T10:00:00.000Z');
 const TS = NOW.toISOString();
@@ -24,6 +28,7 @@ const CONFIG: AnsweringConfig = {
   rerankCandidates: 7,
   rerankTopN: 10,
   runBudgetMs: 26_000,
+  modelSettingsCacheMs: 60_000,
 };
 
 const doc = (id: string): SourceDocument => ({
@@ -119,6 +124,8 @@ async function setup(
   config: Partial<AnsweringConfig> = {},
   client: unknown = fakeBedrock(),
   embedError?: Error,
+  modelKeys: AnswerPipelineParts['modelKeys'] = async () => loadModelCatalog().defaults,
+  onClientBuilt: () => void = () => undefined,
 ) {
   const repo = new InMemoryDocumentsRepository();
   for (const id of ['doc_1', 'doc_2']) await repo.createDocument(doc(id));
@@ -154,7 +161,11 @@ async function setup(
     embeddings,
     index,
     logger: createLogger({ sink: (l) => lines.push(l) }),
-    clientFactory: () => client as never,
+    modelKeys,
+    clientFactory: () => {
+      onClientBuilt();
+      return client as never;
+    },
     now: () => NOW,
   });
   const run = (onCall: (r: { role: string }) => void = () => undefined) =>
@@ -170,7 +181,7 @@ async function setup(
       },
       onCall,
     );
-  return { run, ledger, getDocument, query, lines };
+  return { run, ledger, getDocument, query, lines, pipeline };
 }
 
 describe('buildAnswerPipeline (the Lambda wiring), with fake Bedrock, vectors and documents', () => {
@@ -276,5 +287,48 @@ describe('buildAnswerPipeline (the Lambda wiring), with fake Bedrock, vectors an
       routerCost + 2 * rerankAttempt,
       12,
     );
+  });
+
+  it('sends the answerer request to the model the per-request keys name', async () => {
+    const base = fakeBedrock();
+    const modelIds: string[] = [];
+    const client = {
+      send: (command: { input: { modelId?: string; system?: Array<{ text?: string }> } }) => {
+        if ((command.input.system?.[0]?.text ?? '').startsWith('You answer questions')) {
+          modelIds.push(command.input.modelId ?? '');
+        }
+        return base.send(command);
+      },
+    };
+    const catalog = loadModelCatalog();
+    const { run } = await setup({}, client, undefined, async () => ({
+      ...catalog.defaults,
+      answerer: 'claude-haiku-5-5',
+    }));
+    const outcome = await run();
+    expect(modelIds).toEqual([catalog.models['claude-haiku-5-5']!.modelId]);
+    expect(outcome.calls.find((c) => c.role === 'answerer')?.modelId).toBe(
+      catalog.models['claude-haiku-5-5']!.modelId,
+    );
+  });
+
+  it('builds the roles once for questions with the same keys, and again when the keys change', async () => {
+    const catalog = loadModelCatalog();
+    let keys = { ...catalog.defaults };
+    let built = 0;
+    const { run } = await setup(
+      {},
+      undefined,
+      undefined,
+      async () => keys,
+      () => (built += 1),
+    );
+    await run();
+    await run();
+    expect(built).toBe(1);
+    keys = { ...keys, answerer: 'claude-haiku-5-5' };
+    await run();
+    await run();
+    expect(built).toBe(2);
   });
 });

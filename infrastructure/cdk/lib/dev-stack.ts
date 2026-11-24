@@ -112,6 +112,8 @@ export interface AnsweringConfig {
   rerankCandidates: number;
   /** Most passages the reranker may keep. */
   rerankTopN: number;
+  /** How long the API reuses the stored model choices before reading them again. */
+  modelSettingsCacheMs: number;
 }
 
 const DEFAULT_ANSWERING: AnsweringConfig = {
@@ -122,6 +124,7 @@ const DEFAULT_ANSWERING: AnsweringConfig = {
   evidenceLimits: { simple: 3, complex: 10 },
   rerankCandidates: 15,
   rerankTopN: 10,
+  modelSettingsCacheMs: 60_000,
 };
 
 export interface DevStackProps extends StackProps {
@@ -319,6 +322,7 @@ export class DevStack extends Stack {
     apiFn.addEnvironment('RERANK_CANDIDATES', String(answering.rerankCandidates));
     apiFn.addEnvironment('RERANK_TOP_N', String(answering.rerankTopN));
     apiFn.addEnvironment('ANSWER_RUN_BUDGET_MS', String(answering.runBudgetMs));
+    apiFn.addEnvironment('MODEL_SETTINGS_CACHE_MS', String(answering.modelSettingsCacheMs));
     apiFn.addEnvironment('EMBEDDING_REGION', embedding.region);
     apiFn.addEnvironment('EMBEDDING_MODEL_ID', embedding.modelId);
     apiFn.addEnvironment('EMBEDDING_DIMENSIONS', String(embedding.dimensions));
@@ -540,6 +544,8 @@ export class DevStack extends Stack {
       { path: '/sessions/{sessionId}', method: HttpMethod.GET },
       { path: '/sessions/{sessionId}', method: HttpMethod.DELETE },
       { path: '/sessions/{sessionId}/messages', method: HttpMethod.POST },
+      { path: '/settings/models', method: HttpMethod.GET },
+      { path: '/settings/models/{role}', method: HttpMethod.PUT },
       { path: '/uploads/presign', method: HttpMethod.POST },
       { path: '/ingestion', method: HttpMethod.POST },
       { path: '/ingestion/{jobId}', method: HttpMethod.GET },
@@ -585,6 +591,23 @@ export class DevStack extends Stack {
       comment: 'Strip /api prefix before forwarding to API Gateway',
     });
 
+    // SPA fallback for the site behavior only. Distribution-level
+    // errorResponses would also rewrite API 404/403s to index.html; a viewer
+    // function on the default (S3) behavior leaves API errors untouched.
+    const spaFallbackFn = new CfFunction(this, 'SpaFallbackFn', {
+      code: FunctionCode.fromInline(`
+        function handler(event) {
+          var req = event.request;
+          var last = req.uri.substring(req.uri.lastIndexOf('/') + 1);
+          if (last.indexOf('.') === -1) {
+            req.uri = '/index.html';
+          }
+          return req;
+        }
+      `),
+      comment: 'Rewrite extensionless site paths to /index.html (SPA routing)',
+    });
+
     const apiOriginDomain = `${api.apiId}.execute-api.${this.region}.${this.urlSuffix}`;
 
     const distribution = new Distribution(this, 'WebDistribution', {
@@ -592,6 +615,12 @@ export class DevStack extends Stack {
       defaultBehavior: {
         origin: S3BucketOrigin.withOriginAccessControl(siteBucket),
         viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        functionAssociations: [
+          {
+            function: spaFallbackFn,
+            eventType: FunctionEventType.VIEWER_REQUEST,
+          },
+        ],
       },
       additionalBehaviors: {
         '/api/*': {
@@ -608,10 +637,6 @@ export class DevStack extends Stack {
           ],
         },
       },
-      errorResponses: [
-        { httpStatus: 403, responseHttpStatus: 200, responsePagePath: '/index.html' },
-        { httpStatus: 404, responseHttpStatus: 200, responsePagePath: '/index.html' },
-      ],
     });
 
     // Tighten the ingestion bucket CORS to only the CloudFront web origin

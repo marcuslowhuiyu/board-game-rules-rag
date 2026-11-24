@@ -174,3 +174,18 @@ describe('App', () => {
     );
   });
 });
+
+describe('App settings', () => {
+  it('opens Settings from the header and goes back', async () => {
+    stubFetch({
+      'GET /games': () => ({ body: { items: [] } }),
+      'GET /settings/models': () => ({ body: { roles: [] } }),
+    });
+    const user = userEvent.setup();
+    render(<App apiUrl="https://api.test" />);
+    await user.click(screen.getByRole('button', { name: 'Settings' }));
+    await screen.findByRole('heading', { name: 'Settings' });
+    await user.click(screen.getByRole('button', { name: /back/i }));
+    await screen.findByText(/no games yet/i);
+  });
+});

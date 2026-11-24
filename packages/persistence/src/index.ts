@@ -26,3 +26,6 @@ export * from './publisher/dynamo-atomic-publisher.js';
 export * from './usage/spend-ledger.js';
 export * from './usage/in-memory-spend-ledger.js';
 export * from './usage/dynamo-spend-ledger.js';
+export * from './settings/model-settings-repository.js';
+export * from './settings/in-memory-model-settings-repository.js';
+export * from './settings/dynamo-model-settings-repository.js';

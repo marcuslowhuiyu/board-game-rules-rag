@@ -6,6 +6,7 @@ import {
   InMemoryGamesRepository,
   InMemoryIngestionJobsRepository,
   InMemoryMessagesRepository,
+  InMemoryModelSettingsRepository,
   InMemorySessionsRepository,
   fixedClock,
   staticIdGenerator,
@@ -158,6 +159,7 @@ export function makeTestContext(
   const ids: IdGenerator = { ...baseIds, ...overrides.ids };
   const rawStore = overrides.rawStore ?? new InMemoryObjectStore('test-bucket');
   const normalizedStore = overrides.normalizedStore ?? rawStore;
+  const modelSettings = new InMemoryModelSettingsRepository();
   return {
     config,
     clock,
@@ -181,6 +183,9 @@ export function makeTestContext(
           throw new Error('no answer pipeline in this test context');
         },
       } satisfies AnswerPipeline),
+    modelSettings,
+    // No caching in tests: every read sees the latest write.
+    modelChoices: { current: () => modelSettings.getModelChoices(), invalidate: () => undefined },
   };
 }
 

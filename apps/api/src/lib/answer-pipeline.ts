@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import {
   loadModelCatalog,
+  type ModelRole,
   type ConverseStructuredOptions,
   type EmbeddingsProvider,
   type ModelCallRecord,
@@ -27,6 +28,8 @@ export interface AnsweringConfig {
   rerankTopN: number;
   /** Time allowed for all model calls of one question; below the Lambda timeout. */
   runBudgetMs: number;
+  /** How long a stored model choice is reused before it is read again. */
+  modelSettingsCacheMs: number;
 }
 
 /** The outcome plus every document the run looked up, so citations need no second read. */
@@ -46,6 +49,8 @@ export interface AnswerPipelineParts {
   embeddings: EmbeddingsProvider;
   index: VectorIndex;
   logger: Logger;
+  /** The catalog key for each role, for this question. */
+  modelKeys: () => Promise<Record<ModelRole, string>>;
   /** Tests inject a fake Bedrock client here. */
   clientFactory?: ConverseStructuredOptions['clientFactory'];
   now?: () => Date;
@@ -66,12 +71,6 @@ export function buildAnswerPipeline(parts: AnswerPipelineParts): AnswerPipeline 
   );
 
   const catalog = loadModelCatalog();
-  const { classifier, ranker, answerer } = createAnswerRoles({
-    catalog,
-    requestTimeoutMs: config.modelRequestTimeoutMs,
-    rerankTopN: config.rerankTopN,
-    ...(parts.clientFactory ? { clientFactory: parts.clientFactory } : {}),
-  });
   const retriever = new VectorRulesRetriever({
     embeddings: parts.embeddings,
     index: parts.index,
@@ -87,23 +86,41 @@ export function buildAnswerPipeline(parts: AnswerPipelineParts): AnswerPipeline 
     return doc;
   };
 
-  const inner = createAnswerPipeline({
-    classifier,
-    retriever,
-    ranker,
-    answerer,
-    sources: createSourceLookup({ getDocument: lookup, logger }),
-    ledger: parts.ledger,
-    dailyCapUsd: config.dailyAiCapUsd,
-    limits: config.evidenceLimits,
-    now: parts.now ?? (() => new Date()),
-    runBudgetMs: config.runBudgetMs,
-    logger,
-  });
+  /** One pipeline per role-to-model assignment; the roles are built on first use. */
+  const pipelines = new Map<string, ReturnType<typeof createAnswerPipeline>>();
+  const pipelineFor = (keys: Record<ModelRole, string>) => {
+    const id = `${keys.router}|${keys.reranker}|${keys.answerer}`;
+    let inner = pipelines.get(id);
+    if (!inner) {
+      const { classifier, ranker, answerer } = createAnswerRoles({
+        catalog,
+        keys,
+        requestTimeoutMs: config.modelRequestTimeoutMs,
+        rerankTopN: config.rerankTopN,
+        ...(parts.clientFactory ? { clientFactory: parts.clientFactory } : {}),
+      });
+      inner = createAnswerPipeline({
+        classifier,
+        retriever,
+        ranker,
+        answerer,
+        sources: createSourceLookup({ getDocument: lookup, logger }),
+        ledger: parts.ledger,
+        dailyCapUsd: config.dailyAiCapUsd,
+        limits: config.evidenceLimits,
+        now: parts.now ?? (() => new Date()),
+        runBudgetMs: config.runBudgetMs,
+        logger,
+      });
+      pipelines.set(id, inner);
+    }
+    return inner;
+  };
 
   return {
     answer: (input, onCall) =>
       runDocuments.run(new Map(), async () => {
+        const inner = pipelineFor(await parts.modelKeys());
         const outcome = await inner.answer(input, onCall);
         const found = new Map<string, SourceDocument>();
         for (const [id, doc] of runDocuments.getStore() ?? []) if (doc) found.set(id, doc);

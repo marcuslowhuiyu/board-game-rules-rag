@@ -1,6 +1,6 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { SFNClient, StartExecutionCommand } from '@aws-sdk/client-sfn';
-import { TitanEmbeddingsProvider } from '@bgr/ai';
+import { TitanEmbeddingsProvider, loadModelCatalog } from '@bgr/ai';
 import { S3VectorIndex } from '@bgr/retrieval';
 import { createLogger } from '@bgr/shared';
 import {
@@ -15,6 +15,7 @@ import {
   DynamoIngestionJobsRepository,
   DynamoMessagesRepository,
   DynamoSessionsRepository,
+  DynamoModelSettingsRepository,
   DynamoSpendLedger,
   cryptoIdGenerator,
   systemClock,
@@ -25,11 +26,14 @@ import {
   type IdGenerator,
   type IngestionJobsRepository,
   type MessagesRepository,
+  type ModelChoices,
+  type ModelSettingsRepository,
   type SessionsRepository,
 } from '@bgr/persistence';
 import type { IngestionJobId } from '@bgr/domain';
 import { vectorSettingsFromEnv } from '../ingestion/stage-context.js';
 import { createS3UploadPresigner } from './presigner.js';
+import { createModelChoiceCache, resolveModelKeys } from './model-settings.js';
 import { S3ObjectStore } from './s3-object-store.js';
 
 export interface AppConfig {
@@ -86,6 +90,9 @@ export interface AppContext {
   presigner: UploadPresigner;
   executor: IngestionExecutor;
   answerPipeline: AnswerPipeline;
+  modelSettings: ModelSettingsRepository;
+  /** The stored model choices, cached briefly; `invalidate()` after a write. */
+  modelChoices: { current(): Promise<ModelChoices>; invalidate(): void };
 }
 
 function requireEnv(key: string, env: Record<string, string | undefined> = process.env): string {
@@ -156,6 +163,7 @@ export function loadAnsweringConfigFromEnv(
     rerankCandidates: requirePositiveNumber('RERANK_CANDIDATES', env),
     rerankTopN: requirePositiveNumber('RERANK_TOP_N', env),
     runBudgetMs: requirePositiveNumber('ANSWER_RUN_BUDGET_MS', env),
+    modelSettingsCacheMs: requirePositiveNumber('MODEL_SETTINGS_CACHE_MS', env),
   };
 }
 
@@ -195,20 +203,47 @@ export function getContext(): AppContext {
   };
 
   const documents = new DynamoDocumentsRepository(ddb, { documentsTable: config.documentsTable });
+  // Read from the environment on first use, so routes that never touch them need none of it.
+  let answeringConfig: AnsweringConfig | undefined;
+  const answering = (): AnsweringConfig => (answeringConfig ??= loadAnsweringConfigFromEnv());
+
+  let settingsRepo: ModelSettingsRepository | undefined;
+  const settings = (): ModelSettingsRepository =>
+    (settingsRepo ??= new DynamoModelSettingsRepository(ddb, {
+      usageTable: answering().usageTable,
+    }));
+  const modelSettings: ModelSettingsRepository = {
+    getModelChoices: () => settings().getModelChoices(),
+    setModelChoice: (role, key, updatedAt) => settings().setModelChoice(role, key, updatedAt),
+  };
+
+  const logger = createLogger({ base: { app: 'bgr-api' } });
+  let choiceCache: ReturnType<typeof createModelChoiceCache> | undefined;
+  const modelChoices: AppContext['modelChoices'] = {
+    current: () =>
+      (choiceCache ??= createModelChoiceCache(modelSettings, {
+        ttlMs: answering().modelSettingsCacheMs,
+        logger,
+      })).current(),
+    invalidate: () => choiceCache?.invalidate(),
+  };
+
+  const catalog = loadModelCatalog();
   // Built on the first question, so routes that never answer need none of its env.
   let pipeline: AnswerPipeline | undefined;
   const answerPipeline: AnswerPipeline = {
     answer: (input, onCall) => {
       if (!pipeline) {
-        const answering = loadAnsweringConfigFromEnv();
+        const config = answering();
         const vectors = vectorSettingsFromEnv(process.env);
         pipeline = buildAnswerPipeline({
-          config: answering,
+          config,
           documents,
-          ledger: new DynamoSpendLedger(ddb, { usageTable: answering.usageTable }),
+          ledger: new DynamoSpendLedger(ddb, { usageTable: config.usageTable }),
           embeddings: new TitanEmbeddingsProvider(vectors.embedding),
           index: new S3VectorIndex(vectors.index),
-          logger: createLogger({ base: { app: 'bgr-api' } }),
+          logger,
+          modelKeys: async () => resolveModelKeys(catalog, await modelChoices.current(), logger),
         });
       }
       return pipeline.answer(input, onCall);
@@ -235,6 +270,8 @@ export function getContext(): AppContext {
     presigner,
     executor,
     answerPipeline,
+    modelSettings,
+    modelChoices,
   };
   return cached;
 }
