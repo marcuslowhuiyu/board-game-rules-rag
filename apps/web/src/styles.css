@@ -207,3 +207,109 @@ body {
 .actions .button {
   flex: 1 0 auto;
 }
+
+.answer-card .ans {
+  font-weight: 600;
+  margin: 6px 0 4px;
+}
+
+.answer-card .muted {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.bar {
+  height: 7px;
+  border-radius: 4px;
+  background: #eee;
+  overflow: hidden;
+  margin: 3px 0 2px;
+}
+
+.bar > div {
+  height: 100%;
+}
+
+.bar .hi {
+  background: #3a9a5b;
+}
+
+.bar .mid {
+  background: #d9a400;
+}
+
+.bar .lo {
+  background: #c94a4a;
+}
+
+.chip {
+  display: inline-block;
+  background: #fff4d6;
+  color: #7a5600;
+  border-radius: 10px;
+  padding: 2px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  margin-top: 6px;
+}
+
+button.link {
+  background: none;
+  border: 0;
+  padding: 6px 0;
+  color: #1f4fa3;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  display: block;
+}
+
+.tier {
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 8px;
+  margin: 8px 0;
+}
+
+.tier.pick {
+  border: 2px solid #3a9a5b;
+}
+
+.tier .th {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.tier .tname {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: #555;
+}
+
+.tag {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  color: #17643a;
+  background: #d9f2e1;
+  border-radius: 8px;
+  padding: 0 6px;
+}
+
+.tier .says {
+  margin: 4px 0;
+}
+
+.citation {
+  font-size: 13px;
+  margin-top: 4px;
+}
+
+.citation .passage {
+  margin: 4px 0 0;
+  padding-left: 8px;
+  border-left: 3px solid #ddd;
+  white-space: pre-wrap;
+}

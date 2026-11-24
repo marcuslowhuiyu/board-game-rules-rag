@@ -83,6 +83,7 @@ describe('App', () => {
     stubFetch({ 'GET /games': () => ({ body: { items: [] } }) });
     render(<App apiUrl="https://api.test" />);
     expect(screen.getByRole('heading', { name: /board game rules referee/i })).toBeInTheDocument();
+    expect(screen.queryByText(/milestone 1/i)).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByText(/no games yet/i)).toBeInTheDocument());
   });
 
@@ -124,8 +125,9 @@ describe('App', () => {
     // Start the session.
     await user.click(screen.getByRole('button', { name: /Start session/i }));
 
-    // Success screen.
-    await screen.findByRole('heading', { name: /Session started/i });
+    // Chat screen, titled with the game name.
+    await screen.findByLabelText(/question/i);
+    expect(screen.getByRole('heading', { name: 'Twilight Imperium 4' })).toBeInTheDocument();
     expect(captured.sessionCalls).toHaveLength(1);
     expect(captured.sessionCalls[0]).toEqual({
       gameId: 'g_ti4',
