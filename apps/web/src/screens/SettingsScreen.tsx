@@ -64,12 +64,17 @@ export const SettingsScreen = ({ api, onBack }: Props): JSX.Element => {
           {error}
         </p>
       )}
-      {saved && <p role="status">Saved. New questions use it within about a minute.</p>}
+      {saved && (
+        <p className="success" role="status">
+          Saved. New questions use it within about a minute.
+        </p>
+      )}
       {settings?.roles.map((r) => (
         <div key={r.role} className="field">
           <label htmlFor={`model-${r.role}`}>{LABELS[r.role]}</label>
           <select
             id={`model-${r.role}`}
+            className="select"
             value={r.chosen}
             disabled={saving !== null}
             onChange={(e) => void choose(r.role, e.target.value)}

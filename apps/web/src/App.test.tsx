@@ -190,4 +190,16 @@ describe('App settings', () => {
     await user.click(screen.getByRole('button', { name: /back/i }));
     await screen.findByText(/no games yet/i);
   });
+
+  it('shows Settings as a header icon button named exactly "Settings"', async () => {
+    stubFetch({ 'GET /games': () => ({ body: { items: [] } }) });
+    render(<App apiUrl="https://api.test" />);
+    const header = screen.getByRole('banner');
+    const button = within(header).getByRole('button', { name: 'Settings' });
+    expect(button).toHaveAccessibleName('Settings');
+    const icon = button.querySelector('svg');
+    expect(icon).not.toBeNull();
+    expect(icon).toHaveAttribute('aria-hidden', 'true');
+    await screen.findByText(/no games yet/i);
+  });
 });

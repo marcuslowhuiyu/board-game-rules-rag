@@ -179,7 +179,7 @@ export const SourcesScreen = ({ api, gameId, onBack }: Props): JSX.Element => {
 
   return (
     <section className="screen" aria-labelledby="sources-title">
-      <button className="button" type="button" onClick={onBack} aria-label="Back">
+      <button className="button back" type="button" onClick={onBack} aria-label="Back">
         ← Back
       </button>
       <h2 id="sources-title">Sources for {game.name}</h2>
