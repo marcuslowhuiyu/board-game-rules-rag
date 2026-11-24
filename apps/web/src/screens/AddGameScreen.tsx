@@ -34,7 +34,7 @@ export const AddGameScreen = ({ api, onCancel, onCreated }: Props): JSX.Element 
 
   return (
     <section className="screen" aria-labelledby="add-title">
-      <button className="button" type="button" onClick={onCancel}>
+      <button className="button back" type="button" onClick={onCancel}>
         ← Back
       </button>
       <h2 id="add-title">Add a game</h2>

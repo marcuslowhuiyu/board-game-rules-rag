@@ -76,7 +76,7 @@ export const GameConfigurationScreen = ({
 
   return (
     <section className="screen" aria-labelledby="config-title">
-      <button className="button" type="button" onClick={onBack} aria-label="Back">
+      <button className="button back" type="button" onClick={onBack} aria-label="Back">
         ← Back
       </button>
       <h2 id="config-title">{game.name}</h2>

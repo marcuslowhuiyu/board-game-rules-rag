@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -175,5 +175,12 @@ describe('RulesChatScreen', () => {
     await user.type(screen.getByLabelText('Your question'), 'How?');
     await user.click(screen.getByRole('button', { name: 'Send' }));
     expect(screen.getByRole('status')).toHaveTextContent('Searching the rulebook…');
+  });
+
+  it('puts the question input and the Send button in the composer', () => {
+    setup(vi.fn());
+    const composer = screen.getByRole('form', { name: 'Ask the referee' });
+    expect(within(composer).getByLabelText('Your question')).toBeInTheDocument();
+    expect(within(composer).getByRole('button', { name: 'Send' })).toBeInTheDocument();
   });
 });
