@@ -217,16 +217,17 @@ export function getContext(): AppContext {
     setModelChoice: (role, key, updatedAt) => settings().setModelChoice(role, key, updatedAt),
   };
 
+  const logger = createLogger({ base: { app: 'bgr-api' } });
   let choiceCache: ReturnType<typeof createModelChoiceCache> | undefined;
   const modelChoices: AppContext['modelChoices'] = {
     current: () =>
       (choiceCache ??= createModelChoiceCache(modelSettings, {
         ttlMs: answering().modelSettingsCacheMs,
+        logger,
       })).current(),
     invalidate: () => choiceCache?.invalidate(),
   };
 
-  const logger = createLogger({ base: { app: 'bgr-api' } });
   const catalog = loadModelCatalog();
   // Built on the first question, so routes that never answer need none of its env.
   let pipeline: AnswerPipeline | undefined;

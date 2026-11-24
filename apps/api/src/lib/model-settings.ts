@@ -8,19 +8,32 @@ export interface ModelChoiceCache {
   invalidate(): void;
 }
 
-/** The stored choices, read at most once per `ttlMs`. A failed read is not cached. */
+/**
+ * The stored choices, read at most once per `ttlMs`. A failed read logs a warning and returns the
+ * last good choices (or `{}`, i.e. catalog defaults); it does not refresh the timestamp, so the
+ * next call retries.
+ */
 export function createModelChoiceCache(
   repo: ModelSettingsRepository,
-  opts: { ttlMs: number; now?: () => number },
+  opts: { ttlMs: number; now?: () => number; logger: Logger },
 ): ModelChoiceCache {
   const now = opts.now ?? Date.now;
   let cached: { choices: ModelChoices; readAt: number } | undefined;
+  let lastGood: ModelChoices | undefined;
   return {
     async current() {
       if (cached && now() - cached.readAt < opts.ttlMs) return cached.choices;
-      const choices = await repo.getModelChoices();
-      cached = { choices, readAt: now() };
-      return choices;
+      try {
+        const choices = await repo.getModelChoices();
+        cached = { choices, readAt: now() };
+        lastGood = choices;
+        return choices;
+      } catch (err) {
+        opts.logger.warn('model settings read failed; using last known choices', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return lastGood ?? {};
+      }
     },
     invalidate() {
       cached = undefined;

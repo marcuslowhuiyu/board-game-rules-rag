@@ -544,6 +544,8 @@ export class DevStack extends Stack {
       { path: '/sessions/{sessionId}', method: HttpMethod.GET },
       { path: '/sessions/{sessionId}', method: HttpMethod.DELETE },
       { path: '/sessions/{sessionId}/messages', method: HttpMethod.POST },
+      { path: '/settings/models', method: HttpMethod.GET },
+      { path: '/settings/models/{role}', method: HttpMethod.PUT },
       { path: '/uploads/presign', method: HttpMethod.POST },
       { path: '/ingestion', method: HttpMethod.POST },
       { path: '/ingestion/{jobId}', method: HttpMethod.GET },

@@ -26,7 +26,8 @@ export interface ModelSettingsView {
 const validation = (message: string) => errorResponse(400, 'VALIDATION', message);
 
 /**
- * GET /settings/models: each role's resolved choice (a stale stored key shows as the default),
+ * GET /settings/models: reads the repository directly (never the cache, so it shows the stored
+ * truth or an error); each role's resolved choice (a stale stored key shows as the default),
  * the catalog default and the approved options.
  * PUT /settings/models/{role}: body `{ key }`; the role and key are validated against the catalog
  * before anything is stored, and the choice cache is invalidated afterwards.
@@ -34,7 +35,7 @@ const validation = (message: string) => errorResponse(400, 'VALIDATION', message
 export function settingsRoutes(ctxFactory: () => AppContext) {
   const view = async (app: AppContext, rc: RequestContext): Promise<ModelSettingsView> => {
     const catalog = loadModelCatalog();
-    const keys = resolveModelKeys(catalog, await app.modelChoices.current(), rc.logger);
+    const keys = resolveModelKeys(catalog, await app.modelSettings.getModelChoices(), rc.logger);
     return {
       roles: MODEL_ROLES.map((role) => ({
         role,

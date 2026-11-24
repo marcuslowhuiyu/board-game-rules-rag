@@ -471,6 +471,12 @@ describe('DevStack', () => {
       });
     });
 
+    it('exposes the model settings routes', () => {
+      for (const rk of ['GET /settings/models', 'PUT /settings/models/{role}']) {
+        template.hasResourceProperties('AWS::ApiGatewayV2::Route', { RouteKey: rk });
+      }
+    });
+
     it('grants the API Lambda vector reads on the index', () => {
       template.hasResourceProperties('AWS::IAM::Policy', {
         PolicyDocument: {

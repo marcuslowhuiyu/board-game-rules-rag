@@ -54,6 +54,14 @@ describe('settings handlers', () => {
     expect(after.roles.find((r) => r.role === 'answerer')?.chosen).toBe('claude-haiku-5-5');
   });
 
+  it('GET reads the repository, not a stale cache', async () => {
+    const { ctx, get } = build();
+    ctx.modelChoices.current = async () => ({});
+    await ctx.modelSettings.setModelChoice('answerer', 'claude-haiku-5-5', 't');
+    const view = bodyAs<ModelSettingsView>(await get());
+    expect(view.roles.find((r) => r.role === 'answerer')?.chosen).toBe('claude-haiku-5-5');
+  });
+
   it('PUT invalidates the choice cache', async () => {
     const { ctx, put } = build();
     let invalidated = 0;

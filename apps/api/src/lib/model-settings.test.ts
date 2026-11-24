@@ -49,6 +49,7 @@ describe('createModelChoiceCache', () => {
     const cache = createModelChoiceCache(repo as ModelSettingsRepository, {
       ttlMs,
       now: () => t,
+      logger: createLogger({ sink: () => undefined }),
     });
     return { repo, get, cache, advance: (ms: number) => (t += ms) };
   };
@@ -79,10 +80,35 @@ describe('createModelChoiceCache', () => {
     expect(get).toHaveBeenCalledTimes(2);
   });
 
-  it('does not cache a failed read', async () => {
-    const { get, cache } = setup();
+  it('a failed read with nothing cached returns {} and warns once', async () => {
+    const lines: string[] = [];
+    const logger = createLogger({ sink: (l) => lines.push(l) });
+    const { get, repo } = setup();
     get.mockRejectedValueOnce(new Error('boom'));
-    await expect(cache.current()).rejects.toThrow('boom');
+    const cache = createModelChoiceCache(repo as ModelSettingsRepository, { ttlMs: 1000, logger });
     expect(await cache.current()).toEqual({});
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0]!)).toMatchObject({ level: 'warn' });
+  });
+
+  it('a failed read after a good one returns the earlier value and retries next call', async () => {
+    const lines: string[] = [];
+    const logger = createLogger({ sink: (l) => lines.push(l) });
+    const repo = new InMemoryModelSettingsRepository();
+    const get = vi.spyOn(repo, 'getModelChoices');
+    let t = 0;
+    const cache = createModelChoiceCache(repo as ModelSettingsRepository, {
+      ttlMs: 1000,
+      now: () => t,
+      logger,
+    });
+    await repo.setModelChoice('answerer', 'nova-2-lite', 't');
+    expect(await cache.current()).toEqual({ answerer: 'nova-2-lite' });
+    t += 1000;
+    get.mockRejectedValueOnce(new Error('boom'));
+    expect(await cache.current()).toEqual({ answerer: 'nova-2-lite' });
+    expect(lines).toHaveLength(1);
+    expect(await cache.current()).toEqual({ answerer: 'nova-2-lite' });
+    expect(get).toHaveBeenCalledTimes(3);
   });
 });
