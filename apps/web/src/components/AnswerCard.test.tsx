@@ -69,8 +69,8 @@ const conflict = (over: Partial<RulesAnswer> = {}) =>
       sourcesDisagree: true,
       appliedTier: 'DESIGNER_OR_PUBLISHER',
       tiers: [
-        tier('OFFICIAL', 'The rulebook is silent.', 'c1', 'LOW'),
-        tier('DESIGNER_OR_PUBLISHER', 'Freeze the display.', 'c2', 'HIGH'),
+        tier('OFFICIAL', 'Option A is described only briefly.', 'c1', 'LOW'),
+        tier('DESIGNER_OR_PUBLISHER', 'Option B applies at the table.', 'c2', 'HIGH'),
       ],
       ...over,
     }),
@@ -108,17 +108,61 @@ describe('AnswerCard', () => {
     expect(screen.getByRole('button', { name: 'See what each source says ▸' })).toBeInTheDocument();
   });
 
-  it('shows both panels before any click when the players must choose', () => {
-    render(<AnswerCard response={conflict({ requiresPlayerChoice: true, appliedTier: null })} />);
+  it('shows compact panels up front and a toggle that opens every tier when players must choose', async () => {
+    const user = userEvent.setup();
+    const base = conflict({ requiresPlayerChoice: true, appliedTier: null });
+    const response = {
+      ...base,
+      answer: {
+        ...base.answer,
+        tiers: [
+          ...base.answer.tiers,
+          tier('COMMUNITY_DISCUSSION', 'Opinions differ.', 'c3', 'LOW'),
+        ],
+      },
+      citations: [...base.citations, cite({ chunkId: 'c3', documentId: 'd3', title: 'Forum' })],
+    };
+    render(<AnswerCard response={response} />);
     expect(screen.getByText('Sources disagree: choose a ruling at your table')).toBeInTheDocument();
-    expect(screen.getByText('The rulebook is silent.')).toBeInTheDocument();
-    expect(screen.getByText('Freeze the display.')).toBeInTheDocument();
+    expect(screen.getByText('Option A is described only briefly.')).toBeInTheDocument();
+    expect(screen.getByText('Option B applies at the table.')).toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'Community discussion' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'See what each source says ▸' }));
+    expect(screen.getByRole('group', { name: 'Community discussion' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Official rules' })).toBeInTheDocument();
+  });
+
+  it('hides the sources toggle when there are no tiers', () => {
+    render(<AnswerCard response={responseOf(answerOf({ tiers: [] }))} />);
+    expect(screen.queryByRole('button', { name: /sources/i })).toBeNull();
+  });
+
+  it('offers tiers behind a toggle for an inconclusive answer, with no applied tag', async () => {
+    const user = userEvent.setup();
+    render(
+      <AnswerCard
+        response={responseOf(
+          answerOf({
+            certainty: 'INCONCLUSIVE',
+            explanation: 'Nothing covers this case.',
+            appliedTier: null,
+            tiers: [tier('COMMUNITY_DISCUSSION', 'Players split.', 'c1', 'LOW')],
+          }),
+        )}
+      />,
+    );
+    expect(screen.queryByRole('group', { name: 'Community discussion' })).toBeNull();
+    expect(screen.queryByRole('meter')).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'See sources ▸' }));
+    const panel = screen.getByRole('group', { name: 'Community discussion' });
+    expect(within(panel).getByText('fetched from rules.example.com')).toBeInTheDocument();
+    expect(screen.queryByText('applied')).toBeNull();
   });
 
   it('expands to one panel per tier with provenance and the applied tag', async () => {
     const user = userEvent.setup();
     render(<AnswerCard response={conflict()} />);
-    expect(screen.queryByText('Freeze the display.')).toBeNull();
+    expect(screen.queryByText('Option B applies at the table.')).toBeNull();
     await user.click(screen.getByRole('button', { name: 'See what each source says ▸' }));
     const official = screen.getByRole('group', { name: 'Official rules' });
     const publisher = screen.getByRole('group', { name: 'Publisher ruling' });
