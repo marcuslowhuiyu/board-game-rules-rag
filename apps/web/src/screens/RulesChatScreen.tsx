@@ -64,7 +64,11 @@ export const RulesChatScreen = ({ api, session, gameName, onExit }: Props): JSX.
                 {x.error}
               </div>
             )}
-            {!x.response && !x.error && <p className="meta">Searching the rulebook…</p>}
+            {!x.response && !x.error && (
+              <p className="meta" role="status">
+                Searching the rulebook…
+              </p>
+            )}
           </li>
         ))}
       </ol>
@@ -76,6 +80,7 @@ export const RulesChatScreen = ({ api, session, gameName, onExit }: Props): JSX.
             className="input"
             type="text"
             value={draft}
+            maxLength={1000}
             disabled={ended}
             onChange={(e) => setDraft(e.target.value)}
           />

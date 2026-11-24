@@ -40,10 +40,12 @@ function CitationDetails({ citation, all }: { citation: Citation; all: Citation[
 function TierPanel({
   tier,
   applied,
+  meter,
   citations,
 }: {
   tier: TierAnswer;
   applied: boolean;
+  meter: boolean;
   citations: Citation[];
 }) {
   const byId = new Map(citations.map((c) => [c.chunkId, c]));
@@ -62,7 +64,7 @@ function TierPanel({
         </span>
         <span className="muted">{`confidence: ${tier.confidence.level.toLowerCase()}`}</span>
       </div>
-      <Meter level={tier.confidence.level} />
+      {meter && <Meter level={tier.confidence.level} />}
       <div className="says">{tier.answer}</div>
       {provenance && <div className="muted">{provenance}</div>}
       {cited.map((c) => (
@@ -74,7 +76,7 @@ function TierPanel({
 
 function CompactPanel({ tier }: { tier: TierAnswer }) {
   return (
-    <div className="tier">
+    <div className="tier" role="group" aria-label={tierLabel(tier.tier)}>
       <div className="th">
         <span className="tname">{tierLabel(tier.tier)}</span>
         <span className="muted">{`confidence: ${tier.confidence.level.toLowerCase()}`}</span>
@@ -86,17 +88,38 @@ function CompactPanel({ tier }: { tier: TierAnswer }) {
 
 const CONFLICT_TIERS: PanelTier[] = ['OFFICIAL', 'DESIGNER_OR_PUBLISHER'];
 
+const CERTAINTY_WORDS = { DEFINITIVE: 'Stated directly', QUALIFIED: 'Best reading' } as const;
+
+/** The tiers to show, adding the applied ruling's own panel when the validator left it out. */
+function withAppliedPanel(
+  answer: AskQuestionResponse['answer'],
+  inconclusive: boolean,
+): TierAnswer[] {
+  const { appliedTier, tiers } = answer;
+  if (inconclusive || !appliedTier || tiers.some((t) => t.tier === appliedTier)) return tiers;
+  if (tiers.length === 0 && answer.evidence.length === 0) return tiers;
+  const applied: TierAnswer = {
+    tier: appliedTier,
+    answer: answer.answer,
+    certainty: answer.certainty === 'QUALIFIED' ? 'QUALIFIED' : 'DEFINITIVE',
+    evidence: answer.evidence,
+    confidence: answer.confidence,
+  };
+  return [applied, ...tiers];
+}
+
 export function AnswerCard({ response }: { response: AskQuestionResponse }) {
   const { answer, citations } = response;
   const [open, setOpen] = useState(false);
   const inconclusive = answer.certainty === 'INCONCLUSIVE';
-  const hasTiers = answer.tiers.length > 0;
+  const tiers = withAppliedPanel(answer, inconclusive);
 
-  const panels = answer.tiers.map((t) => (
+  const panels = tiers.map((t) => (
     <TierPanel
       key={t.tier}
       tier={t}
       applied={!inconclusive && t.tier === answer.appliedTier}
+      meter={!inconclusive}
       citations={citations}
     />
   ));
@@ -105,10 +128,20 @@ export function AnswerCard({ response }: { response: AskQuestionResponse }) {
     : answer.sourcesDisagree
       ? 'See what each source says ▸'
       : 'See sources ▸';
-  const toggle = hasTiers && (
+  const toggle = tiers.length > 0 && (
     <button type="button" className="link" onClick={() => setOpen(!open)}>
       {link}
     </button>
+  );
+  const sideBySide = (
+    <>
+      <div className="chip">Sources disagree: choose a ruling at your table</div>
+      {tiers
+        .filter((t) => CONFLICT_TIERS.includes(t.tier))
+        .map((t) => (
+          <CompactPanel key={t.tier} tier={t} />
+        ))}
+    </>
   );
 
   if (inconclusive) {
@@ -116,6 +149,9 @@ export function AnswerCard({ response }: { response: AskQuestionResponse }) {
       <div className="answer-card">
         <div className="ans">The rules don't settle this.</div>
         <div className="says">{answer.explanation}</div>
+        {answer.requiresPlayerChoice
+          ? sideBySide
+          : answer.sourcesDisagree && <div className="chip">⚠️ Sources disagree</div>}
         {toggle}
         {open && panels}
       </div>
@@ -125,12 +161,7 @@ export function AnswerCard({ response }: { response: AskQuestionResponse }) {
   if (answer.requiresPlayerChoice) {
     return (
       <div className="answer-card">
-        <div className="chip">Sources disagree: choose a ruling at your table</div>
-        {answer.tiers
-          .filter((t) => CONFLICT_TIERS.includes(t.tier))
-          .map((t) => (
-            <CompactPanel key={t.tier} tier={t} />
-          ))}
+        {sideBySide}
         {toggle}
         {open && panels}
       </div>
@@ -139,13 +170,23 @@ export function AnswerCard({ response }: { response: AskQuestionResponse }) {
 
   const summary = sourceSummary(answer.evidence, citations);
   const confidence = `Confidence: ${answer.confidence.level.toLowerCase()}${summary ? ` · ${summary}` : ''}`;
+  const certaintyWord =
+    answer.certainty === 'QUALIFIED' ? CERTAINTY_WORDS.QUALIFIED : CERTAINTY_WORDS.DEFINITIVE;
+  const standing = [answer.appliedTier ? tierLabel(answer.appliedTier) : null, certaintyWord]
+    .filter(Boolean)
+    .join(' · ');
   return (
     <div className="answer-card">
       <div className="ans">{answer.answer}</div>
+      <div className="muted">{standing}</div>
+      {answer.certainty === 'QUALIFIED' && <div className="says">{answer.explanation}</div>}
       <div className="muted">{confidence}</div>
       <Meter level={answer.confidence.level} />
       {answer.sourcesDisagree && <div className="chip">⚠️ Sources disagree</div>}
       {toggle}
+      {open && answer.certainty === 'DEFINITIVE' && (
+        <div className="says">{answer.explanation}</div>
+      )}
       {open && panels}
     </div>
   );

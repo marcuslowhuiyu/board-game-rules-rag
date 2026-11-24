@@ -163,4 +163,17 @@ describe('RulesChatScreen', () => {
     await userEvent.setup().click(screen.getByRole('button', { name: /back to games/i }));
     expect(onExit).toHaveBeenCalled();
   });
+
+  it('limits the question input to the server maximum', () => {
+    setup(vi.fn());
+    expect(screen.getByLabelText('Your question')).toHaveAttribute('maxlength', '1000');
+  });
+
+  it('marks the searching state as a status', async () => {
+    const user = userEvent.setup();
+    setup(vi.fn(() => new Promise<AskQuestionResponse>(() => undefined)));
+    await user.type(screen.getByLabelText('Your question'), 'How?');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    expect(screen.getByRole('status')).toHaveTextContent('Searching the rulebook…');
+  });
 });
