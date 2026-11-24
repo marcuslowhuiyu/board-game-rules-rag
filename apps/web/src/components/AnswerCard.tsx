@@ -4,7 +4,6 @@ import { confidencePercent, provenanceLine, sourceSummary, tierLabel } from '../
 
 function Meter({ level }: { level: 'HIGH' | 'MEDIUM' | 'LOW' }) {
   const pct = confidencePercent(level);
-  const tone = level === 'HIGH' ? 'hi' : level === 'MEDIUM' ? 'mid' : 'lo';
   return (
     <div
       className="bar"
@@ -14,7 +13,7 @@ function Meter({ level }: { level: 'HIGH' | 'MEDIUM' | 'LOW' }) {
       aria-valuemin={0}
       aria-valuemax={100}
     >
-      <div className={tone} style={{ width: `${pct}%` }} />
+      <div style={{ width: `${pct}%` }} />
     </div>
   );
 }
@@ -146,9 +145,11 @@ export function AnswerCard({ response }: { response: AskQuestionResponse }) {
 
   if (inconclusive) {
     return (
-      <div className="answer-card">
-        <div className="ans">The rules don't settle this.</div>
-        <div className="says">{answer.explanation}</div>
+      <div className="answer-card card">
+        <div className="settle">
+          <div className="ans">The rules don't settle this.</div>
+          <div className="says">{answer.explanation}</div>
+        </div>
         {answer.requiresPlayerChoice
           ? sideBySide
           : answer.sourcesDisagree && <div className="chip">⚠️ Sources disagree</div>}
@@ -160,7 +161,7 @@ export function AnswerCard({ response }: { response: AskQuestionResponse }) {
 
   if (answer.requiresPlayerChoice) {
     return (
-      <div className="answer-card">
+      <div className="answer-card card">
         {sideBySide}
         {toggle}
         {open && panels}
@@ -176,9 +177,9 @@ export function AnswerCard({ response }: { response: AskQuestionResponse }) {
     .filter(Boolean)
     .join(' · ');
   return (
-    <div className="answer-card">
+    <div className="answer-card card">
       <div className="ans">{answer.answer}</div>
-      <div className="muted">{standing}</div>
+      <div className="tag">{standing}</div>
       {answer.certainty === 'QUALIFIED' && <div className="says">{answer.explanation}</div>}
       <div className="muted">{confidence}</div>
       <Meter level={answer.confidence.level} />
